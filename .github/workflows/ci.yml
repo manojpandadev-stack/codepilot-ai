@@ -26,7 +26,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
+        run: pnpm install --frozen-lockfile --ignore-scripts --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
 
       - name: Build workspace packages
         run: pnpm build:packages
@@ -71,7 +71,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
+        run: pnpm install --frozen-lockfile --ignore-scripts --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
 
       - name: Build TypeScript packages
         run: pnpm build:packages
@@ -123,7 +123,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
+        run: pnpm install --frozen-lockfile --ignore-scripts --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
 
       - name: Check no type errors
         run: pnpm -r typecheck
