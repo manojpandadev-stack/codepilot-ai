@@ -108,7 +108,10 @@ describe("classifyError", () => {
     const recoverableCases = [
       { error: "BUILD FAILURE: compilation error in Main.java", exitCode: 1 },
       { error: "Tests failed: 3 of 10 assertions failed", exitCode: 1 },
-      { error: "error TS2345: Argument of type 'string' is not assignable", exitCode: 2 },
+      {
+        error: "error TS2345: Argument of type 'string' is not assignable",
+        exitCode: 2,
+      },
       { error: "SyntaxError: Unexpected token", exitCode: 1 },
       { error: "ImportError: No module named 'foo'", exitCode: 1 },
       { error: "Module not found: Can't resolve './utils'", exitCode: 1 },
@@ -164,7 +167,11 @@ describe("RecoveryManager", () => {
 
   describe("canRecover", () => {
     it("allows recovery for recoverable errors", () => {
-      const result = manager.canRecover("BUILD FAILURE: compilation error", undefined, 1);
+      const result = manager.canRecover(
+        "BUILD FAILURE: compilation error",
+        undefined,
+        1,
+      );
       expect(result.allowed).toBe(true);
       expect(result.classification.recoverable).toBe(true);
     });
@@ -245,8 +252,20 @@ describe("RecoveryManager", () => {
 
     it("preserves full recovery history", () => {
       const records = [
-        { timestamp: Date.now(), error: "error 1", category: "RECOVERABLE" as ErrorCategory, strategy: "repair", success: true },
-        { timestamp: Date.now(), error: "error 2", category: "TRANSIENT" as ErrorCategory, strategy: "retry", success: false },
+        {
+          timestamp: Date.now(),
+          error: "error 1",
+          category: "RECOVERABLE" as ErrorCategory,
+          strategy: "repair",
+          success: true,
+        },
+        {
+          timestamp: Date.now(),
+          error: "error 2",
+          category: "TRANSIENT" as ErrorCategory,
+          strategy: "retry",
+          success: false,
+        },
       ];
 
       for (const record of records) {
@@ -287,12 +306,16 @@ describe("RecoveryManager", () => {
       }
 
       // Should be blocked now
-      expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(false);
+      expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+        false,
+      );
 
       manager.reset();
 
       // Should be allowed again
-      expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(true);
+      expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+        true,
+      );
     });
   });
 
@@ -320,8 +343,12 @@ describe("RecoveryManager", () => {
       const result = engine.heal(
         { passed: false, exitCode: 1, stderr: "test" },
         async () => ({ passed: false, exitCode: 1 }),
-        async () => ({ diagnosis: "fix", repairDescription: "repair", filesChanged: [] }),
-        async () => ({ success: true })
+        async () => ({
+          diagnosis: "fix",
+          repairDescription: "repair",
+          filesChanged: [],
+        }),
+        async () => ({ success: true }),
       );
 
       return result.then((r) => {
@@ -366,7 +393,7 @@ describe("RecoveryManager + SelfHealingEngine integration", () => {
         repairDescription: `Fix attempt ${attempt}`,
         filesChanged: [`fix-${attempt}.ts`],
       }),
-      async (_d, _r, files) => ({ success: true, filesChanged: files })
+      async (_d, _r, files) => ({ success: true, filesChanged: files }),
     );
 
     expect(result.healed).toBe(true);
@@ -416,8 +443,12 @@ describe("RecoveryManager + SelfHealingEngine integration", () => {
       const result = await engine.heal(
         { passed: false, exitCode: 1 },
         async () => ({ passed: false, exitCode: 1 }),
-        async () => ({ diagnosis: "fix", repairDescription: "repair", filesChanged: [] }),
-        async () => ({ success: true })
+        async () => ({
+          diagnosis: "fix",
+          repairDescription: "repair",
+          filesChanged: [],
+        }),
+        async () => ({ success: true }),
       );
 
       manager.record({
@@ -454,10 +485,13 @@ describe("edge cases", () => {
   });
 
   it("RecoveryManager handles concurrent canRecover checks", () => {
-    const manager = new RecoveryManager("/tmp/test", { maxSessionRecoveries: 3, cooldownMs: 0 });
+    const manager = new RecoveryManager("/tmp/test", {
+      maxSessionRecoveries: 3,
+      cooldownMs: 0,
+    });
 
     const results = Array.from({ length: 10 }, () =>
-      manager.canRecover("BUILD FAILURE", undefined, 1)
+      manager.canRecover("BUILD FAILURE", undefined, 1),
     );
 
     // First 3 should be allowed (before recording)

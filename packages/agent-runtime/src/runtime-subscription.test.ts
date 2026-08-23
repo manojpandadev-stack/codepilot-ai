@@ -24,7 +24,10 @@ const h = vi.hoisted(() => {
       const index = this.listeners.indexOf(listener);
       return () => {
         if (this.listeners.indexOf(listener) >= 0) {
-          this.listeners.splice(index >= 0 ? this.listeners.indexOf(listener) : index, 1);
+          this.listeners.splice(
+            index >= 0 ? this.listeners.indexOf(listener) : index,
+            1,
+          );
         }
       };
     }
@@ -32,7 +35,10 @@ const h = vi.hoisted(() => {
     /** One run = two unique text deltas + done, fanned out to ALL listeners. */
     async start(): Promise<{
       sessionId: string;
-      result: { outputText: string; usage: { inputTokens: number; outputTokens: number } };
+      result: {
+        outputText: string;
+        usage: { inputTokens: number; outputTokens: number };
+      };
     }> {
       this.started += 1;
       const sessionId = `session-${this.started}`;
@@ -45,18 +51,29 @@ const h = vi.hoisted(() => {
             type: "agent_event",
             payload: {
               sessionId,
-              event: { type: "content_start", contentType: "text", text, accumulated },
+              event: {
+                type: "content_start",
+                contentType: "text",
+                text,
+                accumulated,
+              },
             },
           });
         }
         listener({
           type: "agent_event",
-          payload: { sessionId, event: { type: "done", reason: "completed", text: accumulated } },
+          payload: {
+            sessionId,
+            event: { type: "done", reason: "completed", text: accumulated },
+          },
         });
       }
       return {
         sessionId,
-        result: { outputText: accumulated, usage: { inputTokens: 3, outputTokens: 5 } },
+        result: {
+          outputText: accumulated,
+          usage: { inputTokens: 3, outputTokens: 5 },
+        },
       };
     }
 
@@ -65,7 +82,10 @@ const h = vi.hoisted(() => {
     async stop(): Promise<void> {}
     async dispose(): Promise<void> {}
   }
-  return { FakeClineCore, instances: [] as InstanceType<typeof FakeClineCore>[] };
+  return {
+    FakeClineCore,
+    instances: [] as InstanceType<typeof FakeClineCore>[],
+  };
 });
 
 vi.mock("@cline/core", () => ({

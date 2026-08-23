@@ -6,7 +6,11 @@
  * dangerous operations before execution.
  */
 
-import type { ToolPolicy, ToolApprovalRequest, ToolApprovalResult } from "@cline/shared";
+import type {
+  ToolPolicy,
+  ToolApprovalRequest,
+  ToolApprovalResult,
+} from "@cline/shared";
 import {
   type ToolPermission,
   type ToolPermissionPolicy,
@@ -71,7 +75,10 @@ const TOOL_CATEGORIES: Record<string, ToolCategory> = {
 // MCP tool default classification by tool name pattern
 const MCP_TOOL_PATTERNS: Array<{ pattern: RegExp; category: ToolCategory }> = [
   { pattern: /^(list|read|get|search|find|query|describe)/i, category: "read" },
-  { pattern: /^(write|create|update|insert|delete|drop|remove|patch)/i, category: "write" },
+  {
+    pattern: /^(write|create|update|insert|delete|drop|remove|patch)/i,
+    category: "write",
+  },
   { pattern: /^(exec|run|execute|call|invoke)/i, category: "execute" },
 ];
 
@@ -97,7 +104,7 @@ function classifyMCPTool(toolId: string): ToolCategory {
  */
 export class CommandValidator {
   private blockedPatterns: RegExp[] = BLOCKED_COMMANDS.map(
-    (cmd) => new RegExp(cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+    (cmd) => new RegExp(cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
   );
 
   private additionalBlockedPatterns: RegExp[] = [
@@ -174,14 +181,19 @@ export class PolicyEngine {
   private auditLog: AuditEntry[] = [];
   private agentMode: AgentMode = "act";
 
-  constructor(options?: { customPolicies?: ToolPermissionPolicy[]; initialMode?: AgentMode }) {
+  constructor(options?: {
+    customPolicies?: ToolPermissionPolicy[];
+    initialMode?: AgentMode;
+  }) {
     this.commandValidator = new CommandValidator();
     if (options?.initialMode) {
       this.agentMode = options.initialMode;
     }
 
     // Load default policies
-    for (const [toolName, permission] of Object.entries(DEFAULT_TOOL_POLICIES)) {
+    for (const [toolName, permission] of Object.entries(
+      DEFAULT_TOOL_POLICIES,
+    )) {
       this.policies.set(toolName, {
         toolName,
         category: TOOL_CATEGORIES[toolName] ?? "system",
@@ -222,12 +234,20 @@ export class PolicyEngine {
     if (this.agentMode === "plan") {
       const policy = this.policies.get(toolName);
       if (policy && WRITE_TOOL_CATEGORIES.includes(policy.category)) {
-        this.logAudit(toolName, "blocked_plan_mode", `Tool '${toolName}' is blocked in Plan mode (${policy.category})`);
+        this.logAudit(
+          toolName,
+          "blocked_plan_mode",
+          `Tool '${toolName}' is blocked in Plan mode (${policy.category})`,
+        );
         return { enabled: false, autoApprove: false };
       }
       // If category is unknown, default to blocking in plan mode to be safe
       if (!policy) {
-        this.logAudit(toolName, "blocked_plan_mode", `Unknown tool '${toolName}' is blocked in Plan mode by default`);
+        this.logAudit(
+          toolName,
+          "blocked_plan_mode",
+          `Unknown tool '${toolName}' is blocked in Plan mode by default`,
+        );
         return { enabled: false, autoApprove: false };
       }
     }
@@ -243,7 +263,11 @@ export class PolicyEngine {
     }
 
     // For bash/execute tools, also validate the command
-    if (policy.category === "execute" && typeof input === "object" && input !== null) {
+    if (
+      policy.category === "execute" &&
+      typeof input === "object" &&
+      input !== null
+    ) {
       const inputObj = input as Record<string, unknown>;
       const command = (inputObj.command ?? inputObj.cmd ?? "") as string;
       if (command) {
@@ -268,7 +292,11 @@ export class PolicyEngine {
     const policy = this.policies.get(request.toolName);
     const permission = policy?.permission ?? "approval";
 
-    this.logAudit(request.toolName, permission, `Approval requested for ${request.toolName}`);
+    this.logAudit(
+      request.toolName,
+      permission,
+      `Approval requested for ${request.toolName}`,
+    );
 
     if (permission === "blocked") {
       return { approved: false, reason: "Tool is blocked by security policy" };
@@ -292,7 +320,11 @@ export class PolicyEngine {
     if (this.agentMode === "plan") {
       const category = classifyMCPTool(toolId);
       if (WRITE_TOOL_CATEGORIES.includes(category)) {
-        this.logAudit(toolId, "blocked_plan_mode", `MCP tool '${toolId}' is blocked in Plan mode (${category})`);
+        this.logAudit(
+          toolId,
+          "blocked_plan_mode",
+          `MCP tool '${toolId}' is blocked in Plan mode (${category})`,
+        );
         return { enabled: false, autoApprove: false };
       }
     }
@@ -301,7 +333,11 @@ export class PolicyEngine {
     const policy = this.policies.get(toolId);
     if (policy) {
       if (policy.permission === "blocked") {
-        this.logAudit(toolId, "blocked", `MCP tool '${toolId}' is blocked by policy`);
+        this.logAudit(
+          toolId,
+          "blocked",
+          `MCP tool '${toolId}' is blocked by policy`,
+        );
         return { enabled: false, autoApprove: false };
       }
       return {
@@ -362,7 +398,10 @@ export class PolicyEngine {
   toClineToolPolicies(): Record<string, ToolPolicy> {
     const result: Record<string, ToolPolicy> = {};
     for (const [toolName, policy] of this.policies) {
-      if (this.agentMode === "plan" && WRITE_TOOL_CATEGORIES.includes(policy.category)) {
+      if (
+        this.agentMode === "plan" &&
+        WRITE_TOOL_CATEGORIES.includes(policy.category)
+      ) {
         result[toolName] = { enabled: false, autoApprove: false };
       } else {
         result[toolName] = {

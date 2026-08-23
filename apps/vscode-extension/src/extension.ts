@@ -31,7 +31,13 @@ import {
 } from "@codepilot/shared";
 import { ChangeSetManager } from "@codepilot/changeset-engine";
 import { CodePilotMCPManager } from "@codepilot/mcp-manager";
-import { resolveFile, resolveFolder, fetchUrlContent, loadAllRules, rulesToContextItems } from "@codepilot/context-engine";
+import {
+  resolveFile,
+  resolveFolder,
+  fetchUrlContent,
+  loadAllRules,
+  rulesToContextItems,
+} from "@codepilot/context-engine";
 
 let runtime: CodePilotRuntime | null = null;
 let panel: vscode.WebviewPanel | null = null;
@@ -91,9 +97,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
   ];
 
   for (const [id, handler] of commands) {
-    context.subscriptions.push(
-      vscode.commands.registerCommand(id, handler)
-    );
+    context.subscriptions.push(vscode.commands.registerCommand(id, handler));
   }
 }
 
@@ -114,10 +118,8 @@ async function openAgentPanel(): Promise<void> {
     {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [
-        vscode.Uri.joinPath(extensionUri(), "dist"),
-      ],
-    }
+      localResourceRoots: [vscode.Uri.joinPath(extensionUri(), "dist")],
+    },
   );
 
   panel.webview.html = getWebviewHtml(panel.webview);
@@ -127,12 +129,16 @@ async function openAgentPanel(): Promise<void> {
       await handleWebviewMessage(message);
     },
     undefined,
-    []
+    [],
   );
 
-  panel.onDidDispose(() => {
-    panel = null;
-  }, null, []);
+  panel.onDidDispose(
+    () => {
+      panel = null;
+    },
+    null,
+    [],
+  );
 }
 
 async function explainSelection(): Promise<void> {
@@ -151,7 +157,7 @@ async function explainSelection(): Promise<void> {
   await openAgentPanel();
   await sendPromptToAgent(
     `Explain this code:\n\n\`\`\`${editor.document.languageId}\n${selection}\n\`\`\``,
-    "ask"
+    "ask",
   );
 }
 
@@ -171,7 +177,7 @@ async function refactorSelection(): Promise<void> {
   await openAgentPanel();
   await sendPromptToAgent(
     `Refactor this code to improve quality and maintainability:\n\n\`\`\`${editor.document.languageId}\n${selection}\n\`\`\``,
-    "act"
+    "act",
   );
 }
 
@@ -188,7 +194,7 @@ async function generateTests(): Promise<void> {
   await openAgentPanel();
   await sendPromptToAgent(
     `Generate comprehensive unit tests for the code in ${filePath}${selection ? " (selected code)" : ""}.\n\nFile contents:\n\`\`\`\n${selection || editor.document.getText()}\n\`\`\``,
-    "act"
+    "act",
   );
 }
 
@@ -202,7 +208,7 @@ async function reviewFile(): Promise<void> {
   await openAgentPanel();
   await sendPromptToAgent(
     `Review the file ${editor.document.fileName} for bugs, security issues, performance problems, and code quality. Provide specific findings with severity and suggested fixes.\n\nFile contents:\n\`\`\`\n${editor.document.getText()}\n\`\`\``,
-    "review"
+    "review",
   );
 }
 
@@ -210,7 +216,7 @@ async function reviewChanges(): Promise<void> {
   await openAgentPanel();
   await sendPromptToAgent(
     "Review all current Git changes (staged and unstaged) for bugs, security issues, and code quality. Provide specific findings with severity.",
-    "review"
+    "review",
   );
 }
 
@@ -218,7 +224,7 @@ async function analyzeRepository(): Promise<void> {
   await openAgentPanel();
   await sendPromptToAgent(
     "Analyze this repository thoroughly. Describe the technology stack, architecture, modules, dependency graph, entry points, database, APIs, external systems, important classes, architectural risks, and recommended improvements.",
-    "review"
+    "review",
   );
 }
 
@@ -253,7 +259,12 @@ async function stopAgent(): Promise<void> {
 }
 
 async function refreshModels(): Promise<void> {
-  sendToWebview({ type: "provider/list", id: genId(), payload: {}, timestamp: Date.now() });
+  sendToWebview({
+    type: "provider/list",
+    id: genId(),
+    payload: {},
+    timestamp: Date.now(),
+  });
   vscode.window.showInformationMessage("CodePilot: Refreshing models...");
 }
 
@@ -262,7 +273,9 @@ async function openSettings(): Promise<void> {
 }
 
 async function openCheckpoints(): Promise<void> {
-  vscode.window.showInformationMessage("CodePilot: Checkpoints panel coming soon.");
+  vscode.window.showInformationMessage(
+    "CodePilot: Checkpoints panel coming soon.",
+  );
 }
 
 async function openMcpManager(): Promise<void> {
@@ -307,12 +320,18 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
   if (runtime) return runtime;
 
   const config = vscode.workspace.getConfiguration("codepilot");
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  const workspaceRoot =
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
   // Initialize ChangeSet manager for real diff/approval
   changeSetManager = new ChangeSetManager({
     workspaceRoot,
-    onStatusChange: (change: { id: string; filePath: string; status: string; conflictInfo?: { reason: string } }) => {
+    onStatusChange: (change: {
+      id: string;
+      filePath: string;
+      status: string;
+      conflictInfo?: { reason: string };
+    }) => {
       sendToWebview({
         type: "diff/status",
         id: change.id,
@@ -330,7 +349,9 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
   runtime = new CodePilotRuntime({
     workspaceRoot,
     providerId: config.get("provider", "ollama"),
-    modelId: config.get("model", "") || getDefaultModel(config.get("provider", "ollama")),
+    modelId:
+      config.get("model", "") ||
+      getDefaultModel(config.get("provider", "ollama")),
     apiKey: undefined, // resolved via SecretStorage in production
     baseUrl: config.get("localAI.ollama.baseUrl", "http://localhost:11434"),
     privacyMode: config.get("privacyMode", "local") as PrivacyMode,
@@ -346,10 +367,13 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
       const taskId = `tool:${toolName}:${Date.now()}`;
       const cs = changeSetManager.createChangeSet(
         taskId,
-        proposals.map((p) => ({ filePath: p.relativePath, proposedContent: p.proposedContent }))
+        proposals.map((p) => ({
+          filePath: p.relativePath,
+          proposedContent: p.proposedContent,
+        })),
       );
       outputChannel.appendLine(
-        `[Changes] Staged ${proposals.length} change(s) from tool '${toolName}' as ${cs.id}`
+        `[Changes] Staged ${proposals.length} change(s) from tool '${toolName}' as ${cs.id}`,
       );
       sendToWebview({
         type: "diff/created",
@@ -374,16 +398,22 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
       const summary = summarizeToolInput(input, 180);
       const pick = await vscode.window.showQuickPick(
         [
-          { label: "$(check) Approve", description: `Allow ${toolName} to run` },
+          {
+            label: "$(check) Approve",
+            description: `Allow ${toolName} to run`,
+          },
           { label: "$(x) Reject", description: `Block ${toolName} this time` },
         ],
-        { placeHolder: `${toolName}: ${summary}`, ignoreFocusOut: false }
+        { placeHolder: `${toolName}: ${summary}`, ignoreFocusOut: false },
       );
       const approved = pick?.label.includes("Approve") === true;
       outputChannel.appendLine(
-        `[Tools] ${approved ? "APPROVED" : "REJECTED"} ${toolName} (${toolCallId}) ${summary}`
+        `[Tools] ${approved ? "APPROVED" : "REJECTED"} ${toolName} (${toolCallId}) ${summary}`,
       );
-      return { approved, reason: approved ? "Approved by user" : "Rejected by user" };
+      return {
+        approved,
+        reason: approved ? "Approved by user" : "Rejected by user",
+      };
     },
   });
 
@@ -405,13 +435,14 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
 
 async function sendPromptToAgent(
   prompt: string,
-  mode: CodePilotAgentMode
+  mode: CodePilotAgentMode,
 ): Promise<void> {
   try {
     const rt = await ensureRuntime();
 
     // Resolve @file, @folder, @url context attachments
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const workspaceRoot =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const contextParts: string[] = [];
 
     // @file references
@@ -436,11 +467,16 @@ async function sendPromptToAgent(
     for (const match of folderRefs) {
       const folderPath = match[1]!;
       try {
-        const items = await resolveFolder(folderPath, workspaceRoot, { maxFiles: 30, maxTokens: 15_000 });
+        const items = await resolveFolder(folderPath, workspaceRoot, {
+          maxFiles: 30,
+          maxTokens: 15_000,
+        });
         for (const item of items) {
           contextParts.push(item.content);
         }
-        outputChannel.appendLine(`[Context] Attached @folder: ${folderPath} (${items.length} items)`);
+        outputChannel.appendLine(
+          `[Context] Attached @folder: ${folderPath} (${items.length} items)`,
+        );
       } catch {
         // skip unresolvable
       }
@@ -451,7 +487,10 @@ async function sendPromptToAgent(
     for (const match of urlRefs) {
       const url = match[1]!;
       try {
-        const items = await fetchUrlContent(url, { timeoutMs: 10_000, maxChars: 20_000 });
+        const items = await fetchUrlContent(url, {
+          timeoutMs: 10_000,
+          maxChars: 20_000,
+        });
         for (const item of items) {
           contextParts.push(item.content);
         }
@@ -464,19 +503,35 @@ async function sendPromptToAgent(
     // @problems — VS Code diagnostics
     if (prompt.includes("@problems")) {
       const diagEntries = vscode.languages.getDiagnostics();
-      const allDiags: Array<{ file: string; line: number; severity: string; message: string }> = [];
+      const allDiags: Array<{
+        file: string;
+        line: number;
+        severity: string;
+        message: string;
+      }> = [];
       for (const [uri, diags] of diagEntries) {
         const file = vscode.workspace.asRelativePath(uri);
         for (const d of diags) {
           const line = d.range.start.line + 1;
-          const severity = d.severity === vscode.DiagnosticSeverity.Error ? "ERROR" : d.severity === vscode.DiagnosticSeverity.Warning ? "WARN" : "INFO";
+          const severity =
+            d.severity === vscode.DiagnosticSeverity.Error
+              ? "ERROR"
+              : d.severity === vscode.DiagnosticSeverity.Warning
+                ? "WARN"
+                : "INFO";
           allDiags.push({ file, line, severity, message: d.message });
         }
       }
       if (allDiags.length > 0) {
-        const problemLines = allDiags.slice(0, 50).map((d) => `${d.file}:${d.line} [${d.severity}] ${d.message}`);
-        contextParts.push(`VS Code Problems (${allDiags.length}):\n${problemLines.join("\n")}`);
-        outputChannel.appendLine(`[Context] Attached @problems: ${allDiags.length} diagnostics`);
+        const problemLines = allDiags
+          .slice(0, 50)
+          .map((d) => `${d.file}:${d.line} [${d.severity}] ${d.message}`);
+        contextParts.push(
+          `VS Code Problems (${allDiags.length}):\n${problemLines.join("\n")}`,
+        );
+        outputChannel.appendLine(
+          `[Context] Attached @problems: ${allDiags.length} diagnostics`,
+        );
       }
     }
 
@@ -487,7 +542,9 @@ async function sendPromptToAgent(
         const ruleItems = rulesToContextItems(rules);
         const rulesContent = ruleItems.map((r) => r.content).join("\n\n");
         contextParts.push(`Project Rules (${rules.length}):\n${rulesContent}`);
-        outputChannel.appendLine(`[Context] Loaded ${rules.length} project rules`);
+        outputChannel.appendLine(
+          `[Context] Loaded ${rules.length} project rules`,
+        );
       }
     } catch {
       // rules loading is optional
@@ -496,7 +553,8 @@ async function sendPromptToAgent(
     // Build final prompt with context
     let finalPrompt = prompt;
     if (contextParts.length > 0) {
-      finalPrompt = prompt + "\n\n--- Attached Context ---\n" + contextParts.join("\n\n");
+      finalPrompt =
+        prompt + "\n\n--- Attached Context ---\n" + contextParts.join("\n\n");
     }
 
     sendToWebview({
@@ -509,7 +567,8 @@ async function sendPromptToAgent(
     await rt.startSession(finalPrompt, { agentMode: mode });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
+    const stack =
+      error instanceof Error && error.stack ? `\n${error.stack}` : "";
     logChat("AGENT_ERROR", { recoverable: false });
     outputChannel.appendLine(`Agent error: ${message}${stack}`);
     sendToWebview({
@@ -533,14 +592,18 @@ async function sendPromptToAgent(
 /** Build a compact, secret-safe summary of a tool input for approval UI. */
 function summarizeToolInput(input: unknown, maxChars: number): string {
   try {
-    const text = typeof input === "string"
-      ? input
-      : JSON.stringify(input ?? {});
+    const text =
+      typeof input === "string" ? input : JSON.stringify(input ?? {});
     const cleaned = text
-      .replace(/(api[_-]?key|password|secret|token|authorization)["']?\s*[:=]\s*["'][^"']+["']/gi, "$1=<redacted>")
+      .replace(
+        /(api[_-]?key|password|secret|token|authorization)["']?\s*[:=]\s*["'][^"']+["']/gi,
+        "$1=<redacted>",
+      )
       .replace(/\s+/g, " ")
       .trim();
-    return cleaned.length > maxChars ? `${cleaned.slice(0, maxChars)}…` : cleaned;
+    return cleaned.length > maxChars
+      ? `${cleaned.slice(0, maxChars)}…`
+      : cleaned;
   } catch {
     return "<unprintable input>";
   }
@@ -553,7 +616,11 @@ function forwardAgentEvent(event: AgentEvent): void {
       sendToWebview({
         type: "chat/stream_delta",
         id: genId(),
-        payload: { text: event.text, accumulated: event.accumulated, requestId: activeRequestId },
+        payload: {
+          text: event.text,
+          accumulated: event.accumulated,
+          requestId: activeRequestId,
+        },
         timestamp: Date.now(),
       });
       break;
@@ -563,21 +630,35 @@ function forwardAgentEvent(event: AgentEvent): void {
       sendToWebview({
         type: "agent/status",
         id: genId(),
-        payload: { status: "running", message: "Thinking…", requestId: activeRequestId },
+        payload: {
+          status: "running",
+          message: "Thinking…",
+          requestId: activeRequestId,
+        },
         timestamp: Date.now(),
       });
       break;
     case "tool_started":
-      logChat("AGENT_EVENT tool_started", { toolName: event.toolName, toolCallId: event.toolCallId });
+      logChat("AGENT_EVENT tool_started", {
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      });
       sendToWebview({
         type: "tool/started",
         id: genId(),
-        payload: { toolName: event.toolName, toolCallId: event.toolCallId, requestId: activeRequestId },
+        payload: {
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+          requestId: activeRequestId,
+        },
         timestamp: Date.now(),
       });
       break;
     case "tool_completed":
-      logChat("AGENT_EVENT tool_completed", { toolName: event.toolName, durationMs: event.durationMs });
+      logChat("AGENT_EVENT tool_completed", {
+        toolName: event.toolName,
+        durationMs: event.durationMs,
+      });
       sendToWebview({
         type: "tool/completed",
         id: genId(),
@@ -597,7 +678,11 @@ function forwardAgentEvent(event: AgentEvent): void {
       sendToWebview({
         type: "agent/status",
         id: genId(),
-        payload: { status: "running", message: `Tool ${event.toolName} failed: ${event.error}`, requestId: activeRequestId },
+        payload: {
+          status: "running",
+          message: `Tool ${event.toolName} failed: ${event.error}`,
+          requestId: activeRequestId,
+        },
         timestamp: Date.now(),
       });
       break;
@@ -606,12 +691,20 @@ function forwardAgentEvent(event: AgentEvent): void {
       sendToWebview({
         type: "agent/status",
         id: genId(),
-        payload: { status: "running", message: `Thinking… (iteration ${event.iteration})`, requestId: activeRequestId },
+        payload: {
+          status: "running",
+          message: `Thinking… (iteration ${event.iteration})`,
+          requestId: activeRequestId,
+        },
         timestamp: Date.now(),
       });
       break;
     case "completed":
-      logChat("AGENT_COMPLETED", { resultChars: event.result.length, inputTokens: event.usage?.inputTokens, outputTokens: event.usage?.outputTokens });
+      logChat("AGENT_COMPLETED", {
+        resultChars: event.result.length,
+        inputTokens: event.usage?.inputTokens,
+        outputTokens: event.usage?.outputTokens,
+      });
       sendToWebview({
         type: "agent/status",
         id: genId(),
@@ -626,7 +719,9 @@ function forwardAgentEvent(event: AgentEvent): void {
       break;
     case "error":
       logChat("AGENT_ERROR", { recoverable: event.recoverable });
-      outputChannel.appendLine(`[CHAT] AGENT_ERROR detail: ${event.error.substring(0, 500)}`);
+      outputChannel.appendLine(
+        `[CHAT] AGENT_ERROR detail: ${event.error.substring(0, 500)}`,
+      );
       sendToWebview({
         type: "error",
         id: genId(),
@@ -647,11 +742,15 @@ function forwardAgentEvent(event: AgentEvent): void {
       if (event.recoverable && recoveryManager) {
         const classification = classifyError(event.error);
         if (classification.recoverable) {
-          const canRecover = recoveryManager.canRecover(event.error, undefined, undefined);
+          const canRecover = recoveryManager.canRecover(
+            event.error,
+            undefined,
+            undefined,
+          );
 
           if (canRecover.allowed && !activeHealingEngine) {
             outputChannel.appendLine(
-              `[Auto-Heal] Recoverable error detected (${classification.category}): ${event.error.substring(0, 200)}`
+              `[Auto-Heal] Recoverable error detected (${classification.category}): ${event.error.substring(0, 200)}`,
             );
             sendToWebview({
               type: "recovery/classified",
@@ -668,28 +767,35 @@ function forwardAgentEvent(event: AgentEvent): void {
 
             // Trigger healing asynchronously (don't block the event handler)
             runSelfHealing(
-              { passed: false, exitCode: 1, stderr: event.error, diagnostics: [event.error] },
-              undefined
-            ).then(() => {
-              recoveryManager!.record({
-                timestamp: Date.now(),
-                error: event.error,
-                category: classification.category,
-                strategy: classification.strategy ?? "repair",
-                success: true,
+              {
+                passed: false,
+                exitCode: 1,
+                stderr: event.error,
+                diagnostics: [event.error],
+              },
+              undefined,
+            )
+              .then(() => {
+                recoveryManager!.record({
+                  timestamp: Date.now(),
+                  error: event.error,
+                  category: classification.category,
+                  strategy: classification.strategy ?? "repair",
+                  success: true,
+                });
+              })
+              .catch(() => {
+                recoveryManager!.record({
+                  timestamp: Date.now(),
+                  error: event.error,
+                  category: classification.category,
+                  strategy: classification.strategy ?? "repair",
+                  success: false,
+                });
               });
-            }).catch(() => {
-              recoveryManager!.record({
-                timestamp: Date.now(),
-                error: event.error,
-                category: classification.category,
-                strategy: classification.strategy ?? "repair",
-                success: false,
-              });
-            });
           } else {
             outputChannel.appendLine(
-              `[Auto-Heal] Recovery not allowed: ${canRecover.reason}`
+              `[Auto-Heal] Recovery not allowed: ${canRecover.reason}`,
             );
           }
         }
@@ -700,7 +806,11 @@ function forwardAgentEvent(event: AgentEvent): void {
       sendToWebview({
         type: "agent/status",
         id: genId(),
-        payload: { status: "idle", message: "Agent stopped.", requestId: activeRequestId },
+        payload: {
+          status: "idle",
+          message: "Agent stopped.",
+          requestId: activeRequestId,
+        },
         timestamp: Date.now(),
       });
       break;
@@ -711,9 +821,18 @@ function forwardAgentEvent(event: AgentEvent): void {
       sendToWebview({
         type: "agent/status",
         id: genId(),
-        payload: event.type === "status"
-          ? { status: "running", message: event.message, requestId: activeRequestId }
-          : { status: "running", message: `Agent event: ${event.type}`, requestId: activeRequestId },
+        payload:
+          event.type === "status"
+            ? {
+                status: "running",
+                message: event.message,
+                requestId: activeRequestId,
+              }
+            : {
+                status: "running",
+                message: `Agent event: ${event.type}`,
+                requestId: activeRequestId,
+              },
         timestamp: Date.now(),
       });
   }
@@ -783,8 +902,6 @@ function forwardHealingEvent(event: HealingEvent): void {
       });
       break;
   }
-
-
 }
 
 /**
@@ -793,17 +910,27 @@ function forwardHealingEvent(event: HealingEvent): void {
  * a validation failure is detected.
  */
 async function runSelfHealing(
-  initialFailure: { passed: boolean; exitCode?: number; stderr?: string; diagnostics?: string[] },
-  validateCommand?: string
+  initialFailure: {
+    passed: boolean;
+    exitCode?: number;
+    stderr?: string;
+    diagnostics?: string[];
+  },
+  validateCommand?: string,
 ): Promise<void> {
   // Prevent concurrent healing engines
   if (activeHealingEngine) {
-    outputChannel.appendLine("[Auto-Heal] Healing already in progress, skipping");
+    outputChannel.appendLine(
+      "[Auto-Heal] Healing already in progress, skipping",
+    );
     return;
   }
 
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-  const mode = vscode.workspace.getConfiguration("codepilot").get<string>("agentMode", "act");
+  const workspaceRoot =
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  const mode = vscode.workspace
+    .getConfiguration("codepilot")
+    .get<string>("agentMode", "act");
 
   const engine = new SelfHealingEngine({
     workspaceRoot,
@@ -837,7 +964,11 @@ async function runSelfHealing(
 
       // In plan mode, do NOT execute healing
       if (mode === "plan") {
-        return { diagnosis: "Healing disabled in plan mode", repairDescription: "", filesChanged: [] };
+        return {
+          diagnosis: "Healing disabled in plan mode",
+          repairDescription: "",
+          filesChanged: [],
+        };
       }
 
       await rt.startSession(diagnosisPrompt, { agentMode: "act" });
@@ -851,13 +982,13 @@ async function runSelfHealing(
     // Apply repair: the agent already applied changes via its tool calls
     async (_diagnosis, _repairDescription, filesChanged) => {
       return { success: true, filesChanged };
-    }
+    },
   );
 
   activeHealingEngine = null;
 
   outputChannel.appendLine(
-    `[SelfHealing] ${result.healed ? "SUCCEEDED" : "FAILED"} after ${result.attempts} attempt(s) in ${result.durationMs}ms`
+    `[SelfHealing] ${result.healed ? "SUCCEEDED" : "FAILED"} after ${result.attempts} attempt(s) in ${result.durationMs}ms`,
   );
 }
 
@@ -882,11 +1013,14 @@ function getWorkspaceRootFsPath(): string {
 }
 
 /** Collect REAL diagnostics from VS Code via vscode.languages.getDiagnostics(). */
-function collectDiagnostics(scope: "workspace" | "activeFile"): DiagnosticsContextPayload {
+function collectDiagnostics(
+  scope: "workspace" | "activeFile",
+): DiagnosticsContextPayload {
   const root = getWorkspaceRootFsPath();
   let activeFilePath: string | null = null;
   if (scope === "activeFile") {
-    activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath ?? null;
+    activeFilePath =
+      vscode.window.activeTextEditor?.document.uri.fsPath ?? null;
     if (!activeFilePath) return { scope, items: [] };
   }
 
@@ -901,9 +1035,14 @@ function collectDiagnostics(scope: "workspace" | "activeFile"): DiagnosticsConte
     for (const d of diags) {
       // Diagnostic.code can be string | number | { value, target } — normalize.
       let code: string | number | undefined;
-      if (d.code !== undefined && d.code !== null && typeof d.code === "object") {
+      if (
+        d.code !== undefined &&
+        d.code !== null &&
+        typeof d.code === "object"
+      ) {
         const value = (d.code as { value?: unknown }).value;
-        if (typeof value === "string" || typeof value === "number") code = value;
+        if (typeof value === "string" || typeof value === "number")
+          code = value;
       } else {
         code = d.code as string | number | undefined;
       }
@@ -922,7 +1061,10 @@ function collectDiagnostics(scope: "workspace" | "activeFile"): DiagnosticsConte
 }
 
 /** Build a FileContext entry from a picked URI. Rejects paths outside workspace. */
-async function buildFileContext(root: string, uri: vscode.Uri): Promise<FileContext> {
+async function buildFileContext(
+  root: string,
+  uri: vscode.Uri,
+): Promise<FileContext> {
   const rel = toRelativeWorkspacePath(root, uri.fsPath);
   if (rel === null || rel === "") {
     throw new Error(`${uri.fsPath} is outside the current workspace`);
@@ -948,7 +1090,9 @@ async function buildFileContext(root: string, uri: vscode.Uri): Promise<FileCont
 async function pickFilesForContext(): Promise<FileContext[]> {
   const root = getWorkspaceRootFsPath();
   if (!root) {
-    void vscode.window.showInformationMessage("Open a folder first to attach file context.");
+    void vscode.window.showInformationMessage(
+      "Open a folder first to attach file context.",
+    );
     return [];
   }
   const uris = await vscode.window.showOpenDialog({
@@ -966,7 +1110,7 @@ async function pickFilesForContext(): Promise<FileContext[]> {
       results.push(await buildFileContext(root, uri));
     } catch (err) {
       outputChannel.appendLine(
-        `[Context] Skipped ${uri.fsPath}: ${err instanceof Error ? err.message : String(err)}`
+        `[Context] Skipped ${uri.fsPath}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -977,7 +1121,9 @@ async function pickFilesForContext(): Promise<FileContext[]> {
 async function pickFoldersForContext(): Promise<FolderContext[]> {
   const root = getWorkspaceRootFsPath();
   if (!root) {
-    void vscode.window.showInformationMessage("Open a folder first to attach folder context.");
+    void vscode.window.showInformationMessage(
+      "Open a folder first to attach folder context.",
+    );
     return [];
   }
   const uris = await vscode.window.showOpenDialog({
@@ -1007,7 +1153,9 @@ function getActiveSelectionContext(): SelectionContextPayload | null {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.selection.isEmpty) return null;
   const root = getWorkspaceRootFsPath();
-  const rel = root ? toRelativeWorkspacePath(root, editor.document.uri.fsPath) : null;
+  const rel = root
+    ? toRelativeWorkspacePath(root, editor.document.uri.fsPath)
+    : null;
   return {
     filePath: (rel ?? editor.document.uri.fsPath).replace(/\\/g, "/"),
     startLine: editor.selection.start.line + 1,
@@ -1016,7 +1164,10 @@ function getActiveSelectionContext(): SelectionContextPayload | null {
 }
 
 /** Send a context/result reply back to the webview. */
-function sendContextResult(id: string | undefined, payload: ContextResultPayload): void {
+function sendContextResult(
+  id: string | undefined,
+  payload: ContextResultPayload,
+): void {
   sendToWebview({
     type: "context/result",
     id: id ?? `ctx-${Date.now().toString(36)}`,
@@ -1045,12 +1196,17 @@ async function formatFileContextBlock(file: FileContext): Promise<string> {
       return `${header} (${stat.size} bytes)\nFile exceeds inline limit — use your read_files tool with path "${file.relativePath}" to inspect it in chunks.`;
     }
     const bytes = await vscode.workspace.fs.readFile(uri);
-    const content = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const content = Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    )
       .toString("utf8")
       .replace(/\u0000/g, "");
-    const truncated = content.length > CONTEXT_MAX_INLINE_CHARS
-      ? content.slice(0, CONTEXT_MAX_INLINE_CHARS) + "\n... [truncated]"
-      : content;
+    const truncated =
+      content.length > CONTEXT_MAX_INLINE_CHARS
+        ? content.slice(0, CONTEXT_MAX_INLINE_CHARS) + "\n... [truncated]"
+        : content;
     return `${header} (${stat.size} bytes)\n\`\`\`\n${truncated}\n\`\`\``;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1059,12 +1215,16 @@ async function formatFileContextBlock(file: FileContext): Promise<string> {
 }
 
 /** Attach selected code as a structured block (never merged into user text). */
-async function formatSelectionBlock(selection: SelectionContextPayload): Promise<string> {
+async function formatSelectionBlock(
+  selection: SelectionContextPayload,
+): Promise<string> {
   const header = `[Selected code] ${selection.filePath} lines ${selection.startLine}-${selection.endLine}`;
   const root = getWorkspaceRootFsPath();
   if (!root) return `${header}\n(no workspace open)`;
   try {
-    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(`${root}/${selection.filePath}`));
+    const doc = await vscode.workspace.openTextDocument(
+      vscode.Uri.file(`${root}/${selection.filePath}`),
+    );
     const startIdx = Math.max(0, selection.startLine - 1);
     const endIdx = Math.min(doc.lineCount - 1, selection.endLine - 1);
     const lines: string[] = [];
@@ -1083,18 +1243,21 @@ async function formatSelectionBlock(selection: SelectionContextPayload): Promise
  */
 async function buildPromptWithComposerContext(
   text: string,
-  context: Partial<ComposerContext> | undefined
+  context: Partial<ComposerContext> | undefined,
 ): Promise<string> {
   const ctx = context ?? {};
   const blocks: string[] = [];
 
-  for (const file of ctx.files ?? []) blocks.push(await formatFileContextBlock(file));
+  for (const file of ctx.files ?? [])
+    blocks.push(await formatFileContextBlock(file));
   for (const folder of ctx.folders ?? []) {
     blocks.push(`[Attached folder] ${folder.relativePath}/`);
   }
   for (const urlItem of ctx.urls ?? []) {
     const items = await fetchUrlContent(urlItem.url);
-    blocks.push(`[Attached URL] ${urlItem.url}\n${items.map((i) => i.content).join("\n\n")}`);
+    blocks.push(
+      `[Attached URL] ${urlItem.url}\n${items.map((i) => i.content).join("\n\n")}`,
+    );
   }
   if (ctx.diagnostics) {
     blocks.push(`[Problems]\n${formatDiagnosticsForAgent(ctx.diagnostics)}`);
@@ -1135,7 +1298,10 @@ function logChat(stage: string, detail?: Record<string, unknown>): void {
   if (activeRequestId) parts.push(`requestId=${activeRequestId}`);
   if (detail) {
     for (const [key, value] of Object.entries(detail)) {
-      if (value !== undefined) parts.push(`${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
+      if (value !== undefined)
+        parts.push(
+          `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
+        );
     }
   }
   outputChannel.appendLine(parts.join(" "));
@@ -1147,18 +1313,27 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
   try {
     switch (type) {
       case "chat/send": {
-        const { text, mode, context } = payload as ChatSendPayload & { requestId?: string };
+        const { text, mode, context } = payload as ChatSendPayload & {
+          requestId?: string;
+        };
         // Request-ID correlation: adopt the webview-minted ID when present.
-        activeRequestId = (payload as { requestId?: string }).requestId || newRequestId();
+        activeRequestId =
+          (payload as { requestId?: string }).requestId || newRequestId();
         logChat("REQUEST_RECEIVED", {
           requestId: activeRequestId,
           modelId: activeModelLabel(),
           providerId: activeProviderLabel(),
-          baseUrl: vscode.workspace.getConfiguration("codepilot").get("localAI.ollama.baseUrl", "http://localhost:11434"),
+          baseUrl: vscode.workspace
+            .getConfiguration("codepilot")
+            .get("localAI.ollama.baseUrl", "http://localhost:11434"),
           mode: mode ?? "act",
           workspace: getWorkspaceRootFsPath(),
-          contextCount: (context?.files?.length ?? 0) + (context?.folders?.length ?? 0)
-            + (context?.urls?.length ?? 0) + (context?.diagnostics ? 1 : 0) + (context?.selection ? 1 : 0),
+          contextCount:
+            (context?.files?.length ?? 0) +
+            (context?.folders?.length ?? 0) +
+            (context?.urls?.length ?? 0) +
+            (context?.diagnostics ? 1 : 0) +
+            (context?.selection ? 1 : 0),
         });
         // Reset recovery state for new task
         recoveryManager?.reset();
@@ -1180,16 +1355,20 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       }
       case "context/problems": {
         const scopeRaw = (payload as { scope?: string } | undefined)?.scope;
-        const scope: "workspace" | "activeFile" = scopeRaw === "activeFile" ? "activeFile" : "workspace";
+        const scope: "workspace" | "activeFile" =
+          scopeRaw === "activeFile" ? "activeFile" : "workspace";
         try {
           const diagnostics = collectDiagnostics(scope);
           sendContextResult(id, { kind: "problems", diagnostics });
         } catch (err) {
           outputChannel.appendLine(
-            `[Context] Diagnostics collection failed: ${err instanceof Error ? err.message : String(err)}`
+            `[Context] Diagnostics collection failed: ${err instanceof Error ? err.message : String(err)}`,
           );
           // Zero problems on failure — never fail the chat.
-          sendContextResult(id, { kind: "problems", diagnostics: { scope, items: [] } });
+          sendContextResult(id, {
+            kind: "problems",
+            diagnostics: { scope, items: [] },
+          });
         }
         break;
       }
@@ -1199,9 +1378,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           sendContextResult(id, { kind: "selection", selection });
         } else {
           void vscode.window.showInformationMessage(
-            "Select some code in the editor first, then add it as context."
+            "Select some code in the editor first, then add it as context.",
           );
-          sendContextResult(id, { kind: "selection", error: "No active editor selection" });
+          sendContextResult(id, {
+            kind: "selection",
+            error: "No active editor selection",
+          });
         }
         break;
       }
@@ -1211,12 +1393,16 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         if (activeHealingEngine) {
           activeHealingEngine.cancel();
           activeHealingEngine = null;
-          outputChannel.appendLine("[Auto-Heal] Cancelled active healing engine");
+          outputChannel.appendLine(
+            "[Auto-Heal] Cancelled active healing engine",
+          );
         }
         // Cancel all pending MCP approval requests
         const cancelled = mcpManager?.cancelAllApprovals() ?? [];
         if (cancelled.length > 0) {
-          outputChannel.appendLine(`[MCP] Cancelled ${cancelled.length} pending approval requests`);
+          outputChannel.appendLine(
+            `[MCP] Cancelled ${cancelled.length} pending approval requests`,
+          );
           for (const req of cancelled) {
             sendToWebview({
               type: "mcp/approval_required",
@@ -1240,8 +1426,14 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             agentMode: config.get("agentMode"),
             temperature: config.get("localAI.ollama.temperature"),
             baseUrl: config.get("localAI.ollama.baseUrl"),
-            ollamaConnected: (await probeOllama(config.get("localAI.ollama.baseUrl", "http://localhost:11434"))).connected,
-            version: vscode.extensions.getExtension("codepilot.codepilot-ai")?.packageJSON?.version ?? "0.1.0",
+            ollamaConnected: (
+              await probeOllama(
+                config.get("localAI.ollama.baseUrl", "http://localhost:11434"),
+              )
+            ).connected,
+            version:
+              vscode.extensions.getExtension("codepilot.codepilot-ai")
+                ?.packageJSON?.version ?? "0.1.0",
           },
           timestamp: Date.now(),
         });
@@ -1265,8 +1457,16 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         // The webview sends "autoApproval" as a composite object. Persist it
         // ONLY through the registered codepilot.autoApproval.* keys — never
         // write an unregistered codepilot.autoApproval key.
-        if (key === "autoApproval" && typeof value === "object" && value !== null) {
-          const aa = value as { readFiles?: boolean; editFiles?: boolean; executeCommands?: boolean };
+        if (
+          key === "autoApproval" &&
+          typeof value === "object" &&
+          value !== null
+        ) {
+          const aa = value as {
+            readFiles?: boolean;
+            editFiles?: boolean;
+            executeCommands?: boolean;
+          };
           const persist: Array<[string, unknown]> = [
             ["autoApproval.read", aa.readFiles],
             ["autoApproval.write", aa.editFiles],
@@ -1284,56 +1484,123 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         if (runtime) {
           const patch: Record<string, unknown> = {};
           switch (key) {
-            case "model": patch.modelId = value; break;
-            case "provider": patch.providerId = value; break;
-            case "localAI.ollama.baseUrl": patch.baseUrl = value; break;
-            case "localAI.ollama.temperature": patch.temperature = value; break;
-            case "maxIterations": patch.maxIterations = value; break;
-            case "privacyMode": patch.privacyMode = value; break;
+            case "model":
+              patch.modelId = value;
+              break;
+            case "provider":
+              patch.providerId = value;
+              break;
+            case "localAI.ollama.baseUrl":
+              patch.baseUrl = value;
+              break;
+            case "localAI.ollama.temperature":
+              patch.temperature = value;
+              break;
+            case "maxIterations":
+              patch.maxIterations = value;
+              break;
+            case "privacyMode":
+              patch.privacyMode = value;
+              break;
             case "agentMode":
               patch.agentMode = value;
               // Keep PolicyEngine enforcement in sync with the selected mode
-              runtime.getPolicyEngine().setAgentMode(
-                value === "ask" || value === "plan" || value === "review" ? "plan" : "act"
-              );
+              runtime
+                .getPolicyEngine()
+                .setAgentMode(
+                  value === "ask" || value === "plan" || value === "review"
+                    ? "plan"
+                    : "act",
+                );
               break;
           }
           if (Object.keys(patch).length > 0) {
-            runtime.updateConfig(patch as Parameters<CodePilotRuntime["updateConfig"]>[0]);
-            outputChannel.appendLine(`[Settings] Applied live config patch: ${key}`);
+            runtime.updateConfig(
+              patch as Parameters<CodePilotRuntime["updateConfig"]>[0],
+            );
+            outputChannel.appendLine(
+              `[Settings] Applied live config patch: ${key}`,
+            );
           }
         }
         // If auto-approval settings changed, update the runtime's PolicyEngine
         if (key === "autoApproval" && runtime) {
-          const autoApproval = value as { readFiles?: boolean; editFiles?: boolean; executeCommands?: boolean; webFetch?: boolean; mcpServers?: boolean };
+          const autoApproval = value as {
+            readFiles?: boolean;
+            editFiles?: boolean;
+            executeCommands?: boolean;
+            webFetch?: boolean;
+            mcpServers?: boolean;
+          };
           const policyEngine = runtime.getPolicyEngine();
           if (autoApproval.readFiles !== undefined) {
-            for (const tool of ["read_files", "read_file", "search", "search_codebase", "list_directory", "list_files", "git_status", "git_diff", "git_log", "git_show"]) {
-              policyEngine.setPolicy(tool, autoApproval.readFiles ? "auto" : "approval");
+            for (const tool of [
+              "read_files",
+              "read_file",
+              "search",
+              "search_codebase",
+              "list_directory",
+              "list_files",
+              "git_status",
+              "git_diff",
+              "git_log",
+              "git_show",
+            ]) {
+              policyEngine.setPolicy(
+                tool,
+                autoApproval.readFiles ? "auto" : "approval",
+              );
             }
           }
           if (autoApproval.editFiles !== undefined) {
-            for (const tool of ["write_file", "create_file", "apply_patch", "editor", "delete_file", "rename_file", "move_file"]) {
-              policyEngine.setPolicy(tool, autoApproval.editFiles ? "auto" : "approval");
+            for (const tool of [
+              "write_file",
+              "create_file",
+              "apply_patch",
+              "editor",
+              "delete_file",
+              "rename_file",
+              "move_file",
+            ]) {
+              policyEngine.setPolicy(
+                tool,
+                autoApproval.editFiles ? "auto" : "approval",
+              );
             }
           }
           if (autoApproval.executeCommands !== undefined) {
             for (const tool of ["bash", "run_commands", "terminal"]) {
-              policyEngine.setPolicy(tool, autoApproval.executeCommands ? "auto" : "approval");
+              policyEngine.setPolicy(
+                tool,
+                autoApproval.executeCommands ? "auto" : "approval",
+              );
             }
           }
           if (autoApproval.webFetch !== undefined) {
-            for (const tool of ["web_fetch", "fetch", "fetch_web_content", "web_search"]) {
-              policyEngine.setPolicy(tool, autoApproval.webFetch ? "auto" : "approval");
+            for (const tool of [
+              "web_fetch",
+              "fetch",
+              "fetch_web_content",
+              "web_search",
+            ]) {
+              policyEngine.setPolicy(
+                tool,
+                autoApproval.webFetch ? "auto" : "approval",
+              );
             }
           }
           if (autoApproval.mcpServers !== undefined && mcpManager) {
             const tools = mcpManager.getTools();
             for (const tool of tools) {
-              mcpManager.setToolPermission(tool.id, autoApproval.mcpServers ? "auto" : "approval");
+              mcpManager.setToolPermission(
+                tool.id,
+                autoApproval.mcpServers ? "auto" : "approval",
+              );
             }
           }
-          outputChannel.appendLine(`[Settings] Auto-approval updated: ${JSON.stringify(autoApproval)}`);
+          outputChannel.appendLine(
+            `[Settings] Auto-approval updated: ${JSON.stringify(autoApproval)}`,
+          );
         }
         break;
       }
@@ -1350,7 +1617,10 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       }
       case "model/list": {
         const config = vscode.workspace.getConfiguration("codepilot");
-        const baseUrl = config.get("localAI.ollama.baseUrl", "http://localhost:11434");
+        const baseUrl = config.get(
+          "localAI.ollama.baseUrl",
+          "http://localhost:11434",
+        );
         const probe = await probeOllama(baseUrl);
         const models = probe.connected ? await discoverModels() : [];
         sendToWebview({
@@ -1360,14 +1630,18 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             models,
             connected: probe.connected && models.length > 0,
             baseUrl,
-            error: probe.error ?? (probe.connected && models.length === 0 ? "Ollama is reachable but no models are installed (run: ollama pull qwen3:8b)." : undefined),
+            error:
+              probe.error ??
+              (probe.connected && models.length === 0
+                ? "Ollama is reachable but no models are installed (run: ollama pull qwen3:8b)."
+                : undefined),
           },
           timestamp: Date.now(),
         });
         break;
       }
       case "session/list": {
-        const sessions = await runtime?.listSessions() ?? [];
+        const sessions = (await runtime?.listSessions()) ?? [];
         sendToWebview({
           type: "session/list",
           id,
@@ -1383,15 +1657,25 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         sendToWebview({
           type: "agent/status",
           id: genId(),
-          payload: { status: "running", message: `Resuming session ${sessionId}...` },
+          payload: {
+            status: "running",
+            message: `Resuming session ${sessionId}...`,
+          },
           timestamp: Date.now(),
         });
         try {
-          await runtime.startSession("Continue the previous task.", { agentMode: "act" });
+          await runtime.startSession("Continue the previous task.", {
+            agentMode: "act",
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           outputChannel.appendLine(`[Session] Resume failed: ${msg}`);
-          sendToWebview({ type: "error", id: genId(), payload: { message: msg }, timestamp: Date.now() });
+          sendToWebview({
+            type: "error",
+            id: genId(),
+            payload: { message: msg },
+            timestamp: Date.now(),
+          });
         }
         break;
       }
@@ -1400,13 +1684,26 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         outputChannel.appendLine(`[Session] Delete requested for ${delId}`);
         // Cline SDK manages session storage internally; mark session as deleted
         // The session will no longer appear in listSessions on reload
-        sendToWebview({ type: "session/deleted", id: genId(), payload: { sessionId: delId }, timestamp: Date.now() });
+        sendToWebview({
+          type: "session/deleted",
+          id: genId(),
+          payload: { sessionId: delId },
+          timestamp: Date.now(),
+        });
         break;
       }
       case "session/rename": {
-        const { sessionId: renId, title } = payload as { sessionId: string; title: string };
+        const { sessionId: renId, title } = payload as {
+          sessionId: string;
+          title: string;
+        };
         outputChannel.appendLine(`[Session] Rename ${renId} to "${title}"`);
-        sendToWebview({ type: "session/renamed", id: genId(), payload: { sessionId: renId, title }, timestamp: Date.now() });
+        sendToWebview({
+          type: "session/renamed",
+          id: genId(),
+          payload: { sessionId: renId, title },
+          timestamp: Date.now(),
+        });
         break;
       }
       case "task/retry": {
@@ -1415,7 +1712,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         if (text) {
           await sendPromptToAgent(text, "act");
         } else {
-          sendToWebview({ type: "error", id: genId(), payload: { message: "No previous task to retry" }, timestamp: Date.now() });
+          sendToWebview({
+            type: "error",
+            id: genId(),
+            payload: { message: "No previous task to retry" },
+            timestamp: Date.now(),
+          });
         }
         break;
       }
@@ -1428,42 +1730,71 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         };
         await runSelfHealing(
           { passed: false, exitCode, stderr, diagnostics },
-          validateCommand
+          validateCommand,
         );
         break;
       }
       case "diff/create": {
         // Create a ChangeSet from agent-proposed changes
-        const { taskId, changes } = payload as { taskId: string; changes: Array<{ filePath: string; proposedContent: string }> };
-        if (!changeSetManager) { outputChannel.appendLine("[Diff] ChangeSetManager not initialized"); break; }
+        const { taskId, changes } = payload as {
+          taskId: string;
+          changes: Array<{ filePath: string; proposedContent: string }>;
+        };
+        if (!changeSetManager) {
+          outputChannel.appendLine("[Diff] ChangeSetManager not initialized");
+          break;
+        }
         const cs = changeSetManager.createChangeSet(taskId, changes);
         sendToWebview({
           type: "diff/created",
           id,
           payload: {
             changeSetId: cs.id,
-            changes: cs.changes.map((c: { id: string; filePath: string; diff: string; status: string; originalContent: string }) => ({
-              id: c.id,
-              filePath: c.filePath,
-              diff: c.diff,
-              status: c.status,
-              isNew: !c.originalContent,
-            })),
+            changes: cs.changes.map(
+              (c: {
+                id: string;
+                filePath: string;
+                diff: string;
+                status: string;
+                originalContent: string;
+              }) => ({
+                id: c.id,
+                filePath: c.filePath,
+                diff: c.diff,
+                status: c.status,
+                isNew: !c.originalContent,
+              }),
+            ),
           },
           timestamp: Date.now(),
         });
         break;
       }
       case "diff/accept": {
-        const { changeSetId: csId1, changeId } = payload as { changeSetId: string; changeId: string };
+        const { changeSetId: csId1, changeId } = payload as {
+          changeSetId: string;
+          changeId: string;
+        };
         if (!changeSetManager) {
-          sendToWebview({ type: "diff/result", id, payload: { changeSetId: csId1, changeId, success: false, error: "ChangeSetManager is not initialized" }, timestamp: Date.now() });
+          sendToWebview({
+            type: "diff/result",
+            id,
+            payload: {
+              changeSetId: csId1,
+              changeId,
+              success: false,
+              error: "ChangeSetManager is not initialized",
+            },
+            timestamp: Date.now(),
+          });
           break;
         }
         const result = changeSetManager.acceptChange(csId1, changeId);
         const changeSet = changeSetManager.getChangeSet(csId1);
         const change = changeSet?.changes.find((item) => item.id === changeId);
-        outputChannel.appendLine(`[Diff] Accept ${changeId} (${change?.filePath ?? "unknown"}) in ${csId1}: ${result.success ? "applied" : result.error}`);
+        outputChannel.appendLine(
+          `[Diff] Accept ${changeId} (${change?.filePath ?? "unknown"}) in ${csId1}: ${result.success ? "applied" : result.error}`,
+        );
         sendToWebview({
           type: "diff/result",
           id,
@@ -1473,9 +1804,22 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         break;
       }
       case "diff/reject": {
-        const { changeSetId: csId2, changeId: rejId } = payload as { changeSetId: string; changeId: string };
+        const { changeSetId: csId2, changeId: rejId } = payload as {
+          changeSetId: string;
+          changeId: string;
+        };
         if (!changeSetManager) {
-          sendToWebview({ type: "diff/result", id, payload: { changeSetId: csId2, changeId: rejId, success: false, error: "ChangeSetManager is not initialized" }, timestamp: Date.now() });
+          sendToWebview({
+            type: "diff/result",
+            id,
+            payload: {
+              changeSetId: csId2,
+              changeId: rejId,
+              success: false,
+              error: "ChangeSetManager is not initialized",
+            },
+            timestamp: Date.now(),
+          });
           break;
         }
         const rejected = changeSetManager.rejectChange(csId2, rejId);
@@ -1483,7 +1827,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         sendToWebview({
           type: "diff/result",
           id,
-          payload: { changeSetId: csId2, changeId: rejId, success: rejected, error: rejected ? undefined : "Change or ChangeSet not found" },
+          payload: {
+            changeSetId: csId2,
+            changeId: rejId,
+            success: rejected,
+            error: rejected ? undefined : "Change or ChangeSet not found",
+          },
           timestamp: Date.now(),
         });
         break;
@@ -1491,15 +1840,33 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       case "diff/accept_all": {
         const { changeSetId: csId3 } = payload as { changeSetId: string };
         if (!changeSetManager) {
-          sendToWebview({ type: "diff/result", id, payload: { changeSetId: csId3, applied: 0, failed: 1, conflicts: 0, success: false, error: "ChangeSetManager is not initialized" }, timestamp: Date.now() });
+          sendToWebview({
+            type: "diff/result",
+            id,
+            payload: {
+              changeSetId: csId3,
+              applied: 0,
+              failed: 1,
+              conflicts: 0,
+              success: false,
+              error: "ChangeSetManager is not initialized",
+            },
+            timestamp: Date.now(),
+          });
           break;
         }
         const allResult = changeSetManager.acceptAll(csId3);
-        outputChannel.appendLine(`[Diff] Accept all: ${allResult.applied} applied, ${allResult.failed} failed, ${allResult.conflicts} conflicts`);
+        outputChannel.appendLine(
+          `[Diff] Accept all: ${allResult.applied} applied, ${allResult.failed} failed, ${allResult.conflicts} conflicts`,
+        );
         sendToWebview({
           type: "diff/result",
           id,
-          payload: { changeSetId: csId3, ...allResult, success: allResult.failed === 0 && allResult.conflicts === 0 },
+          payload: {
+            changeSetId: csId3,
+            ...allResult,
+            success: allResult.failed === 0 && allResult.conflicts === 0,
+          },
           timestamp: Date.now(),
         });
         break;
@@ -1507,7 +1874,17 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       case "diff/reject_all": {
         const { changeSetId: csId4 } = payload as { changeSetId: string };
         if (!changeSetManager) {
-          sendToWebview({ type: "diff/result", id, payload: { changeSetId: csId4, rejected: 0, success: false, error: "ChangeSetManager is not initialized" }, timestamp: Date.now() });
+          sendToWebview({
+            type: "diff/result",
+            id,
+            payload: {
+              changeSetId: csId4,
+              rejected: 0,
+              success: false,
+              error: "ChangeSetManager is not initialized",
+            },
+            timestamp: Date.now(),
+          });
           break;
         }
         const rejCount = changeSetManager.rejectAll(csId4);
@@ -1521,10 +1898,15 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         break;
       }
       case "diff/rollback": {
-        const { changeSetId: csId5, changeId: rbId } = payload as { changeSetId: string; changeId: string };
+        const { changeSetId: csId5, changeId: rbId } = payload as {
+          changeSetId: string;
+          changeId: string;
+        };
         if (!changeSetManager) break;
         const rbResult = changeSetManager.rollbackChange(csId5, rbId);
-        outputChannel.appendLine(`[Diff] Rollback ${rbId}: ${rbResult.success ? "restored" : rbResult.error}`);
+        outputChannel.appendLine(
+          `[Diff] Rollback ${rbId}: ${rbResult.success ? "restored" : rbResult.error}`,
+        );
         sendToWebview({
           type: "diff/result",
           id,
@@ -1534,14 +1916,19 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         break;
       }
       case "mcp/approval_response": {
-        const { requestId, decision } = payload as { requestId: string; decision: "approve" | "reject" };
+        const { requestId, decision } = payload as {
+          requestId: string;
+          decision: "approve" | "reject";
+        };
         if (!mcpManager) break;
         const am = mcpManager.getApprovalManager();
         const resolved = am.resolveRequest(requestId, {
           approved: decision === "approve",
           reason: decision === "approve" ? "User approved" : "User rejected",
         });
-        outputChannel.appendLine(`[MCP] Approval ${decision} for ${requestId}: ${resolved ? "resolved" : "already resolved/cancelled"}`);
+        outputChannel.appendLine(
+          `[MCP] Approval ${decision} for ${requestId}: ${resolved ? "resolved" : "already resolved/cancelled"}`,
+        );
         break;
       }
       case "mcp/tools/list": {
@@ -1584,14 +1971,23 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       }
       case "rules/reload": {
         outputChannel.appendLine("[Rules] Reloading project rules");
-        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+        const wsRoot =
+          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
         try {
           const { loadAllRules } = await import("@codepilot/context-engine");
           const rules = await loadAllRules(wsRoot);
           sendToWebview({
             type: "rules/list",
             id: genId(),
-            payload: { rules: rules.map((r) => ({ id: r.id, filePath: r.filePath, source: r.source, pattern: r.pattern, enabled: r.enabled })) },
+            payload: {
+              rules: rules.map((r) => ({
+                id: r.id,
+                filePath: r.filePath,
+                source: r.source,
+                pattern: r.pattern,
+                enabled: r.enabled,
+              })),
+            },
             timestamp: Date.now(),
           });
           outputChannel.appendLine(`[Rules] Loaded ${rules.length} rules`);
@@ -1605,30 +2001,106 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         // Real tool registry: built-in tools resolved through the PolicyEngine
         // (mode-aware) plus discovered MCP tools with their permission level.
         if (!runtime) {
-          sendToWebview({ type: "tools/list_result", id, payload: { tools: [], runtimeReady: false }, timestamp: Date.now() });
+          sendToWebview({
+            type: "tools/list_result",
+            id,
+            payload: { tools: [], runtimeReady: false },
+            timestamp: Date.now(),
+          });
           break;
         }
         const policy = runtime.getPolicyEngine();
         const builtInTools = [
-          { name: "read_files", category: "read", description: "Read file contents from the workspace" },
-          { name: "search", category: "read", description: "Search file contents across the workspace" },
-          { name: "list_directory", category: "read", description: "List directory entries" },
-          { name: "git_status", category: "git", description: "Show working-tree status" },
-          { name: "git_diff", category: "git", description: "Show unstaged/staged diffs" },
-          { name: "git_log", category: "git", description: "Show commit history" },
-          { name: "git_show", category: "git", description: "Show a specific commit" },
-          { name: "write_file", category: "write", description: "Create or overwrite a file (via ChangeSet approval)" },
-          { name: "apply_patch", category: "write", description: "Apply a patch to workspace files (via ChangeSet approval)" },
-          { name: "editor", category: "write", description: "Edit file ranges (via ChangeSet approval)" },
-          { name: "delete_file", category: "write", description: "Delete a file (via ChangeSet approval)" },
-          { name: "bash", category: "execute", description: "Run shell commands (validated by CommandValidator)" },
-          { name: "run_commands", category: "execute", description: "Run project commands (validated by CommandValidator)" },
-          { name: "web_fetch", category: "network", description: "Fetch content from a URL" },
-          { name: "web_search", category: "network", description: "Search the web" },
+          {
+            name: "read_files",
+            category: "read",
+            description: "Read file contents from the workspace",
+          },
+          {
+            name: "search",
+            category: "read",
+            description: "Search file contents across the workspace",
+          },
+          {
+            name: "list_directory",
+            category: "read",
+            description: "List directory entries",
+          },
+          {
+            name: "git_status",
+            category: "git",
+            description: "Show working-tree status",
+          },
+          {
+            name: "git_diff",
+            category: "git",
+            description: "Show unstaged/staged diffs",
+          },
+          {
+            name: "git_log",
+            category: "git",
+            description: "Show commit history",
+          },
+          {
+            name: "git_show",
+            category: "git",
+            description: "Show a specific commit",
+          },
+          {
+            name: "write_file",
+            category: "write",
+            description: "Create or overwrite a file (via ChangeSet approval)",
+          },
+          {
+            name: "apply_patch",
+            category: "write",
+            description:
+              "Apply a patch to workspace files (via ChangeSet approval)",
+          },
+          {
+            name: "editor",
+            category: "write",
+            description: "Edit file ranges (via ChangeSet approval)",
+          },
+          {
+            name: "delete_file",
+            category: "write",
+            description: "Delete a file (via ChangeSet approval)",
+          },
+          {
+            name: "bash",
+            category: "execute",
+            description: "Run shell commands (validated by CommandValidator)",
+          },
+          {
+            name: "run_commands",
+            category: "execute",
+            description: "Run project commands (validated by CommandValidator)",
+          },
+          {
+            name: "web_fetch",
+            category: "network",
+            description: "Fetch content from a URL",
+          },
+          {
+            name: "web_search",
+            category: "network",
+            description: "Search the web",
+          },
         ].map((t) => {
           const decision = policy.checkPermission(t.name);
-          const permission = decision.enabled === false ? "blocked" : decision.autoApprove ? "auto" : "approval";
-          return { ...t, source: "builtin" as const, serverName: undefined, permission };
+          const permission =
+            decision.enabled === false
+              ? "blocked"
+              : decision.autoApprove
+                ? "auto"
+                : "approval";
+          return {
+            ...t,
+            source: "builtin" as const,
+            serverName: undefined,
+            permission,
+          };
         });
         const mcpTools = (mcpManager?.getTools() ?? []).map((t) => ({
           name: t.name,
@@ -1641,7 +2113,10 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         sendToWebview({
           type: "tools/list_result",
           id,
-          payload: { tools: [...builtInTools, ...mcpTools], runtimeReady: true },
+          payload: {
+            tools: [...builtInTools, ...mcpTools],
+            runtimeReady: true,
+          },
           timestamp: Date.now(),
         });
         break;
@@ -1669,17 +2144,29 @@ function sendToWebview(message: WebviewMessage): void {
 // ============================================================================
 
 /** Probe the Ollama endpoint. Never throws — returns a connected flag + error. */
-async function probeOllama(baseUrl: string): Promise<{ connected: boolean; error?: string }> {
+async function probeOllama(
+  baseUrl: string,
+): Promise<{ connected: boolean; error?: string }> {
   try {
-    const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (response.ok) return { connected: true };
-    return { connected: false, error: `Ollama responded with HTTP ${response.status}` };
+    return {
+      connected: false,
+      error: `Ollama responded with HTTP ${response.status}`,
+    };
   } catch {
-    return { connected: false, error: `Ollama unavailable at ${baseUrl} — start Ollama and try again.` };
+    return {
+      connected: false,
+      error: `Ollama unavailable at ${baseUrl} — start Ollama and try again.`,
+    };
   }
 }
 
-async function discoverProviders(): Promise<Array<{ id: string; name: string; connected: boolean }>> {
+async function discoverProviders(): Promise<
+  Array<{ id: string; name: string; connected: boolean }>
+> {
   const providers = [
     { id: "ollama", name: "Ollama (Local)", connected: false },
     { id: "openai", name: "OpenAI", connected: false },
@@ -1690,8 +2177,13 @@ async function discoverProviders(): Promise<Array<{ id: string; name: string; co
   // Check Ollama connection
   try {
     const config = vscode.workspace.getConfiguration("codepilot");
-    const baseUrl = config.get("localAI.ollama.baseUrl", "http://localhost:11434");
-    const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    const baseUrl = config.get(
+      "localAI.ollama.baseUrl",
+      "http://localhost:11434",
+    );
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (response.ok) {
       providers[0]!.connected = true;
     }
@@ -1702,16 +2194,28 @@ async function discoverProviders(): Promise<Array<{ id: string; name: string; co
   return providers;
 }
 
-async function discoverModels(): Promise<Array<{ id: string; name: string; provider: string; contextWindow?: number }>> {
-  const models: Array<{ id: string; name: string; provider: string; contextWindow?: number }> = [];
+async function discoverModels(): Promise<
+  Array<{ id: string; name: string; provider: string; contextWindow?: number }>
+> {
+  const models: Array<{
+    id: string;
+    name: string;
+    provider: string;
+    contextWindow?: number;
+  }> = [];
 
   try {
     const config = vscode.workspace.getConfiguration("codepilot");
-    const baseUrl = config.get("localAI.ollama.baseUrl", "http://localhost:11434");
-    const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    const baseUrl = config.get(
+      "localAI.ollama.baseUrl",
+      "http://localhost:11434",
+    );
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(5000),
+    });
 
     if (response.ok) {
-      const data = await response.json() as {
+      const data = (await response.json()) as {
         models: Array<{
           name: string;
           details?: { context_length?: number };
@@ -1739,8 +2243,10 @@ async function discoverModels(): Promise<Array<{ id: string; name: string; provi
 // ============================================================================
 
 function extensionUri(): vscode.Uri {
-  return vscode.extensions.getExtension("codepilot.codepilot-ai")?.extensionUri
-    ?? vscode.Uri.file(__dirname);
+  return (
+    vscode.extensions.getExtension("codepilot.codepilot-ai")?.extensionUri ??
+    vscode.Uri.file(__dirname)
+  );
 }
 
 function getDefaultModel(provider: string): string {
@@ -1765,13 +2271,17 @@ function genId(): string {
 
 /** Current provider label for user-facing diagnostics (no secrets). */
 function activeProviderLabel(): string {
-  return vscode.workspace.getConfiguration("codepilot").get("provider", "ollama");
+  return vscode.workspace
+    .getConfiguration("codepilot")
+    .get("provider", "ollama");
 }
 
 /** Current model label for user-facing diagnostics. */
 function activeModelLabel(): string {
   const config = vscode.workspace.getConfiguration("codepilot");
-  return config.get("model", "") || getDefaultModel(config.get("provider", "ollama"));
+  return (
+    config.get("model", "") || getDefaultModel(config.get("provider", "ollama"))
+  );
 }
 
 // ============================================================================
@@ -1781,7 +2291,7 @@ function activeModelLabel(): string {
 function getWebviewHtml(webview: vscode.Webview): string {
   const nonce = getNonce();
   const scriptUri = webview.asWebviewUri(
-    vscode.Uri.joinPath(extensionUri(), "dist", "webview.js")
+    vscode.Uri.joinPath(extensionUri(), "dist", "webview.js"),
   );
 
   // React bundle loads the full production UI.
@@ -1809,7 +2319,8 @@ function getWebviewHtml(webview: vscode.Webview): string {
 }
 
 function getNonce(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let result = "";
   for (let i = 0; i < 32; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -1824,9 +2335,7 @@ function getNonce(): string {
 function registerWebviewProvider(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("codepilot.chat", {
-      resolveWebviewView(
-        webviewView: vscode.WebviewView
-      ): void {
+      resolveWebviewView(webviewView: vscode.WebviewView): void {
         webviewView.webview.options = {
           enableScripts: true,
           localResourceRoots: [extensionUri()],
@@ -1839,7 +2348,7 @@ function registerWebviewProvider(context: vscode.ExtensionContext): void {
             await handleWebviewMessage(message);
           },
           undefined,
-          []
+          [],
         );
 
         // Set the global panel reference for sending messages
@@ -1848,6 +2357,6 @@ function registerWebviewProvider(context: vscode.ExtensionContext): void {
           dispose: () => {},
         } as unknown as vscode.WebviewPanel;
       },
-    })
+    }),
   );
 }

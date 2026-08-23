@@ -5,7 +5,11 @@
  */
 
 import { CodePilotAgent } from "./agent.js";
-import type { AgentEvent, AgentEventListener, CodePilotAgentConfig } from "./types.js";
+import type {
+  AgentEvent,
+  AgentEventListener,
+  CodePilotAgentConfig,
+} from "./types.js";
 
 // ============================================================================
 // Task Types
@@ -57,12 +61,21 @@ export interface AgentTaskContext {
   changedFiles: string[];
   previousResults: Array<{ role: AgentRole; result: string; success: boolean }>;
   testResults?: { passed: number; failed: number; output: string };
-  securityFindings?: Array<{ severity: string; finding: string; file?: string }>;
+  securityFindings?: Array<{
+    severity: string;
+    finding: string;
+    file?: string;
+  }>;
   gitDiff?: string;
 }
 
 export interface OrchestratorEvent {
-  type: "task_started" | "task_completed" | "task_failed" | "orchestration_completed" | "orchestration_failed";
+  type:
+    | "task_started"
+    | "task_completed"
+    | "task_failed"
+    | "orchestration_completed"
+    | "orchestration_failed";
   taskId?: string;
   agentRole?: AgentRole;
   result?: string;
@@ -166,7 +179,7 @@ export class TaskDAG {
    */
   getDependents(taskId: string): TaskNode[] {
     return Array.from(this.tasks.values()).filter((t) =>
-      t.dependencies.includes(taskId)
+      t.dependencies.includes(taskId),
     );
   }
 
@@ -241,13 +254,13 @@ export class TaskDAG {
         t.status === "completed" ||
         t.status === "failed" ||
         t.status === "cancelled" ||
-        t.status === "blocked"
+        t.status === "blocked",
     );
   }
 
   hasFailures(): boolean {
     return Array.from(this.tasks.values()).some(
-      (t) => t.status === "failed" || t.status === "blocked"
+      (t) => t.status === "failed" || t.status === "blocked",
     );
   }
 
@@ -257,7 +270,9 @@ export class TaskDAG {
     for (const task of this.tasks.values()) {
       for (const depId of task.dependencies) {
         if (!this.tasks.has(depId)) {
-          errors.push(`Task "${task.id}" depends on non-existent task "${depId}"`);
+          errors.push(
+            `Task "${task.id}" depends on non-existent task "${depId}"`,
+          );
         }
       }
     }
@@ -292,16 +307,22 @@ export class TaskDAG {
     const lower = description.toLowerCase();
 
     if (
-      lower.includes("implement") || lower.includes("add") ||
-      lower.includes("create") || lower.includes("fix") ||
-      lower.includes("refactor") || lower.includes("modify") ||
-      lower.includes("change") || lower.includes("cache")
+      lower.includes("implement") ||
+      lower.includes("add") ||
+      lower.includes("create") ||
+      lower.includes("fix") ||
+      lower.includes("refactor") ||
+      lower.includes("modify") ||
+      lower.includes("change") ||
+      lower.includes("cache")
     ) {
       // Complex: architect → coder → tester + security (parallel) → reviewer
       return ["architect", "coder", "tester", "security", "reviewer"];
     } else if (
-      lower.includes("review") || lower.includes("analyze") ||
-      lower.includes("explain") || lower.includes("understand")
+      lower.includes("review") ||
+      lower.includes("analyze") ||
+      lower.includes("explain") ||
+      lower.includes("understand")
     ) {
       return ["architect"];
     } else if (lower.includes("plan")) {
@@ -336,7 +357,7 @@ export class TaskDAG {
 
       // Linear prefix: architect → coder
       const prefixRoles = roles.filter(
-        (r) => r !== "tester" && r !== "security" && r !== "reviewer"
+        (r) => r !== "tester" && r !== "security" && r !== "reviewer",
       );
       let prevId: string | null = null;
       for (const role of prefixRoles) {
@@ -425,7 +446,7 @@ export class MultiAgentOrchestrator {
 
   constructor(
     private readonly baseConfig: Omit<CodePilotAgentConfig, "agentMode">,
-    orchestratorConfig?: OrchestratorConfig
+    orchestratorConfig?: OrchestratorConfig,
   ) {
     this.config = {
       maxRetries: orchestratorConfig?.maxRetries ?? 1,
@@ -440,9 +461,14 @@ export class MultiAgentOrchestrator {
    */
   async execute(
     description: string,
-    mode: "plan" | "act" | "review" = "act"
+    mode: "plan" | "act" | "review" = "act",
   ): Promise<{
-    results: Array<{ role: AgentRole; task: string; result: string; success: boolean }>;
+    results: Array<{
+      role: AgentRole;
+      task: string;
+      result: string;
+      success: boolean;
+    }>;
     finalResult: string;
     dag: TaskDAG;
   }> {
@@ -462,10 +488,19 @@ export class MultiAgentOrchestrator {
     this.emit({
       type: "status",
       message: "Orchestration started",
-      metadata: { agentRole: "orchestrator", taskId: "task-0", taskCount: this.currentDAG.getAllTasks().length },
+      metadata: {
+        agentRole: "orchestrator",
+        taskId: "task-0",
+        taskCount: this.currentDAG.getAllTasks().length,
+      },
     });
 
-    const results: Array<{ role: AgentRole; task: string; result: string; success: boolean }> = [];
+    const results: Array<{
+      role: AgentRole;
+      task: string;
+      result: string;
+      success: boolean;
+    }> = [];
 
     // ===== DAG-EXECUTION LOOP =====
     // Instead of linear iteration, use getReadyTasks() for dependency-aware execution.
@@ -485,7 +520,9 @@ export class MultiAgentOrchestrator {
         // Either all done or deadlock
         if (this.currentDAG.isComplete()) break;
         // Check for deadlock (running tasks still in progress)
-        const running = this.currentDAG.getAllTasks().filter((t) => t.status === "running");
+        const running = this.currentDAG
+          .getAllTasks()
+          .filter((t) => t.status === "running");
         if (running.length === 0) {
           // True deadlock — shouldn't happen with valid DAGs
           break;
@@ -500,7 +537,7 @@ export class MultiAgentOrchestrator {
 
       // Execute batch in parallel
       const batchResults = await Promise.allSettled(
-        batch.map((task) => this.executeTask(task, mode, results))
+        batch.map((task) => this.executeTask(task, mode, results)),
       );
 
       // Process results
@@ -511,9 +548,10 @@ export class MultiAgentOrchestrator {
         if (!batchResult) continue;
 
         if (batchResult.status === "rejected") {
-          const error = batchResult.reason instanceof Error
-            ? batchResult.reason.message
-            : String(batchResult.reason);
+          const error =
+            batchResult.reason instanceof Error
+              ? batchResult.reason.message
+              : String(batchResult.reason);
 
           const currentTask = this.currentDAG.getTask(task.id);
           if (currentTask?.status === "retrying") {
@@ -523,7 +561,12 @@ export class MultiAgentOrchestrator {
 
           this.currentDAG.markFailed(task.id, error);
           const blocked = this.currentDAG.propagateFailure(task.id);
-          results.push({ role: task.agentRole, task: task.description, result: error, success: false });
+          results.push({
+            role: task.agentRole,
+            task: task.description,
+            result: error,
+            success: false,
+          });
 
           this.emit({
             type: "error",
@@ -534,7 +577,12 @@ export class MultiAgentOrchestrator {
           // Success — result was already recorded in executeTask
           const currentTask = this.currentDAG.getTask(task.id);
           if (currentTask?.result) {
-            results.push({ role: task.agentRole, task: task.description, result: currentTask.result, success: true });
+            results.push({
+              role: task.agentRole,
+              task: task.description,
+              result: currentTask.result,
+              success: true,
+            });
           }
         }
       }
@@ -543,16 +591,26 @@ export class MultiAgentOrchestrator {
     // Build final result from last completed agent
     const completedResults = results.filter((r) => r.success);
     const lastResult = completedResults[completedResults.length - 1];
-    const finalResult = lastResult?.result ?? "Orchestration completed with failures";
+    const finalResult =
+      lastResult?.result ?? "Orchestration completed with failures";
 
     const hasFailure = this.currentDAG!.hasFailures();
     if (hasFailure) {
-      this.emit({ type: "error", error: "Orchestration completed with failures", recoverable: true });
+      this.emit({
+        type: "error",
+        error: "Orchestration completed with failures",
+        recoverable: true,
+      });
     } else {
       this.emit({
         type: "completed",
         result: finalResult,
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
       });
     }
 
@@ -565,7 +623,12 @@ export class MultiAgentOrchestrator {
   private async executeTask(
     task: TaskNode,
     mode: "plan" | "act" | "review",
-    previousResults: Array<{ role: AgentRole; task: string; result: string; success: boolean }>
+    previousResults: Array<{
+      role: AgentRole;
+      task: string;
+      result: string;
+      success: boolean;
+    }>,
   ): Promise<string> {
     // Build structured context
     const context = this.buildTaskContext(task, previousResults);
@@ -575,9 +638,12 @@ export class MultiAgentOrchestrator {
     if (context.previousResults.length > 0) {
       contextParts.push(
         "Previous agent results:\n" +
-        context.previousResults
-          .map((r) => `[${r.role}] ${r.success ? "✓" : "✗"}: ${r.result.substring(0, 500)}`)
-          .join("\n\n")
+          context.previousResults
+            .map(
+              (r) =>
+                `[${r.role}] ${r.success ? "✓" : "✗"}: ${r.result.substring(0, 500)}`,
+            )
+            .join("\n\n"),
       );
     }
     if (context.changedFiles.length > 0) {
@@ -585,19 +651,22 @@ export class MultiAgentOrchestrator {
     }
     if (context.testResults) {
       contextParts.push(
-        `Test results: ${context.testResults.passed} passed, ${context.testResults.failed} failed\n${context.testResults.output.substring(0, 500)}`
+        `Test results: ${context.testResults.passed} passed, ${context.testResults.failed} failed\n${context.testResults.output.substring(0, 500)}`,
       );
     }
     if (context.securityFindings && context.securityFindings.length > 0) {
       contextParts.push(
         "Security findings:\n" +
-        context.securityFindings.map((f) => `  [${f.severity}] ${f.finding}`).join("\n")
+          context.securityFindings
+            .map((f) => `  [${f.severity}] ${f.finding}`)
+            .join("\n"),
       );
     }
 
-    const prompt = contextParts.length > 0
-      ? `${contextParts.join("\n\n")}\n\nCurrent task: ${task.description}`
-      : task.description;
+    const prompt =
+      contextParts.length > 0
+        ? `${contextParts.join("\n\n")}\n\nCurrent task: ${task.description}`
+        : task.description;
 
     // Mark running
     this.currentDAG!.markRunning(task.id);
@@ -623,7 +692,7 @@ export class MultiAgentOrchestrator {
       const resultText = await this.executeWithTimeout(
         () => agent.run(prompt).then((r) => r.text),
         task.timeoutMs || this.config.taskTimeoutMs,
-        task.id
+        task.id,
       );
 
       this.currentDAG!.markCompleted(task.id, resultText);
@@ -631,7 +700,11 @@ export class MultiAgentOrchestrator {
       this.emit({
         type: "status",
         message: `${task.agentRole} completed`,
-        metadata: { taskId: task.id, agentRole: task.agentRole, result: resultText.substring(0, 200) },
+        metadata: {
+          taskId: task.id,
+          agentRole: task.agentRole,
+          result: resultText.substring(0, 200),
+        },
       });
 
       return resultText;
@@ -676,12 +749,17 @@ export class MultiAgentOrchestrator {
    */
   private buildTaskContext(
     task: TaskNode,
-    previousResults: Array<{ role: AgentRole; task: string; result: string; success: boolean }>
+    previousResults: Array<{
+      role: AgentRole;
+      task: string;
+      result: string;
+      success: boolean;
+    }>,
   ): AgentTaskContext {
     // Only include results from completed tasks that this task depends on
     const relevantResults = previousResults.filter((r) => {
       const upstreamTask = this.currentDAG!.getAllTasks().find(
-        (t) => t.agentRole === r.role && t.status === "completed"
+        (t) => t.agentRole === r.role && t.status === "completed",
       );
       return upstreamTask && task.dependencies.includes(upstreamTask.id);
     });
@@ -711,10 +789,14 @@ export class MultiAgentOrchestrator {
     const changedFiles: string[] = [];
     const coderResult = relevantResults.find((r) => r.role === "coder");
     if (coderResult && coderResult.success) {
-      const fileMatches = coderResult.result.match(/(?:Modified|Changed|Created|Updated)\s+([^\s]+\.\w+)/gi);
+      const fileMatches = coderResult.result.match(
+        /(?:Modified|Changed|Created|Updated)\s+([^\s]+\.\w+)/gi,
+      );
       if (fileMatches) {
         for (const match of fileMatches) {
-          const file = match.replace(/^(Modified|Changed|Created|Updated)\s+/i, "").trim();
+          const file = match
+            .replace(/^(Modified|Changed|Created|Updated)\s+/i, "")
+            .trim();
           if (file && !changedFiles.includes(file)) changedFiles.push(file);
         }
       }
@@ -735,13 +817,22 @@ export class MultiAgentOrchestrator {
     };
   }
 
-  private parseSecurityFindings(text: string): Array<{ severity: string; finding: string; file?: string }> {
-    const findings: Array<{ severity: string; finding: string; file?: string }> = [];
+  private parseSecurityFindings(
+    text: string,
+  ): Array<{ severity: string; finding: string; file?: string }> {
+    const findings: Array<{
+      severity: string;
+      finding: string;
+      file?: string;
+    }> = [];
     const lines = text.split("\n");
     for (const line of lines) {
       const match = line.match(/\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]\s*(.+)/i);
       if (match) {
-        findings.push({ severity: (match[1] ?? "INFO").toUpperCase(), finding: (match[2] ?? "").trim() });
+        findings.push({
+          severity: (match[1] ?? "INFO").toUpperCase(),
+          finding: (match[2] ?? "").trim(),
+        });
       }
     }
     return findings;
@@ -750,7 +841,7 @@ export class MultiAgentOrchestrator {
   private async executeWithTimeout<T>(
     fn: () => Promise<T>,
     timeoutMs: number,
-    taskId: string
+    taskId: string,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -776,7 +867,11 @@ export class MultiAgentOrchestrator {
     this.abortController?.abort();
     // Abort all active agents
     for (const [taskId, agent] of this.activeAgents) {
-      try { agent.abort(); } catch { /* ignore */ }
+      try {
+        agent.abort();
+      } catch {
+        /* ignore */
+      }
       this.currentDAG?.markCancelled(taskId);
     }
     this.activeAgents.clear();
@@ -789,12 +884,18 @@ export class MultiAgentOrchestrator {
 
   subscribe(listener: AgentEventListener): () => void {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private emit(event: AgentEvent): void {
     for (const listener of this.listeners) {
-      try { listener(event); } catch { /* don't break */ }
+      try {
+        listener(event);
+      } catch {
+        /* don't break */
+      }
     }
   }
 }

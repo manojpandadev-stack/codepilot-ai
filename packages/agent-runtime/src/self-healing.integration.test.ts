@@ -47,7 +47,10 @@ function makeDiagnoser(): RepairDiagnoser {
 }
 
 function makeApplier(): RepairApplier {
-  return async (_d, _r, filesChanged) => ({ success: true, filesChanged: filesChanged });
+  return async (_d, _r, filesChanged) => ({
+    success: true,
+    filesChanged: filesChanged,
+  });
 }
 
 function collectEvents(engine: SelfHealingEngine): HealingEvent[] {
@@ -63,7 +66,8 @@ function collectEvents(engine: SelfHealingEngine): HealingEvent[] {
 describe("Scenario A: Build Failure", () => {
   it("classifies build failure as RECOVERABLE and heals successfully", async () => {
     // Step 1: Error classification
-    const error = "BUILD FAILURE: error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.";
+    const error =
+      "BUILD FAILURE: error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.";
     const classification = classifyError(error, undefined, 1);
 
     expect(classification.category).toBe("RECOVERABLE");
@@ -71,12 +75,18 @@ describe("Scenario A: Build Failure", () => {
     expect(classification.strategy).toBe("repair");
 
     // Step 2: RecoveryManager permits
-    const manager = new RecoveryManager("/tmp/test", { maxSessionRecoveries: 5, cooldownMs: 0 });
+    const manager = new RecoveryManager("/tmp/test", {
+      maxSessionRecoveries: 5,
+      cooldownMs: 0,
+    });
     const canRecover = manager.canRecover(error, undefined, 1);
     expect(canRecover.allowed).toBe(true);
 
     // Step 3: SelfHealingEngine starts and heals
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 3 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 3,
+    });
     const events = collectEvents(engine);
 
     let validateCalls = 0;
@@ -90,7 +100,7 @@ describe("Scenario A: Build Failure", () => {
           : { passed: false, exitCode: 1, stderr: error, diagnostics: [error] };
       },
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
 
     // Step 4: Verify healing succeeded
@@ -131,7 +141,7 @@ describe("Scenario A: Build Failure", () => {
     const classification = classifyError(
       "[ERROR] /src/main/java/com/example/UserService.java:[15,1] error: cannot find symbol",
       undefined,
-      1
+      1,
     );
     expect(classification.category).toBe("RECOVERABLE");
     expect(classification.recoverable).toBe(true);
@@ -161,7 +171,10 @@ describe("Scenario B: Transient Network Failure", () => {
     const canRecover = manager.canRecover("ECONNREFUSED");
     expect(canRecover.allowed).toBe(true);
 
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 3 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 3,
+    });
     let validateCalls = 0;
 
     const result = await engine.heal(
@@ -177,7 +190,7 @@ describe("Scenario B: Transient Network Failure", () => {
         repairDescription: "Retry after transient failure",
         filesChanged: [],
       }),
-      async () => ({ success: true, filesChanged: [] })
+      async () => ({ success: true, filesChanged: [] }),
     );
 
     expect(result.healed).toBe(true);
@@ -198,7 +211,10 @@ describe("Scenario C: Timeout", () => {
   });
 
   it("timeout recovery does not loop infinitely", async () => {
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 2 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 2,
+    });
     let validateCalls = 0;
 
     const result = await engine.heal(
@@ -213,7 +229,7 @@ describe("Scenario C: Timeout", () => {
         repairDescription: `Retry ${attempt}`,
         filesChanged: [],
       }),
-      async () => ({ success: true, filesChanged: [] })
+      async () => ({ success: true, filesChanged: [] }),
     );
 
     // Should stop after maxAttempts, not loop forever
@@ -223,12 +239,15 @@ describe("Scenario C: Timeout", () => {
   });
 
   it("transient errors in recovery also respect max attempts", async () => {
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 1 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 1,
+    });
     const result = await engine.heal(
       makeFailure({ stderr: "ETIMEDOUT" }),
       async () => ({ passed: false, exitCode: 1, stderr: "ETIMEDOUT" }),
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
 
     expect(result.healed).toBe(false);
@@ -326,7 +345,7 @@ describe("Scenario F: Recovery Exhaustion", () => {
         makeFailure(),
         async () => ({ passed: false, exitCode: 1 }),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       manager.record({
@@ -345,14 +364,17 @@ describe("Scenario F: Recovery Exhaustion", () => {
   });
 
   it("emits healing_exhausted when engine max attempts reached", async () => {
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 2 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 2,
+    });
     const events = collectEvents(engine);
 
     const result = await engine.heal(
       makeFailure(),
       async () => ({ passed: false, exitCode: 1 }),
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
 
     expect(result.healed).toBe(false);
@@ -405,7 +427,10 @@ describe("Concurrency Protection", () => {
     // Simulate the concurrency guard from extension.ts
     function tryStartHealing(): boolean {
       if (activeEngines.length > 0) return false;
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 3 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 3,
+      });
       activeEngines.push(engine);
       return true;
     }
@@ -476,7 +501,7 @@ describe("Plan Mode", () => {
       makeFailure(),
       async () => ({ passed: false, exitCode: 1 }),
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
 
     expect(result.healed).toBe(false);
@@ -502,7 +527,11 @@ describe("Plan Mode", () => {
       // Diagnosis callback that checks plan mode
       async (failure, attemptNumber) => {
         if (isPlanMode) {
-          return { diagnosis: "Healing disabled in plan mode", repairDescription: "", filesChanged: [] };
+          return {
+            diagnosis: "Healing disabled in plan mode",
+            repairDescription: "",
+            filesChanged: [],
+          };
         }
         return {
           diagnosis: `Diagnosed: ${(failure.diagnostics ?? []).join("; ")}`,
@@ -510,7 +539,7 @@ describe("Plan Mode", () => {
           filesChanged: [],
         };
       },
-      makeApplier()
+      makeApplier(),
     );
 
     // Plan mode blocks healing entirely
@@ -548,12 +577,16 @@ describe("New Task Reset", () => {
       });
     }
 
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(false);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      false,
+    );
 
     // Task B: reset
     manager.reset();
 
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(true);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      true,
+    );
     expect(manager.getAttemptCount()).toBe(0);
   });
 
@@ -571,11 +604,15 @@ describe("New Task Reset", () => {
     });
 
     // Should be blocked by cooldown
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(false);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      false,
+    );
 
     // Reset clears cooldown
     manager.reset();
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(true);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      true,
+    );
   });
 
   it("old task's cooldown does not block new task after reset", async () => {
@@ -593,13 +630,17 @@ describe("New Task Reset", () => {
     });
 
     // Task A cooldown is active
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(false);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      false,
+    );
 
     // Simulate new task: reset
     manager.reset();
 
     // Task B should have fresh budget
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(true);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      true,
+    );
   });
 });
 
@@ -609,7 +650,10 @@ describe("New Task Reset", () => {
 
 describe("Cancellation", () => {
   it("cancelling stops healing engine", async () => {
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 10 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 10,
+    });
     let repairCount = 0;
 
     const diagnoser: RepairDiagnoser = async (_f, attempt) => {
@@ -626,7 +670,7 @@ describe("Cancellation", () => {
       makeFailure(),
       async () => ({ passed: false, exitCode: 1 }),
       diagnoser,
-      makeApplier()
+      makeApplier(),
     );
 
     expect(result.cancelled).toBe(true);
@@ -635,25 +679,34 @@ describe("Cancellation", () => {
   });
 
   it("cancelled engine does not emit stale success event", async () => {
-    const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 5 });
+    const engine = new SelfHealingEngine({
+      workspaceRoot: "/tmp/test",
+      maxAttempts: 5,
+    });
     const events = collectEvents(engine);
     let count = 0;
 
     const diagnoser: RepairDiagnoser = async (_f, attempt) => {
       count++;
       if (count >= 3) engine.cancel();
-      return { diagnosis: `D${attempt}`, repairDescription: `R${attempt}`, filesChanged: [] };
+      return {
+        diagnosis: `D${attempt}`,
+        repairDescription: `R${attempt}`,
+        filesChanged: [],
+      };
     };
 
     const result = await engine.heal(
       makeFailure(),
       async () => ({ passed: false, exitCode: 1 }),
       diagnoser,
-      makeApplier()
+      makeApplier(),
     );
 
     expect(result.cancelled).toBe(true);
-    const succeededEvents = events.filter((e) => e.type === "healing_succeeded");
+    const succeededEvents = events.filter(
+      (e) => e.type === "healing_succeeded",
+    );
     expect(succeededEvents).toHaveLength(0);
   });
 
@@ -668,7 +721,9 @@ describe("Cancellation", () => {
     });
 
     // Should still be able to recover after a cancelled healing
-    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(true);
+    expect(manager.canRecover("BUILD FAILURE", undefined, 1).allowed).toBe(
+      true,
+    );
   });
 });
 
@@ -727,19 +782,31 @@ describe("Error Classification Comprehensive", () => {
   });
 
   it("test failure is RECOVERABLE", () => {
-    const result = classifyError("Tests failed: 3 assertions failed", undefined, 1);
+    const result = classifyError(
+      "Tests failed: 3 assertions failed",
+      undefined,
+      1,
+    );
     expect(result.category).toBe("RECOVERABLE");
     expect(result.recoverable).toBe(true);
   });
 
   it("reference error in JS/TS is RECOVERABLE", () => {
-    const result = classifyError("ReferenceError: foo is not defined", undefined, 1);
+    const result = classifyError(
+      "ReferenceError: foo is not defined",
+      undefined,
+      1,
+    );
     expect(result.category).toBe("RECOVERABLE");
     expect(result.recoverable).toBe(true);
   });
 
   it("type error is RECOVERABLE", () => {
-    const result = classifyError("TypeError: cannot read property of undefined", undefined, 1);
+    const result = classifyError(
+      "TypeError: cannot read property of undefined",
+      undefined,
+      1,
+    );
     expect(result.category).toBe("RECOVERABLE");
     expect(result.recoverable).toBe(true);
   });
@@ -784,7 +851,7 @@ describe("Full Flow Integration", () => {
           : { passed: false, exitCode: 1, stderr: error };
       },
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
 
     expect(result.healed).toBe(true);
@@ -832,7 +899,7 @@ describe("Full Flow Integration", () => {
       makeFailure({ stderr: error }),
       async () => ({ passed: false, exitCode: 1, stderr: error }),
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
     expect(result1.healed).toBe(false);
 
@@ -853,7 +920,7 @@ describe("Full Flow Integration", () => {
       makeFailure({ stderr: error }),
       async () => ({ passed: false, exitCode: 1, stderr: error }),
       makeDiagnoser(),
-      makeApplier()
+      makeApplier(),
     );
     expect(result2.healed).toBe(false);
 

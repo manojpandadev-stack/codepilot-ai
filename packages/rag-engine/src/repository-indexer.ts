@@ -11,32 +11,69 @@ import { PgVectorStore, type StoredChunk } from "./pgvector-store.js";
 import { generateEmbedding, type EmbeddingConfig } from "./embeddings.js";
 
 const SUPPORTED_EXTENSIONS = new Set([
-  ".java", ".ts", ".tsx", ".js", ".jsx", ".py",
-  ".sql", ".json", ".yaml", ".yml", ".md",
-  ".xml", ".properties", ".gradle", ".kt",
+  ".java",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".py",
+  ".sql",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".md",
+  ".xml",
+  ".properties",
+  ".gradle",
+  ".kt",
 ]);
 
 const IGNORED_DIRS = new Set([
-  ".git", "node_modules", "target", "build", "dist",
-  ".gradle", ".mvn", "__pycache__", ".next", ".nuxt",
-  "vendor", ".vagrant", ".idea", ".vscode",
+  ".git",
+  "node_modules",
+  "target",
+  "build",
+  "dist",
+  ".gradle",
+  ".mvn",
+  "__pycache__",
+  ".next",
+  ".nuxt",
+  "vendor",
+  ".vagrant",
+  ".idea",
+  ".vscode",
 ]);
 
 const IGNORED_FILES = new Set([
-  ".env", ".env.local", ".env.production",
-  "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-  ".gitignore", ".dockerignore",
+  ".env",
+  ".env.local",
+  ".env.production",
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  ".gitignore",
+  ".dockerignore",
 ]);
 
 function detectLanguage(filePath: string): string {
   const ext = extname(filePath).toLowerCase();
   const langMap: Record<string, string> = {
-    ".java": "java", ".ts": "typescript", ".tsx": "typescript",
-    ".js": "javascript", ".jsx": "javascript",
-    ".py": "python", ".sql": "sql", ".json": "json",
-    ".yaml": "yaml", ".yml": "yaml", ".md": "markdown",
-    ".xml": "xml", ".properties": "properties",
-    ".gradle": "gradle", ".kt": "kotlin",
+    ".java": "java",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".py": "python",
+    ".sql": "sql",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".md": "markdown",
+    ".xml": "xml",
+    ".properties": "properties",
+    ".gradle": "gradle",
+    ".kt": "kotlin",
   };
   return langMap[ext] ?? "text";
 }
@@ -93,12 +130,17 @@ export class RepositoryIndexer {
   async indexRepository(
     repoPath: string,
     projectId: string,
-    onProgress?: (message: string) => void
+    onProgress?: (message: string) => void,
   ): Promise<IndexResult> {
     const startTime = Date.now();
     const result: IndexResult = {
-      filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
-      chunksCreated: 0, embeddingsCreated: 0, errors: [], durationMs: 0,
+      filesScanned: 0,
+      filesIndexed: 0,
+      filesSkipped: 0,
+      chunksCreated: 0,
+      embeddingsCreated: 0,
+      errors: [],
+      durationMs: 0,
     };
 
     try {
@@ -119,7 +161,9 @@ export class RepositoryIndexer {
           }
 
           // Check if file has changed (incremental indexing via PostgreSQL)
-          const contentHash = createHash("sha256").update(content).digest("hex");
+          const contentHash = createHash("sha256")
+            .update(content)
+            .digest("hex");
           const prevHash = await this.store.getFileHash(projectId, filePath);
           if (prevHash === contentHash) {
             result.filesSkipped++;
@@ -132,7 +176,11 @@ export class RepositoryIndexer {
 
           // Chunk the file
           const lines = content.split("\n");
-          const chunks: Array<{ startLine: number; endLine: number; content: string }> = [];
+          const chunks: Array<{
+            startLine: number;
+            endLine: number;
+            content: string;
+          }> = [];
 
           for (let i = 0; i < lines.length; i += this.chunkSize) {
             const end = Math.min(i + this.chunkSize, lines.length);
@@ -146,7 +194,10 @@ export class RepositoryIndexer {
           // Generate embeddings for each chunk
           for (const chunk of chunks) {
             try {
-              const embeddingResult = await generateEmbedding(chunk.content, this.embeddingConfig);
+              const embeddingResult = await generateEmbedding(
+                chunk.content,
+                this.embeddingConfig,
+              );
 
               const stored: StoredChunk = {
                 id: `${projectId}:${filePath}:${chunk.startLine}`,
@@ -166,12 +217,19 @@ export class RepositoryIndexer {
               result.embeddingsCreated++;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              result.errors.push(`Embedding failed for ${filePath}:${chunk.startLine} - ${msg}`);
+              result.errors.push(
+                `Embedding failed for ${filePath}:${chunk.startLine} - ${msg}`,
+              );
             }
           }
 
           // Persist file hash for future incremental checks
-          await this.store.upsertFileHash(projectId, filePath, contentHash, Buffer.byteLength(content, "utf-8"));
+          await this.store.upsertFileHash(
+            projectId,
+            filePath,
+            contentHash,
+            Buffer.byteLength(content, "utf-8"),
+          );
           result.filesIndexed++;
           onProgress?.(`Indexed ${filePath} (${chunks.length} chunks)`);
         } catch (err) {
@@ -194,11 +252,14 @@ export class RepositoryIndexer {
   async search(
     query: string,
     projectId: string,
-    options: { limit?: number; language?: string } = {}
+    options: { limit?: number; language?: string } = {},
   ): Promise<Array<StoredChunk & { score: number; matchType: string }>> {
     // Generate query embedding
     try {
-      const embeddingResult = await generateEmbedding(query, this.embeddingConfig);
+      const embeddingResult = await generateEmbedding(
+        query,
+        this.embeddingConfig,
+      );
       return await this.store.hybridSearch(query, embeddingResult.embedding, {
         projectId,
         limit: options.limit ?? 10,

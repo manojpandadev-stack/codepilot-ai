@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { ContextEngine, estimateTokens, estimateObjectTokens } from "./index.js";
+import {
+  ContextEngine,
+  estimateTokens,
+  estimateObjectTokens,
+} from "./index.js";
 
 describe("estimateTokens", () => {
   it("estimates tokens for simple text", () => {
@@ -39,7 +43,10 @@ describe("ContextEngine", () => {
   });
 
   it("creates with custom options", () => {
-    const engine = new ContextEngine({ maxTokens: 32_000, responseReserveFraction: 0.5 });
+    const engine = new ContextEngine({
+      maxTokens: 32_000,
+      responseReserveFraction: 0.5,
+    });
     const stats = engine.getStats();
     expect(stats.maxTokens).toBe(32_000);
     expect(stats.reservedTokens).toBe(16_000);
@@ -49,9 +56,24 @@ describe("ContextEngine", () => {
   it("buildContext selects high-priority items first", () => {
     const engine = new ContextEngine({ maxTokens: 1000 });
     const items = [
-      { source: "repository_structure" as const, content: "low priority", priority: 1, estimatedTokens: 100 },
-      { source: "user_request" as const, content: "high priority", priority: 10, estimatedTokens: 100 },
-      { source: "current_file" as const, content: "medium priority", priority: 5, estimatedTokens: 100 },
+      {
+        source: "repository_structure" as const,
+        content: "low priority",
+        priority: 1,
+        estimatedTokens: 100,
+      },
+      {
+        source: "user_request" as const,
+        content: "high priority",
+        priority: 10,
+        estimatedTokens: 100,
+      },
+      {
+        source: "current_file" as const,
+        content: "medium priority",
+        priority: 5,
+        estimatedTokens: 100,
+      },
     ];
 
     const result = engine.buildContext(items);
@@ -64,8 +86,18 @@ describe("ContextEngine", () => {
   it("buildContext drops items below min priority", () => {
     const engine = new ContextEngine({ maxTokens: 1000, minPriority: 5 });
     const items = [
-      { source: "user_request" as const, content: "keep", priority: 10, estimatedTokens: 100 },
-      { source: "memory" as const, content: "drop", priority: 2, estimatedTokens: 100 },
+      {
+        source: "user_request" as const,
+        content: "keep",
+        priority: 10,
+        estimatedTokens: 100,
+      },
+      {
+        source: "memory" as const,
+        content: "drop",
+        priority: 2,
+        estimatedTokens: 100,
+      },
     ];
 
     const result = engine.buildContext(items);
@@ -74,11 +106,24 @@ describe("ContextEngine", () => {
   });
 
   it("buildContext respects budget limits", () => {
-    const engine = new ContextEngine({ maxTokens: 500, responseReserveFraction: 0.25 });
+    const engine = new ContextEngine({
+      maxTokens: 500,
+      responseReserveFraction: 0.25,
+    });
     // Budget = 500 - 125 = 375 tokens
     const items = [
-      { source: "user_request" as const, content: "a", priority: 10, estimatedTokens: 200 },
-      { source: "current_file" as const, content: "b", priority: 9, estimatedTokens: 200 },
+      {
+        source: "user_request" as const,
+        content: "a",
+        priority: 10,
+        estimatedTokens: 200,
+      },
+      {
+        source: "current_file" as const,
+        content: "b",
+        priority: 9,
+        estimatedTokens: 200,
+      },
     ];
 
     const result = engine.buildContext(items);
@@ -89,9 +134,24 @@ describe("ContextEngine", () => {
   it("buildContext deduplicates items with same content prefix", () => {
     const engine = new ContextEngine({ maxTokens: 10_000 });
     const items = [
-      { source: "user_request" as const, content: "same content here for testing dedup".repeat(10), priority: 10, estimatedTokens: 100 },
-      { source: "current_file" as const, content: "same content here for testing dedup".repeat(10), priority: 9, estimatedTokens: 100 },
-      { source: "memory" as const, content: "different content", priority: 8, estimatedTokens: 100 },
+      {
+        source: "user_request" as const,
+        content: "same content here for testing dedup".repeat(10),
+        priority: 10,
+        estimatedTokens: 100,
+      },
+      {
+        source: "current_file" as const,
+        content: "same content here for testing dedup".repeat(10),
+        priority: 9,
+        estimatedTokens: 100,
+      },
+      {
+        source: "memory" as const,
+        content: "different content",
+        priority: 8,
+        estimatedTokens: 100,
+      },
     ];
 
     const result = engine.buildContext(items);
@@ -102,21 +162,37 @@ describe("ContextEngine", () => {
   it("compress truncates low-priority items first", () => {
     const engine = new ContextEngine();
     const items = [
-      { source: "user_request" as const, content: "x".repeat(4000), priority: 10, estimatedTokens: 1000 },
-      { source: "memory" as const, content: "y".repeat(4000), priority: 1, estimatedTokens: 1000 },
+      {
+        source: "user_request" as const,
+        content: "x".repeat(4000),
+        priority: 10,
+        estimatedTokens: 1000,
+      },
+      {
+        source: "memory" as const,
+        content: "y".repeat(4000),
+        priority: 1,
+        estimatedTokens: 1000,
+      },
     ];
 
     const compressed = engine.compress(items, 1000);
-    const totalTokens = compressed.reduce((sum, item) => sum + item.estimatedTokens, 0);
+    const totalTokens = compressed.reduce(
+      (sum, item) => sum + item.estimatedTokens,
+      0,
+    );
     expect(totalTokens).toBeLessThanOrEqual(1200); // some slack for truncation overhead
   });
 
   it("wouldOverflow detects when context exceeds budget", () => {
-    const engine = new ContextEngine({ maxTokens: 1000, responseReserveFraction: 0.25 });
+    const engine = new ContextEngine({
+      maxTokens: 1000,
+      responseReserveFraction: 0.25,
+    });
     // reservedTokens = floor(1000 * 0.25) = 250
-    expect(engine.wouldOverflow(800)).toBe(true);   // 800 + 250 = 1050 > 1000 → overflow
-    expect(engine.wouldOverflow(700)).toBe(false);   // 700 + 250 = 950  < 1000 → ok
-    expect(engine.wouldOverflow(500)).toBe(false);   // 500 + 250 = 750  < 1000 → ok
+    expect(engine.wouldOverflow(800)).toBe(true); // 800 + 250 = 1050 > 1000 → overflow
+    expect(engine.wouldOverflow(700)).toBe(false); // 700 + 250 = 950  < 1000 → ok
+    expect(engine.wouldOverflow(500)).toBe(false); // 500 + 250 = 750  < 1000 → ok
   });
 
   it("estimateMessageTokens sums up message tokens", () => {

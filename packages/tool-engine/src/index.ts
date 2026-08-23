@@ -16,11 +16,15 @@ import * as path from "node:path";
 export function createRepositoryAnalysisTool(workspaceRoot: string): any {
   return createTool({
     name: "analyze_repository",
-    description: "Analyze the repository structure, detect technology stack, frameworks, architecture patterns.",
+    description:
+      "Analyze the repository structure, detect technology stack, frameworks, architecture patterns.",
     inputSchema: {
       type: "object",
       properties: {
-        depth: { type: "number", description: "Maximum directory depth to scan (default: 4)" },
+        depth: {
+          type: "number",
+          description: "Maximum directory depth to scan (default: 4)",
+        },
       },
       required: [],
     },
@@ -40,11 +44,22 @@ async function analyzeRepository(root: string, maxDepth: number) {
   const structure: string[] = [];
 
   const extensions: Record<string, string> = {
-    ".java": "Java", ".ts": "TypeScript", ".tsx": "TypeScript",
-    ".js": "JavaScript", ".jsx": "JavaScript", ".py": "Python",
-    ".go": "Go", ".rs": "Rust", ".sql": "SQL", ".json": "JSON",
-    ".yaml": "YAML", ".yml": "YAML", ".xml": "XML", ".md": "Markdown",
-    ".kt": "Kotlin", ".gradle": "Gradle",
+    ".java": "Java",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".py": "Python",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".sql": "SQL",
+    ".json": "JSON",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+    ".xml": "XML",
+    ".md": "Markdown",
+    ".kt": "Kotlin",
+    ".gradle": "Gradle",
   };
 
   async function scan(dir: string, currentDepth: number): Promise<void> {
@@ -52,7 +67,12 @@ async function analyzeRepository(root: string, maxDepth: number) {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "target") continue;
+        if (
+          entry.name.startsWith(".") ||
+          entry.name === "node_modules" ||
+          entry.name === "target"
+        )
+          continue;
         const fullPath = path.join(dir, entry.name);
         const relPath = path.relative(root, fullPath);
         if (entry.isDirectory()) {
@@ -64,16 +84,26 @@ async function analyzeRepository(root: string, maxDepth: number) {
           const lang = extensions[ext];
           if (lang) languages[lang] = (languages[lang] ?? 0) + 1;
 
-          if (entry.name === "pom.xml") { buildTools.push("Maven"); frameworks.push("Java/Spring Boot"); }
-          if (entry.name === "build.gradle" || entry.name === "build.gradle.kts") buildTools.push("Gradle");
+          if (entry.name === "pom.xml") {
+            buildTools.push("Maven");
+            frameworks.push("Java/Spring Boot");
+          }
+          if (
+            entry.name === "build.gradle" ||
+            entry.name === "build.gradle.kts"
+          )
+            buildTools.push("Gradle");
           if (entry.name === "package.json") buildTools.push("npm");
           if (entry.name === "Cargo.toml") buildTools.push("Cargo");
           if (entry.name === "Dockerfile") buildTools.push("Docker");
-          if (entry.name === "docker-compose.yml") buildTools.push("Docker Compose");
+          if (entry.name === "docker-compose.yml")
+            buildTools.push("Docker Compose");
           if (entry.name.includes("Test.java")) testFrameworks.push("JUnit");
         }
       }
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   await scan(root, 0);
@@ -97,7 +127,13 @@ export interface CodeReviewFinding {
   file: string;
   line: number | null;
   severity: "critical" | "high" | "medium" | "low";
-  category: "bug" | "security" | "performance" | "architecture" | "maintainability" | "testing";
+  category:
+    | "bug"
+    | "security"
+    | "performance"
+    | "architecture"
+    | "maintainability"
+    | "testing";
   explanation: string;
   suggestedFix?: string;
 }
@@ -105,7 +141,8 @@ export interface CodeReviewFinding {
 export function createCodeReviewTool(workspaceRoot: string): any {
   return createTool({
     name: "review_code",
-    description: "Review code for bugs, security issues, performance problems, and code quality.",
+    description:
+      "Review code for bugs, security issues, performance problems, and code quality.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,7 +152,11 @@ export function createCodeReviewTool(workspaceRoot: string): any {
       },
       required: [],
     },
-    execute: async (input: { filePath?: string; content?: string; language?: string }) => {
+    execute: async (input: {
+      filePath?: string;
+      content?: string;
+      language?: string;
+    }) => {
       let content = input.content;
       const filePath = input.filePath;
 
@@ -142,29 +183,43 @@ function reviewCode(content: string, filePath: string): CodeReviewFinding[] {
 
     if (/eval\s*\(/.test(line)) {
       findings.push({
-        file: filePath, line: lineNum, severity: "critical", category: "security",
-        explanation: "Use of eval() is a security risk — can lead to code injection.",
+        file: filePath,
+        line: lineNum,
+        severity: "critical",
+        category: "security",
+        explanation:
+          "Use of eval() is a security risk — can lead to code injection.",
         suggestedFix: "Replace eval() with a safe alternative.",
       });
     }
 
     if (/console\.(log|debug|info)\s*\(/.test(line)) {
       findings.push({
-        file: filePath, line: lineNum, severity: "low", category: "maintainability",
-        explanation: "Console output in production code. Use a proper logging framework.",
+        file: filePath,
+        line: lineNum,
+        severity: "low",
+        category: "maintainability",
+        explanation:
+          "Console output in production code. Use a proper logging framework.",
       });
     }
 
     if (/TODO|FIXME|HACK|XXX/.test(line)) {
       findings.push({
-        file: filePath, line: lineNum, severity: "low", category: "maintainability",
+        file: filePath,
+        line: lineNum,
+        severity: "low",
+        category: "maintainability",
         explanation: `Unresolved marker: ${line.trim()}`,
       });
     }
 
     if (line.length > 200) {
       findings.push({
-        file: filePath, line: lineNum, severity: "low", category: "maintainability",
+        file: filePath,
+        line: lineNum,
+        severity: "low",
+        category: "maintainability",
         explanation: `Line exceeds 200 characters (${line.length} chars).`,
       });
     }
@@ -180,11 +235,16 @@ function reviewCode(content: string, filePath: string): CodeReviewFinding[] {
 export function createTestIntelligenceTool(workspaceRoot: string): any {
   return createTool({
     name: "test_intelligence",
-    description: "Detect test framework, find affected tests for changed files.",
+    description:
+      "Detect test framework, find affected tests for changed files.",
     inputSchema: {
       type: "object",
       properties: {
-        changedFiles: { type: "array", items: { type: "string" }, description: "Recently changed files" },
+        changedFiles: {
+          type: "array",
+          items: { type: "string" },
+          description: "Recently changed files",
+        },
       },
       required: [],
     },
@@ -202,7 +262,9 @@ async function detectTestFramework(root: string): Promise<string> {
     await fs.access(pomPath);
     const pomContent = await fs.readFile(pomPath, "utf-8");
     if (pomContent.includes("junit")) return "JUnit 5";
-  } catch { /* not Java */ }
+  } catch {
+    /* not Java */
+  }
 
   try {
     const pkgPath = path.join(root, "package.json");
@@ -210,7 +272,9 @@ async function detectTestFramework(root: string): Promise<string> {
     const pkgContent = await fs.readFile(pkgPath, "utf-8");
     if (pkgContent.includes("vitest")) return "Vitest";
     if (pkgContent.includes("jest")) return "Jest";
-  } catch { /* not Node */ }
+  } catch {
+    /* not Node */
+  }
 
   return "Unknown";
 }
@@ -218,11 +282,16 @@ async function detectTestFramework(root: string): Promise<string> {
 function findAffectedTests(changedFiles: string[]): string[] {
   const testFiles: string[] = [];
   for (const file of changedFiles) {
-    if (file.includes("Test.") || file.includes("test.") || file.includes("spec.")) {
+    if (
+      file.includes("Test.") ||
+      file.includes("test.") ||
+      file.includes("spec.")
+    ) {
       testFiles.push(file);
       continue;
     }
-    if (file.endsWith(".java")) testFiles.push(file.replace(".java", "Test.java"));
+    if (file.endsWith(".java"))
+      testFiles.push(file.replace(".java", "Test.java"));
     if (file.endsWith(".ts") || file.endsWith(".js")) {
       const base = file.replace(/\.(ts|js)$/, "");
       testFiles.push(`${base}.test.ts`, `${base}.spec.ts`);

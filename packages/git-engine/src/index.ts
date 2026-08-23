@@ -5,7 +5,11 @@
  * checkpoint management, and commit message generation.
  */
 
-import simpleGit, { type SimpleGit, type StatusResult, type DiffResult } from "simple-git";
+import simpleGit, {
+  type SimpleGit,
+  type StatusResult,
+  type DiffResult,
+} from "simple-git";
 import type { CheckpointInfo, FileChange } from "@codepilot/shared";
 
 // ============================================================================
@@ -120,7 +124,9 @@ export class GitEngine {
   /**
    * Get recent commit log.
    */
-  async getLog(count = 10): Promise<
+  async getLog(
+    count = 10,
+  ): Promise<
     Array<{ hash: string; date: string; message: string; author: string }>
   > {
     const log = await this.git.log({ maxCount: count });
@@ -144,7 +150,9 @@ export class GitEngine {
     // Stage all changes
     if (!status.isClean) {
       await this.git.add(".");
-      const result = await this.git.commit(`[CodePilot] Checkpoint: ${description}`);
+      const result = await this.git.commit(
+        `[CodePilot] Checkpoint: ${description}`,
+      );
       commitHash = result.commit;
     }
 
@@ -200,31 +208,31 @@ export class GitEngine {
         "HEAD",
       ]);
 
-    const added: string[] = [];
-    const modified: string[] = [];
-    const removed: string[] = [];
+      const added: string[] = [];
+      const modified: string[] = [];
+      const removed: string[] = [];
 
-    const lines = diff.split("\n").filter((l) => l.trim());
-    for (const line of lines) {
-      const [status, ...parts] = line.split("\t");
-      const filePath = parts.join("\t");
-      if (!filePath) continue;
+      const lines = diff.split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        const [status, ...parts] = line.split("\t");
+        const filePath = parts.join("\t");
+        if (!filePath) continue;
 
-      switch (status) {
-        case "A":
-          added.push(filePath);
-          break;
-        case "M":
-        case "R":
-          modified.push(filePath);
-          break;
-        case "D":
-          removed.push(filePath);
-          break;
+        switch (status) {
+          case "A":
+            added.push(filePath);
+            break;
+          case "M":
+          case "R":
+            modified.push(filePath);
+            break;
+          case "D":
+            removed.push(filePath);
+            break;
+        }
       }
-    }
 
-    return { added, modified, removed };
+      return { added, modified, removed };
     } catch {
       return null;
     }
@@ -248,7 +256,9 @@ export class GitEngine {
     const fileCount = status.staged.length;
 
     if (fileCount <= 3) {
-      const fileNames = status.staged.map((f) => f.path.split("/").pop() ?? f.path);
+      const fileNames = status.staged.map(
+        (f) => f.path.split("/").pop() ?? f.path,
+      );
       parts.push(`Update ${fileNames.join(", ")}`);
     } else {
       parts.push(`Update ${fileCount} files`);

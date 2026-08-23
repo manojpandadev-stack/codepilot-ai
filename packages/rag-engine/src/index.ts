@@ -35,7 +35,10 @@ export class RAGEngine {
     this.chunks.push(chunk);
   }
 
-  async search(query: string, options?: { limit?: number; language?: string }): Promise<SearchResult[]> {
+  async search(
+    query: string,
+    options?: { limit?: number; language?: string },
+  ): Promise<SearchResult[]> {
     const limit = options?.limit ?? 10;
     const results: SearchResult[] = [];
 
@@ -51,7 +54,12 @@ export class RAGEngine {
     return results.slice(0, limit);
   }
 
-  async indexFile(filePath: string, content: string, language: string, repositoryId: string): Promise<number> {
+  async indexFile(
+    filePath: string,
+    content: string,
+    language: string,
+    repositoryId: string,
+  ): Promise<number> {
     const lines = content.split("\n");
     const chunkSize = 50;
     let count = 0;
@@ -60,17 +68,25 @@ export class RAGEngine {
       const chunkContent = lines.slice(i, end).join("\n");
       await this.indexDocument({
         id: `${repositoryId}:${filePath}:${i}`,
-        repositoryId, filePath, language,
-        startLine: i + 1, endLine: end,
-        content: chunkContent, metadata: {},
+        repositoryId,
+        filePath,
+        language,
+        startLine: i + 1,
+        endLine: end,
+        content: chunkContent,
+        metadata: {},
       });
       count++;
     }
     return count;
   }
 
-  clear(): void { this.chunks = []; }
-  getChunkCount(): number { return this.chunks.length; }
+  clear(): void {
+    this.chunks = [];
+  }
+  getChunkCount(): number {
+    return this.chunks.length;
+  }
 }
 
 function computeRelevance(query: string, content: string): number {
@@ -114,7 +130,11 @@ export class ProductionRAGService {
     this.mode = config.mode;
     this.memoryEngine = new RAGEngine();
 
-    if (config.mode === "production" && config.pgConfig && config.embeddingConfig) {
+    if (
+      config.mode === "production" &&
+      config.pgConfig &&
+      config.embeddingConfig
+    ) {
       this.indexer = new RepositoryIndexer({
         pgConfig: config.pgConfig,
         embeddingConfig: config.embeddingConfig,
@@ -134,7 +154,7 @@ export class ProductionRAGService {
   async indexRepository(
     repoPath: string,
     projectId: string,
-    onProgress?: (message: string) => void
+    onProgress?: (message: string) => void,
   ): Promise<IndexResult> {
     if (this.mode === "production" && this.indexer) {
       return this.indexer.indexRepository(repoPath, projectId, onProgress);
@@ -147,40 +167,81 @@ export class ProductionRAGService {
     let indexed = 0;
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
-        if ([".git", "node_modules", "target", "dist"].includes(entry)) continue;
+        if ([".git", "node_modules", "target", "dist"].includes(entry))
+          continue;
         const full = join(dir, entry);
         const st = statSync(full);
-        if (st.isDirectory()) { walk(full); continue; }
+        if (st.isDirectory()) {
+          walk(full);
+          continue;
+        }
         const ext = extname(entry).toLowerCase();
-        if ([".java", ".ts", ".js", ".py", ".sql", ".md", ".json", ".yaml"].includes(ext)) {
+        if (
+          [
+            ".java",
+            ".ts",
+            ".js",
+            ".py",
+            ".sql",
+            ".md",
+            ".json",
+            ".yaml",
+          ].includes(ext)
+        ) {
           const content = readFileSync(full, "utf-8");
-          const langMap: Record<string, string> = { ".java": "java", ".ts": "typescript", ".js": "javascript", ".py": "python" };
-          this.memoryEngine.indexFile(relative(repoPath, full).replace(/\\/g, "/"), content, langMap[ext] ?? "text", projectId);
+          const langMap: Record<string, string> = {
+            ".java": "java",
+            ".ts": "typescript",
+            ".js": "javascript",
+            ".py": "python",
+          };
+          this.memoryEngine.indexFile(
+            relative(repoPath, full).replace(/\\/g, "/"),
+            content,
+            langMap[ext] ?? "text",
+            projectId,
+          );
           indexed++;
         }
       }
     };
     walk(repoPath);
-    return { filesScanned: indexed, filesIndexed: indexed, filesSkipped: 0, chunksCreated: 0, embeddingsCreated: 0, errors: [], durationMs: Date.now() - start };
+    return {
+      filesScanned: indexed,
+      filesIndexed: indexed,
+      filesSkipped: 0,
+      chunksCreated: 0,
+      embeddingsCreated: 0,
+      errors: [],
+      durationMs: Date.now() - start,
+    };
   }
 
   /** Search for relevant code */
   async search(
     query: string,
     projectId: string,
-    options: { limit?: number; language?: string } = {}
+    options: { limit?: number; language?: string } = {},
   ): Promise<SearchResult[]> {
     if (this.mode === "production" && this.indexer) {
       const results = await this.indexer.search(query, projectId, options);
-      return results.map((r: StoredChunk & { score: number; matchType: string }) => ({
-        chunk: {
-          id: r.id, repositoryId: r.projectId, filePath: r.filePath,
-          language: r.language, startLine: r.startLine, endLine: r.endLine,
-          content: r.content, metadata: r.metadata,
-        },
-        score: r.score,
-        matchType: (r.matchType as "semantic" | "keyword" | "hybrid") ?? "keyword",
-      }));
+      return results.map(
+        (r: StoredChunk & { score: number; matchType: string }) => ({
+          chunk: {
+            id: r.id,
+            repositoryId: r.projectId,
+            filePath: r.filePath,
+            language: r.language,
+            startLine: r.startLine,
+            endLine: r.endLine,
+            content: r.content,
+            metadata: r.metadata,
+          },
+          score: r.score,
+          matchType:
+            (r.matchType as "semantic" | "keyword" | "hybrid") ?? "keyword",
+        }),
+      );
     }
     return this.memoryEngine.search(query, options);
   }
@@ -204,7 +265,11 @@ export class ProductionRAGService {
 // Re-export production modules
 export { PgVectorStore } from "./pgvector-store.js";
 export type { PgVectorConfig, StoredChunk } from "./pgvector-store.js";
-export { generateEmbedding, generateBatchEmbeddings, checkEmbeddingService } from "./embeddings.js";
+export {
+  generateEmbedding,
+  generateBatchEmbeddings,
+  checkEmbeddingService,
+} from "./embeddings.js";
 export type { EmbeddingConfig, EmbeddingResult } from "./embeddings.js";
 export { RepositoryIndexer } from "./repository-indexer.js";
 export type { IndexerConfig } from "./repository-indexer.js";

@@ -80,13 +80,7 @@ export interface TaskDAGNode {
  * Tool categories for governance.
  */
 export type ToolCategory =
-  | "read"
-  | "write"
-  | "execute"
-  | "network"
-  | "git"
-  | "mcp"
-  | "system";
+  "read" | "write" | "execute" | "network" | "git" | "mcp" | "system";
 
 /**
  * Tool permission levels.
@@ -408,7 +402,9 @@ export const ALLOWED_SETTINGS_KEYS: readonly string[] = [
  * Also accepts the fully-qualified `codepilot.<key>` form.
  */
 export function isAllowedSettingKey(key: string): boolean {
-  const normalized = key.startsWith("codepilot.") ? key.slice("codepilot.".length) : key;
+  const normalized = key.startsWith("codepilot.")
+    ? key.slice("codepilot.".length)
+    : key;
   return ALLOWED_SETTINGS_KEYS.includes(normalized);
 }
 
@@ -488,11 +484,21 @@ export const DEFAULT_AUTO_APPROVAL: AutoApprovalSettings = {
 };
 
 /** Convert AutoApprovalSettings to tool permission map for PolicyEngine. */
-export function autoApprovalToToolPermissions(settings: AutoApprovalSettings): Record<string, ToolPermission> {
+export function autoApprovalToToolPermissions(
+  settings: AutoApprovalSettings,
+): Record<string, ToolPermission> {
   const result: Record<string, ToolPermission> = {};
 
   // Read tools
-  const readTools = ["read_files", "search", "list_directory", "git_status", "git_diff", "git_log", "git_show"];
+  const readTools = [
+    "read_files",
+    "search",
+    "list_directory",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+  ];
   for (const tool of readTools) {
     result[tool] = settings.readFiles ? "auto" : "approval";
   }
@@ -660,7 +666,8 @@ export interface UrlContext {
   url: string;
 }
 
-export type DiagnosticSeverityLabel = "Error" | "Warning" | "Information" | "Hint";
+export type DiagnosticSeverityLabel =
+  "Error" | "Warning" | "Information" | "Hint";
 
 /** One normalized VS Code diagnostic (plain serializable shape). */
 export interface DiagnosticContextItem {
@@ -738,12 +745,44 @@ export type ContextWebviewMessageType =
 // ============================================================================
 
 const BINARY_FILE_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svgz",
-  ".pdf", ".zip", ".gz", ".tar", ".rar", ".7z",
-  ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a", ".jar", ".class",
-  ".woff", ".woff2", ".ttf", ".otf", ".eot",
-  ".mp3", ".mp4", ".avi", ".mov", ".wav", ".flac",
-  ".db", ".sqlite", ".sqlite3", ".pyc",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".ico",
+  ".webp",
+  ".svgz",
+  ".pdf",
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".bin",
+  ".o",
+  ".a",
+  ".jar",
+  ".class",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  ".mp3",
+  ".mp4",
+  ".avi",
+  ".mov",
+  ".wav",
+  ".flac",
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".pyc",
 ]);
 
 /** True when a filename looks like a binary asset that must not be inlined. */
@@ -758,10 +797,14 @@ export function isLikelyBinaryFile(fileName: string): boolean {
  * Returns null when the path is outside the workspace root (rejected —
  * workspace boundaries are enforced, not silently escaped).
  */
-export function toRelativeWorkspacePath(rootFsPath: string, fsPath: string): string | null {
+export function toRelativeWorkspacePath(
+  rootFsPath: string,
+  fsPath: string,
+): string | null {
   const normRoot = rootFsPath.replace(/\\/g, "/").replace(/\/+$/, "");
   const normPath = fsPath.replace(/\\/g, "/");
-  if (!normPath.startsWith(normRoot + "/") && normPath !== normRoot) return null;
+  if (!normPath.startsWith(normRoot + "/") && normPath !== normRoot)
+    return null;
   return normPath.slice(normRoot.length + 1) || "";
 }
 
@@ -771,11 +814,16 @@ export function toRelativeWorkspacePath(rootFsPath: string, fsPath: string): str
  */
 export function mapVsCodeSeverity(severity: number): DiagnosticSeverityLabel {
   switch (severity) {
-    case 0: return "Error";
-    case 1: return "Warning";
-    case 2: return "Information";
-    case 8: return "Hint";
-    default: return "Information";
+    case 0:
+      return "Error";
+    case 1:
+      return "Warning";
+    case 2:
+      return "Information";
+    case 8:
+      return "Hint";
+    default:
+      return "Information";
   }
 }
 
@@ -791,7 +839,9 @@ export interface RawDiagnosticInput {
 }
 
 /** Normalize raw diagnostics into structured context items (dedup included). */
-export function toDiagnosticItems(raw: RawDiagnosticInput[]): DiagnosticContextItem[] {
+export function toDiagnosticItems(
+  raw: RawDiagnosticInput[],
+): DiagnosticContextItem[] {
   const seen = new Set<string>();
   const items: DiagnosticContextItem[] = [];
   for (const d of raw) {
@@ -814,10 +864,14 @@ export function toDiagnosticItems(raw: RawDiagnosticInput[]): DiagnosticContextI
 
 /** One human-readable diagnostic line, e.g. `src/a.ts:12:5 [ERROR] Cannot find name 'x' (ts)`. */
 export function formatDiagnosticLine(item: DiagnosticContextItem): string {
-  const sev = item.severity === "Error" ? "ERROR"
-    : item.severity === "Warning" ? "WARN"
-    : item.severity === "Hint" ? "HINT"
-    : "INFO";
+  const sev =
+    item.severity === "Error"
+      ? "ERROR"
+      : item.severity === "Warning"
+        ? "WARN"
+        : item.severity === "Hint"
+          ? "HINT"
+          : "INFO";
   const src = item.source ? ` (${item.source})` : "";
   return `${item.file}:${item.line}:${item.column} [${sev}] ${item.message}${src}`;
 }
@@ -826,19 +880,31 @@ export function formatDiagnosticLine(item: DiagnosticContextItem): string {
  * Format a diagnostics snapshot as an agent-ready context block.
  * Zero diagnostics produce an explicit clean-state block (never an error).
  */
-export function formatDiagnosticsForAgent(diagnostics: DiagnosticsContextPayload): string {
+export function formatDiagnosticsForAgent(
+  diagnostics: DiagnosticsContextPayload,
+): string {
   const scope = diagnostics.scope === "workspace" ? "workspace" : "active file";
   if (diagnostics.items.length === 0) {
     return `VS Code Problems (${scope}): no problems detected. The workspace currently has zero errors, warnings, information messages, or hints.`;
   }
   // Errors first, then warnings; cap to keep prompts bounded.
-  const order: Record<DiagnosticSeverityLabel, number> = { Error: 0, Warning: 1, Information: 2, Hint: 3 };
-  const sorted = [...diagnostics.items].sort((a, b) => order[a.severity] - order[b.severity]);
+  const order: Record<DiagnosticSeverityLabel, number> = {
+    Error: 0,
+    Warning: 1,
+    Information: 2,
+    Hint: 3,
+  };
+  const sorted = [...diagnostics.items].sort(
+    (a, b) => order[a.severity] - order[b.severity],
+  );
   const MAX_DIAGNOSTICS = 200;
   const capped = sorted.slice(0, MAX_DIAGNOSTICS);
   const header = `VS Code Problems (${scope}) — ${diagnostics.items.length} total:`;
   const lines = capped.map(formatDiagnosticLine);
-  const truncNote = sorted.length > MAX_DIAGNOSTICS ? `\n... and ${sorted.length - MAX_DIAGNOSTICS} more (truncated)` : "";
+  const truncNote =
+    sorted.length > MAX_DIAGNOSTICS
+      ? `\n... and ${sorted.length - MAX_DIAGNOSTICS} more (truncated)`
+      : "";
   return `${header}\n${lines.join("\n")}${truncNote}`;
 }
 
@@ -849,32 +915,52 @@ export function formatDiagnosticsForAgent(diagnostics: DiagnosticsContextPayload
 /** Human-readable label for a HealingEventType / healing phase id. */
 export function healingPhaseLabel(phase: string): string {
   switch (phase) {
-    case "validation_started": return "Running validation";
-    case "validation_passed": return "Validation passed";
-    case "validation_failed": return "Validation failed";
-    case "diagnosis_started": return "Diagnosis started";
-    case "diagnosis_completed": return "Diagnosis completed";
-    case "repair_started": return "Repairing";
-    case "repair_completed": return "Repair completed";
-    case "repair_failed": return "Repair failed";
-    case "healing_succeeded": return "Healed";
-    case "healing_exhausted": return "Attempts exhausted";
-    default: return phase;
+    case "validation_started":
+      return "Running validation";
+    case "validation_passed":
+      return "Validation passed";
+    case "validation_failed":
+      return "Validation failed";
+    case "diagnosis_started":
+      return "Diagnosis started";
+    case "diagnosis_completed":
+      return "Diagnosis completed";
+    case "repair_started":
+      return "Repairing";
+    case "repair_completed":
+      return "Repair completed";
+    case "repair_failed":
+      return "Repair failed";
+    case "healing_succeeded":
+      return "Healed";
+    case "healing_exhausted":
+      return "Attempts exhausted";
+    default:
+      return phase;
   }
 }
 
 /** The concrete next action shown under a healing phase. */
 export function healingNextActionLabel(phase: string): string {
   switch (phase) {
-    case "validation_started": return "Validating changes…";
-    case "validation_passed": return "All checks green.";
-    case "validation_failed": return "Analyzing failure…";
-    case "diagnosis_started": return "Analyzing failure…";
-    case "diagnosis_completed": return "Preparing repair…";
-    case "repair_started": return "Applying fix…";
-    case "repair_completed": return "Re-running validation…";
-    case "repair_failed": return "Analyzing repair failure…";
-    default: return "";
+    case "validation_started":
+      return "Validating changes…";
+    case "validation_passed":
+      return "All checks green.";
+    case "validation_failed":
+      return "Analyzing failure…";
+    case "diagnosis_started":
+      return "Analyzing failure…";
+    case "diagnosis_completed":
+      return "Preparing repair…";
+    case "repair_started":
+      return "Applying fix…";
+    case "repair_completed":
+      return "Re-running validation…";
+    case "repair_failed":
+      return "Analyzing repair failure…";
+    default:
+      return "";
   }
 }
 
@@ -890,6 +976,8 @@ export function describeValidationFailure(input: {
   const errText = (input.stderr ?? "").trim();
   const outText = (input.stdout ?? "").trim();
   const detail = errText || outText;
-  const excerpt = detail ? `\nFailure:\n${detail.split("\n").slice(0, 10).join("\n").slice(0, 1000)}` : "";
+  const excerpt = detail
+    ? `\nFailure:\n${detail.split("\n").slice(0, 10).join("\n").slice(0, 1000)}`
+    : "";
   return `Validation failed${code}.${cmd}${excerpt}`;
 }

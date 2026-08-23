@@ -79,7 +79,7 @@ export class ContextEngine {
   constructor(options?: ContextEngineOptions) {
     this.maxTokens = options?.maxTokens ?? MAX_CONTEXT_TOKENS_DEFAULT;
     this.reservedTokens = Math.floor(
-      this.maxTokens * (options?.responseReserveFraction ?? 0.25)
+      this.maxTokens * (options?.responseReserveFraction ?? 0.25),
     );
     this.minPriority = options?.minPriority ?? 0;
   }
@@ -152,7 +152,10 @@ export class ContextEngine {
    * Compress context items by summarizing long content.
    */
   compress(items: ContextItem[], targetTokens: number): ContextItem[] {
-    let currentTokens = items.reduce((sum, item) => sum + item.estimatedTokens, 0);
+    let currentTokens = items.reduce(
+      (sum, item) => sum + item.estimatedTokens,
+      0,
+    );
 
     if (currentTokens <= targetTokens) {
       return items;
@@ -166,7 +169,10 @@ export class ContextEngine {
       if (currentTokens <= targetTokens) break;
 
       const excess = currentTokens - targetTokens;
-      const truncatedContent = this.truncateContent(item.content, item.estimatedTokens - excess);
+      const truncatedContent = this.truncateContent(
+        item.content,
+        item.estimatedTokens - excess,
+      );
       const truncatedItem = {
         ...item,
         content: truncatedContent,
@@ -187,7 +193,7 @@ export class ContextEngine {
    * Estimate total tokens for a set of messages.
    */
   estimateMessageTokens(
-    messages: Array<{ role: string; content: string }>
+    messages: Array<{ role: string; content: string }>,
   ): number {
     let total = 0;
     for (const msg of messages) {
@@ -254,12 +260,30 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 const IGNORED_DIRS = new Set([
-  ".git", "node_modules", "target", "build", "dist", "__pycache__",
-  ".gradle", ".idea", ".vscode", "vendor", ".next", "coverage",
-  ".angular", ".cache", ".parcel-cache", "out",
+  ".git",
+  "node_modules",
+  "target",
+  "build",
+  "dist",
+  "__pycache__",
+  ".gradle",
+  ".idea",
+  ".vscode",
+  "vendor",
+  ".next",
+  "coverage",
+  ".angular",
+  ".cache",
+  ".parcel-cache",
+  "out",
 ]);
 
-const IGNORED_PATTERNS = [/\.env(\.\w+)?$/, /\.DS_Store$/, /\.pyc$/, /Thumbs\.db$/];
+const IGNORED_PATTERNS = [
+  /\.env(\.\w+)?$/,
+  /\.DS_Store$/,
+  /\.pyc$/,
+  /Thumbs\.db$/,
+];
 
 /**
  * Resolve a @folder reference to a list of relevant files.
@@ -268,7 +292,11 @@ const IGNORED_PATTERNS = [/\.env(\.\w+)?$/, /\.DS_Store$/, /\.pyc$/, /Thumbs\.db
 export async function resolveFolder(
   folderPath: string,
   workspaceRoot: string,
-  options?: { maxFiles?: number; maxTokens?: number; includeExtensions?: string[] },
+  options?: {
+    maxFiles?: number;
+    maxTokens?: number;
+    includeExtensions?: string[];
+  },
 ): Promise<ContextItem[]> {
   const maxFiles = options?.maxFiles ?? 50;
   const maxTokens = options?.maxTokens ?? 20_000;
@@ -277,7 +305,14 @@ export async function resolveFolder(
 
   // Ensure within workspace
   if (!absFolder.startsWith(workspaceRoot)) {
-    return [{ source: "user_request", content: `Error: ${folderPath} is outside workspace`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error: ${folderPath} is outside workspace`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 
   const files: Array<{ relPath: string; absPath: string; size: number }> = [];
@@ -305,7 +340,20 @@ export async function resolveFolder(
         const ext = path.extname(entry.name).toLowerCase();
         if (includeExts && !includeExts.includes(ext)) continue;
         // Skip binary-like extensions
-        if ([".png", ".jpg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".map"].includes(ext)) continue;
+        if (
+          [
+            ".png",
+            ".jpg",
+            ".gif",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".map",
+          ].includes(ext)
+        )
+          continue;
 
         try {
           const stat = await fs.stat(fullPath);
@@ -338,7 +386,11 @@ export async function resolveFolder(
     content: `Folder: ${relFolderPath}\nFiles (${files.length}):\n${listing}`,
     priority: 80,
     estimatedTokens: listingTokens,
-    metadata: { type: "folder_listing", path: relFolderPath, fileCount: files.length },
+    metadata: {
+      type: "folder_listing",
+      path: relFolderPath,
+      fileCount: files.length,
+    },
   });
   usedTokens += listingTokens;
 
@@ -347,7 +399,10 @@ export async function resolveFolder(
     if (usedTokens >= maxTokens) break;
     try {
       const content = await fs.readFile(file.absPath, "utf-8");
-      const truncated = content.length > 4000 ? content.slice(0, 4000) + "\n... [truncated]" : content;
+      const truncated =
+        content.length > 4000
+          ? content.slice(0, 4000) + "\n... [truncated]"
+          : content;
       const tokens = estimateTokens(truncated);
       if (usedTokens + tokens > maxTokens) break;
       items.push({
@@ -372,11 +427,17 @@ export async function resolveFolder(
 
 /** SSRF protection: block private IPs and localhost */
 function isPrivateOrReserved(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
+  if (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1"
+  )
+    return true;
   if (hostname.startsWith("192.168.")) return true;
   if (hostname.startsWith("10.")) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
-  if (hostname.endsWith(".local") || hostname.endsWith(".internal")) return true;
+  if (hostname.endsWith(".local") || hostname.endsWith(".internal"))
+    return true;
   if (hostname === "0.0.0.0") return true;
   return false;
 }
@@ -406,17 +467,38 @@ export async function fetchUrlContent(
   try {
     parsed = new URL(url);
   } catch {
-    return [{ source: "user_request", content: `Error: Invalid URL: ${url}`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error: Invalid URL: ${url}`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 
   // Protocol check
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return [{ source: "user_request", content: `Error: Only HTTP/HTTPS URLs are allowed`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error: Only HTTP/HTTPS URLs are allowed`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 
   // SSRF protection
   if (isPrivateOrReserved(parsed.hostname)) {
-    return [{ source: "user_request", content: `Error: Access to private/internal URLs is blocked for security`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error: Access to private/internal URLs is blocked for security`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 
   try {
@@ -431,30 +513,66 @@ export async function fetchUrlContent(
     clearTimeout(timer);
 
     if (!response.ok) {
-      return [{ source: "user_request", content: `Error: HTTP ${response.status} ${response.statusText}`, priority: 0, estimatedTokens: 10 }];
+      return [
+        {
+          source: "user_request",
+          content: `Error: HTTP ${response.status} ${response.statusText}`,
+          priority: 0,
+          estimatedTokens: 10,
+        },
+      ];
     }
 
     const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.includes("text/html") && !contentType.includes("text/plain") && !contentType.includes("application/json") && !contentType.includes("text/markdown")) {
-      return [{ source: "user_request", content: `Error: Unsupported content type: ${contentType}`, priority: 0, estimatedTokens: 10 }];
+    if (
+      !contentType.includes("text/html") &&
+      !contentType.includes("text/plain") &&
+      !contentType.includes("application/json") &&
+      !contentType.includes("text/markdown")
+    ) {
+      return [
+        {
+          source: "user_request",
+          content: `Error: Unsupported content type: ${contentType}`,
+          priority: 0,
+          estimatedTokens: 10,
+        },
+      ];
     }
 
     const rawText = await response.text();
     const isHtml = contentType.includes("text/html");
     const text = isHtml ? htmlToText(rawText) : rawText;
-    const truncated = text.length > maxChars ? text.slice(0, maxChars) + "\n... [truncated]" : text;
+    const truncated =
+      text.length > maxChars
+        ? text.slice(0, maxChars) + "\n... [truncated]"
+        : text;
     const tokens = estimateTokens(truncated);
 
-    return [{
-      source: "user_request",
-      content: `URL: ${url}\n\n${truncated}`,
-      priority: 75,
-      estimatedTokens: tokens,
-      metadata: { type: "url_content", url, contentType, charCount: truncated.length },
-    }];
+    return [
+      {
+        source: "user_request",
+        content: `URL: ${url}\n\n${truncated}`,
+        priority: 75,
+        estimatedTokens: tokens,
+        metadata: {
+          type: "url_content",
+          url,
+          contentType,
+          charCount: truncated.length,
+        },
+      },
+    ];
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return [{ source: "user_request", content: `Error fetching ${url}: ${msg}`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error fetching ${url}: ${msg}`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 }
 
@@ -474,24 +592,43 @@ export async function resolveFile(
   const absFile = path.resolve(workspaceRoot, filePath);
 
   if (!absFile.startsWith(workspaceRoot)) {
-    return [{ source: "user_request", content: `Error: ${filePath} is outside workspace`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error: ${filePath} is outside workspace`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 
   try {
     const content = await fs.readFile(absFile, "utf-8");
-    const truncated = content.length > maxChars ? content.slice(0, maxChars) + "\n... [truncated]" : content;
+    const truncated =
+      content.length > maxChars
+        ? content.slice(0, maxChars) + "\n... [truncated]"
+        : content;
     const tokens = estimateTokens(truncated);
     const relPath = path.relative(workspaceRoot, absFile);
 
-    return [{
-      source: "current_file",
-      content: `--- ${relPath} ---\n${truncated}`,
-      priority: 85,
-      estimatedTokens: tokens,
-      metadata: { type: "file_content", path: relPath, size: content.length },
-    }];
+    return [
+      {
+        source: "current_file",
+        content: `--- ${relPath} ---\n${truncated}`,
+        priority: 85,
+        estimatedTokens: tokens,
+        metadata: { type: "file_content", path: relPath, size: content.length },
+      },
+    ];
   } catch {
-    return [{ source: "user_request", content: `Error: File not found: ${filePath}`, priority: 0, estimatedTokens: 10 }];
+    return [
+      {
+        source: "user_request",
+        content: `Error: File not found: ${filePath}`,
+        priority: 0,
+        estimatedTokens: 10,
+      },
+    ];
   }
 }
 
@@ -533,7 +670,10 @@ export async function loadProjectRules(
     }
 
     for (const entry of entries) {
-      if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".txt"))) {
+      if (
+        entry.isFile() &&
+        (entry.name.endsWith(".md") || entry.name.endsWith(".txt"))
+      ) {
         const filePath = path.join(dir, entry.name);
         try {
           const content = await fs.readFile(filePath, "utf-8");
@@ -556,7 +696,10 @@ export async function loadProjectRules(
           // skip unreadable
         }
       } else if (entry.isDirectory()) {
-        await scanDir(path.join(dir, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name);
+        await scanDir(
+          path.join(dir, entry.name),
+          prefix ? `${prefix}/${entry.name}` : entry.name,
+        );
       }
     }
   }
@@ -582,7 +725,10 @@ export async function loadGlobalRules(): Promise<ProjectRule[]> {
   try {
     const entries = await fs.readdir(rulesDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".txt"))) {
+      if (
+        entry.isFile() &&
+        (entry.name.endsWith(".md") || entry.name.endsWith(".txt"))
+      ) {
         const filePath = path.join(rulesDir, entry.name);
         try {
           const content = await fs.readFile(filePath, "utf-8");
@@ -610,7 +756,9 @@ export async function loadGlobalRules(): Promise<ProjectRule[]> {
 /**
  * Load all rules (global + project), with project rules overriding global.
  */
-export async function loadAllRules(workspaceRoot: string): Promise<ProjectRule[]> {
+export async function loadAllRules(
+  workspaceRoot: string,
+): Promise<ProjectRule[]> {
   const globalRules = await loadGlobalRules();
   const projectRules = await loadProjectRules(workspaceRoot);
 
@@ -637,6 +785,11 @@ export function rulesToContextItems(rules: ProjectRule[]): ContextItem[] {
       content: `Rule [${rule.source}] ${rule.filePath}:\n${rule.content}`,
       priority: 55,
       estimatedTokens: estimateTokens(rule.content),
-      metadata: { type: "project_rule", ruleId: rule.id, pattern: rule.pattern, source: rule.source },
+      metadata: {
+        type: "project_rule",
+        ruleId: rule.id,
+        pattern: rule.pattern,
+        source: rule.source,
+      },
     }));
 }

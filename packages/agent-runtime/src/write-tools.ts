@@ -33,7 +33,7 @@ export interface ResolvedPathResult {
 
 export function resolveWorkspacePath(
   filePath: string,
-  cwd: string
+  cwd: string,
 ): ResolvedPathResult | { ok: false; error: string } {
   if (typeof filePath !== "string" || filePath.length === 0) {
     return { ok: false, error: "Empty file path" };
@@ -48,7 +48,10 @@ export function resolveWorkspacePath(
     trimmed.startsWith("\\\\") ||
     trimmed.startsWith("/")
   ) {
-    return { ok: false, error: `Absolute path outside workspace is not allowed: ${trimmed}` };
+    return {
+      ok: false,
+      error: `Absolute path outside workspace is not allowed: ${trimmed}`,
+    };
   }
   // Normalize separators and reject traversal.
   const normalized = trimmed.replace(/\\/g, "/");
@@ -57,7 +60,10 @@ export function resolveWorkspacePath(
     return { ok: false, error: `Path traversal is not allowed: ${trimmed}` };
   }
   if (segments.some((s) => s === ".")) {
-    return { ok: false, error: `Relative path segments are not allowed: ${trimmed}` };
+    return {
+      ok: false,
+      error: `Relative path segments are not allowed: ${trimmed}`,
+    };
   }
   const relativePath = segments.join("/");
   const absolutePath = `${cwd.replace(/[\\/]+$/, "")}/${relativePath}`;
@@ -69,7 +75,11 @@ export function resolveWorkspacePath(
 // ============================================================================
 
 export type EditorOp =
-  | { op: "str_replace" | "insert" | "replace_all" | "delete"; old_string: string; new_string?: string }
+  | {
+      op: "str_replace" | "insert" | "replace_all" | "delete";
+      old_string: string;
+      new_string?: string;
+    }
   | { op: "create"; new_string: string };
 
 export interface EditorOperationResult {
@@ -85,20 +95,28 @@ export interface EditorOperationResult {
  */
 export function applyEditorOperation(
   original: string | undefined,
-  rawOp: Record<string, unknown>
+  rawOp: Record<string, unknown>,
 ): EditorOperationResult | { ok: false; error: string } {
   const op = String(rawOp.op ?? "str_replace");
-  const oldString = typeof rawOp.old_string === "string" ? rawOp.old_string : undefined;
-  const newString = typeof rawOp.new_string === "string" ? rawOp.new_string : undefined;
+  const oldString =
+    typeof rawOp.old_string === "string" ? rawOp.old_string : undefined;
+  const newString =
+    typeof rawOp.new_string === "string" ? rawOp.new_string : undefined;
 
   // ---- create: brand-new file -------------------------------------------
-  if (op === "create" || (op === "str_replace" && !oldString && original === undefined)) {
+  if (
+    op === "create" ||
+    (op === "str_replace" && !oldString && original === undefined)
+  ) {
     if (original !== undefined && original.length > 0) {
       return { ok: false, error: "create failed: file already exists" };
     }
     const content = newString ?? oldString ?? "";
     if (Buffer.byteLength(content, "utf8") > MAX_PROPOSED_FILE_BYTES) {
-      return { ok: false, error: "create failed: proposed content exceeds size limit" };
+      return {
+        ok: false,
+        error: "create failed: proposed content exceeds size limit",
+      };
     }
     return { ok: true, content, changed: true, summary: "created file" };
   }
@@ -141,12 +159,18 @@ export function applyEditorOperation(
       }
       // Replace only the first occurrence (unless replace_all was requested).
       const first = original.indexOf(oldString);
-      content = original.slice(0, first) + newString + original.slice(first + oldString.length);
+      content =
+        original.slice(0, first) +
+        newString +
+        original.slice(first + oldString.length);
       summary = "replaced first occurrence";
       break;
   }
   if (Buffer.byteLength(content, "utf8") > MAX_PROPOSED_FILE_BYTES) {
-    return { ok: false, error: `${op} failed: resulting content exceeds size limit` };
+    return {
+      ok: false,
+      error: `${op} failed: resulting content exceeds size limit`,
+    };
   }
   return { ok: true, content, changed: content !== original, summary };
 }
@@ -161,7 +185,8 @@ export interface WriteProposal {
   proposedContent: string;
 }
 
-export type ParseResult = { ok: true; proposals: WriteProposal[] } | { ok: false; error: string };
+export type ParseResult =
+  { ok: true; proposals: WriteProposal[] } | { ok: false; error: string };
 
 /**
  * Parse a ClineCore `editor` tool input (classic single-op or `operations`
@@ -171,30 +196,46 @@ export type ParseResult = { ok: true; proposals: WriteProposal[] } | { ok: false
 export function parseEditorInput(
   input: Record<string, unknown>,
   cwd: string,
-  readOriginal: (absolutePath: string) => string | undefined
+  readOriginal: (absolutePath: string) => string | undefined,
 ): ParseResult {
-  const filePath = typeof input.file_path === "string" ? input.file_path
-    : typeof input.filePath === "string" ? input.filePath : "";
+  const filePath =
+    typeof input.file_path === "string"
+      ? input.file_path
+      : typeof input.filePath === "string"
+        ? input.filePath
+        : "";
   if (!filePath) {
     return { ok: false, error: "editor input missing file_path" };
   }
   const resolved = resolveWorkspacePath(filePath, cwd);
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
-  const rawOps = Array.isArray(input.operations) && input.operations.length > 0
-    ? input.operations as Record<string, unknown>[]
-    : [input];
+  const rawOps =
+    Array.isArray(input.operations) && input.operations.length > 0
+      ? (input.operations as Record<string, unknown>[])
+      : [input];
 
   let original = readOriginal(resolved.absolutePath);
-  const proposal: WriteProposal = { filePath, relativePath: resolved.relativePath, proposedContent: "" };
+  const proposal: WriteProposal = {
+    filePath,
+    relativePath: resolved.relativePath,
+    proposedContent: "",
+  };
   const summaries: string[] = [];
 
   for (const rawOp of rawOps) {
     // Per-operation file_path override (some models repeat it on each op).
-    const opFile = typeof rawOp.file_path === "string" ? rawOp.file_path
-      : typeof rawOp.filePath === "string" ? rawOp.filePath : filePath;
+    const opFile =
+      typeof rawOp.file_path === "string"
+        ? rawOp.file_path
+        : typeof rawOp.filePath === "string"
+          ? rawOp.filePath
+          : filePath;
     if (opFile !== filePath) {
-      return { ok: false, error: `editor tool cannot target multiple files in one call (${opFile})` };
+      return {
+        ok: false,
+        error: `editor tool cannot target multiple files in one call (${opFile})`,
+      };
     }
     const res = applyEditorOperation(original, rawOp);
     if (!res.ok) return { ok: false, error: res.error };
@@ -216,7 +257,7 @@ export function parseEditorInput(
  */
 export async function parseApplyPatchInput(
   input: Record<string, unknown>,
-  cwd: string
+  cwd: string,
 ): Promise<ParseResult> {
   const patch = typeof input.patch === "string" ? input.patch : "";
   if (!patch) {
@@ -226,7 +267,10 @@ export async function parseApplyPatchInput(
   try {
     computed = await computePatchChanges(patch, cwd);
   } catch (err) {
-    return { ok: false, error: `apply_patch parse failed: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      ok: false,
+      error: `apply_patch parse failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   const proposals: WriteProposal[] = [];
@@ -245,9 +289,16 @@ export async function parseApplyPatchInput(
     }
     const content = change.newContent ?? change.oldContent ?? "";
     if (Buffer.byteLength(content, "utf8") > MAX_PROPOSED_FILE_BYTES) {
-      return { ok: false, error: `apply_patch failed: ${rawPath} exceeds size limit` };
+      return {
+        ok: false,
+        error: `apply_patch failed: ${rawPath} exceeds size limit`,
+      };
     }
-    proposals.push({ filePath: rawPath, relativePath: resolved.relativePath, proposedContent: content });
+    proposals.push({
+      filePath: rawPath,
+      relativePath: resolved.relativePath,
+      proposedContent: content,
+    });
   }
 
   if (proposals.length === 0) {
@@ -263,7 +314,7 @@ export async function parseApplyPatchInput(
 export function formatStagedResult(
   toolName: string,
   changeSetId: string,
-  proposals: WriteProposal[]
+  proposals: WriteProposal[],
 ): string {
   const lines = proposals.map((p) => {
     const label = p.proposedContent.length === 0 ? "deleted" : "updated";

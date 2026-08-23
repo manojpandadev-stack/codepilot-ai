@@ -52,7 +52,7 @@ export class MemoryEngine {
     scope: MemoryScope,
     key: string,
     value: string,
-    options?: { tags?: string[]; expiresAt?: number }
+    options?: { tags?: string[]; expiresAt?: number },
   ): MemoryEntry {
     const id = `${scope}-${++this.idCounter}`;
     const now = Date.now();
@@ -108,7 +108,7 @@ export class MemoryEngine {
 
     if (query.tags && query.tags.length > 0) {
       results = results.filter((e) =>
-        query.tags!.some((tag) => e.tags.includes(tag))
+        query.tags!.some((tag) => e.tags.includes(tag)),
       );
     }
 
@@ -221,7 +221,10 @@ export class MemoryEngine {
 
   // ---- Private ----
 
-  private findByScopeAndKey(scope: MemoryScope, key: string): MemoryEntry | undefined {
+  private findByScopeAndKey(
+    scope: MemoryScope,
+    key: string,
+  ): MemoryEntry | undefined {
     for (const entry of this.entries.values()) {
       if (entry.scope === scope && entry.key === key) {
         return entry;

@@ -90,7 +90,7 @@ describe("SelfHealingEngine", () => {
         { passed: true, exitCode: 0 },
         makePassingValidation(),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(true);
@@ -106,7 +106,7 @@ describe("SelfHealingEngine", () => {
         { passed: true, exitCode: 0 },
         makePassingValidation(),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       // No validation_failed → no healing events
@@ -123,7 +123,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(true);
@@ -144,7 +144,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       const eventTypes = events.map((e) => e.type);
@@ -160,12 +160,16 @@ describe("SelfHealingEngine", () => {
 
   describe("multiple repair attempts", () => {
     it("continues until validation passes or max attempts reached", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 3 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 3,
+      });
       // Always fail
       const validate: ValidationRunner = async () => makeFailure();
       let repairCount = 0;
       const diagnose: RepairDiagnoser = async (_f, attempt) => {
-        repairCount++;        return {
+        repairCount++;
+        return {
           diagnosis: `Diagnosis ${attempt}`,
           repairDescription: `Fix ${attempt}`,
           filesChanged: [`file-${attempt}.ts`],
@@ -176,7 +180,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         diagnose,
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(false);
@@ -192,14 +196,17 @@ describe("SelfHealingEngine", () => {
 
   describe("maximum retry limit", () => {
     it("respects maxAttempts config", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 1 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 1,
+      });
       const { validate } = makeFailThenPassValidation(100); // never passes
 
       const result = await engine.heal(
         makeFailure(),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(false);
@@ -209,11 +216,19 @@ describe("SelfHealingEngine", () => {
     });
 
     it("emits healing_exhausted when all attempts fail", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 2 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 2,
+      });
       const events = collectEvents(engine);
       const validate: ValidationRunner = async () => makeFailure();
 
-      await engine.heal(makeFailure(), validate, makeDiagnoser(), makeApplier());
+      await engine.heal(
+        makeFailure(),
+        validate,
+        makeDiagnoser(),
+        makeApplier(),
+      );
 
       const exhausted = events.filter((e) => e.type === "healing_exhausted");
       expect(exhausted).toHaveLength(1);
@@ -223,7 +238,10 @@ describe("SelfHealingEngine", () => {
 
   describe("repair failure", () => {
     it("continues to next attempt when applier fails", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 3 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 3,
+      });
       let attemptCount = 0;
       const validate: ValidationRunner = async () => makeFailure();
 
@@ -239,7 +257,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         makeDiagnoser(),
-        flakyApplier
+        flakyApplier,
       );
 
       expect(result.healed).toBe(false); // validation still fails
@@ -252,7 +270,10 @@ describe("SelfHealingEngine", () => {
 
   describe("command failure / diagnosis failure", () => {
     it("continues to next attempt when diagnosis throws", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 2 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 2,
+      });
       let diagnoseCount = 0;
       const validate: ValidationRunner = async () => makeFailure();
 
@@ -272,7 +293,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         flakyDiagnoser,
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(false);
@@ -294,7 +315,7 @@ describe("SelfHealingEngine", () => {
         makeFailure({ diagnostics: [], stderr: "" }),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(true);
@@ -309,7 +330,7 @@ describe("SelfHealingEngine", () => {
         makeFailure({ diagnostics: undefined }),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(true);
@@ -318,7 +339,10 @@ describe("SelfHealingEngine", () => {
 
   describe("cancellation during healing", () => {
     it("stops healing when cancelled", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 5 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 5,
+      });
       let repairCount = 0;
       const validate: ValidationRunner = async () => makeFailure();
 
@@ -338,7 +362,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         slowDiagnoser,
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.cancelled).toBe(true);
@@ -347,17 +371,29 @@ describe("SelfHealingEngine", () => {
     });
 
     it("emits cancelled state correctly", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 5 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 5,
+      });
       let count = 0;
       const validate: ValidationRunner = async () => makeFailure();
 
       const diagnoser: RepairDiagnoser = async (_f, attempt) => {
         count++;
         if (count >= 3) engine.cancel();
-        return { diagnosis: `D${attempt}`, repairDescription: `R${attempt}`, filesChanged: [] };
+        return {
+          diagnosis: `D${attempt}`,
+          repairDescription: `R${attempt}`,
+          filesChanged: [],
+        };
       };
 
-      const result = await engine.heal(makeFailure(), validate, diagnoser, makeApplier());
+      const result = await engine.heal(
+        makeFailure(),
+        validate,
+        diagnoser,
+        makeApplier(),
+      );
 
       expect(result.cancelled).toBe(true);
     });
@@ -376,7 +412,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(false);
@@ -400,7 +436,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         validate,
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(true);
@@ -410,11 +446,19 @@ describe("SelfHealingEngine", () => {
 
   describe("event data", () => {
     it("includes attempt numbers and max attempts in all events", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 2 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 2,
+      });
       const events = collectEvents(engine);
       const { validate } = makeFailThenPassValidation(3);
 
-      await engine.heal(makeFailure(), validate, makeDiagnoser(), makeApplier());
+      await engine.heal(
+        makeFailure(),
+        validate,
+        makeDiagnoser(),
+        makeApplier(),
+      );
 
       for (const event of events) {
         expect(event.maxAttempts).toBe(2);
@@ -431,7 +475,7 @@ describe("SelfHealingEngine", () => {
         makeFailure({ diagnostics: ["error TS2345"] }),
         makePassingValidation(),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       const failedEvent = events.find((e) => e.type === "validation_failed");
@@ -450,7 +494,7 @@ describe("SelfHealingEngine", () => {
         original,
         makePassingValidation(),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.originalFailure).toEqual(original);
@@ -463,7 +507,7 @@ describe("SelfHealingEngine", () => {
         makeFailure(),
         makePassingValidation(),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -480,7 +524,12 @@ describe("SelfHealingEngine", () => {
       unsub();
 
       const { validate } = makeFailThenPassValidation(2);
-      await engine.heal(makeFailure(), validate, makeDiagnoser(), makeApplier());
+      await engine.heal(
+        makeFailure(),
+        validate,
+        makeDiagnoser(),
+        makeApplier(),
+      );
 
       expect(events).toHaveLength(0);
     });
@@ -488,13 +537,16 @@ describe("SelfHealingEngine", () => {
 
   describe("edge cases", () => {
     it("handles healing with maxAttempts=0", async () => {
-      const engine = new SelfHealingEngine({ workspaceRoot: "/tmp/test", maxAttempts: 0 });
+      const engine = new SelfHealingEngine({
+        workspaceRoot: "/tmp/test",
+        maxAttempts: 0,
+      });
 
       const result = await engine.heal(
         makeFailure(),
         makePassingValidation(),
         makeDiagnoser(),
-        makeApplier()
+        makeApplier(),
       );
 
       expect(result.healed).toBe(false);
@@ -526,7 +578,9 @@ describe("healingEventToAgentEvent", () => {
       data: { attempts: 1, durationMs: 500 },
     });
     expect(agentEvent.type).toBe("status");
-    expect(agentEvent.type === "status" && agentEvent.message).toContain("succeeded");
+    expect(agentEvent.type === "status" && agentEvent.message).toContain(
+      "succeeded",
+    );
   });
 
   it("maps healing_exhausted to error event", () => {
@@ -548,7 +602,9 @@ describe("healingEventToAgentEvent", () => {
       data: { error: "timeout" },
     });
     expect(agentEvent.type).toBe("error");
-    expect(agentEvent.type === "error" && agentEvent.error).toContain("timeout");
+    expect(agentEvent.type === "error" && agentEvent.error).toContain(
+      "timeout",
+    );
   });
 
   it("maps repair_completed to file_changed event", () => {
@@ -574,18 +630,22 @@ describe("createCommandValidator", () => {
     expect(result.passed).toBe(true);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("hello");
-  });    it("returns passed=false for a failing command", async () => {
-      const validate = createCommandValidator("node -e throw new Error('test error')", "/tmp");
-      const result = await validate();
+  });
+  it("returns passed=false for a failing command", async () => {
+    const validate = createCommandValidator(
+      "node -e throw new Error('test error')",
+      "/tmp",
+    );
+    const result = await validate();
 
-      expect(result.passed).toBe(false);
-      expect(result.exitCode).not.toBe(0);
-    });
+    expect(result.passed).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+  });
 
   it("returns diagnostics for commands with stderr output", async () => {
     const validate = createCommandValidator(
       "node -e 'console.error(\"error TS2345: type mismatch\"); process.exit(1)'",
-      "/tmp"
+      "/tmp",
     );
     const result = await validate();
 

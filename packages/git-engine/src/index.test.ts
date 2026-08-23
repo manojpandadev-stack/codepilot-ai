@@ -22,7 +22,12 @@ describe("GitEngine", () => {
         return;
       } catch {
         // Synchronous ~60ms backoff between attempts.
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60 * (attempt + 1));
+        Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(4)),
+          0,
+          0,
+          60 * (attempt + 1),
+        );
       }
     }
   }

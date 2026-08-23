@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { TaskDAG } from "./orchestrator.js";
 import type { TaskNode } from "./orchestrator.js";
 
-function makeTask(overrides: Partial<TaskNode> & { id: string; agentRole: TaskNode["agentRole"] }): TaskNode {
+function makeTask(
+  overrides: Partial<TaskNode> & {
+    id: string;
+    agentRole: TaskNode["agentRole"];
+  },
+): TaskNode {
   return {
     description: `Test task ${overrides.id}`,
     dependencies: [],
@@ -34,8 +39,12 @@ describe("TaskDAG", () => {
     it("returns only tasks whose dependencies are completed", () => {
       const dag = new TaskDAG();
       dag.addTask(makeTask({ id: "a", agentRole: "architect" }));
-      dag.addTask(makeTask({ id: "b", agentRole: "coder", dependencies: ["a"] }));
-      dag.addTask(makeTask({ id: "c", agentRole: "reviewer", dependencies: ["b"] }));
+      dag.addTask(
+        makeTask({ id: "b", agentRole: "coder", dependencies: ["a"] }),
+      );
+      dag.addTask(
+        makeTask({ id: "c", agentRole: "reviewer", dependencies: ["b"] }),
+      );
 
       // Initially only "a" is ready
       expect(dag.getReadyTasks()).toHaveLength(1);
@@ -65,7 +74,9 @@ describe("TaskDAG", () => {
     it("does not return blocked tasks", () => {
       const dag = new TaskDAG();
       dag.addTask(makeTask({ id: "a", agentRole: "architect" }));
-      dag.addTask(makeTask({ id: "b", agentRole: "coder", dependencies: ["a"] }));
+      dag.addTask(
+        makeTask({ id: "b", agentRole: "coder", dependencies: ["a"] }),
+      );
 
       dag.markFailed("a", "error");
       const ready = dag.getReadyTasks();
@@ -75,7 +86,10 @@ describe("TaskDAG", () => {
 
   describe("parallel execution — tester + security", () => {
     it("tester and security become ready at the same time after coder completes", () => {
-      const dag = TaskDAG.buildFromRoles(["architect", "coder", "tester", "security", "reviewer"], "test task");
+      const dag = TaskDAG.buildFromRoles(
+        ["architect", "coder", "tester", "security", "reviewer"],
+        "test task",
+      );
 
       // Initially only architect is ready
       expect(dag.getReadyTasks()).toHaveLength(1);
@@ -99,7 +113,10 @@ describe("TaskDAG", () => {
     });
 
     it("reviewer waits for BOTH tester and security", () => {
-      const dag = TaskDAG.buildFromRoles(["architect", "coder", "tester", "security", "reviewer"], "test task");
+      const dag = TaskDAG.buildFromRoles(
+        ["architect", "coder", "tester", "security", "reviewer"],
+        "test task",
+      );
 
       // Complete architect, coder
       dag.markCompleted("task-1", "done");
@@ -125,7 +142,10 @@ describe("TaskDAG", () => {
 
   describe("failure propagation", () => {
     it("blocks all downstream tasks when a task fails", () => {
-      const dag = TaskDAG.buildFromRoles(["architect", "coder", "tester", "security", "reviewer"], "test");
+      const dag = TaskDAG.buildFromRoles(
+        ["architect", "coder", "tester", "security", "reviewer"],
+        "test",
+      );
 
       // Fail architect
       dag.markFailed("task-1", "architect crashed");
@@ -143,7 +163,9 @@ describe("TaskDAG", () => {
     it("only blocks tasks that depend on the failed task", () => {
       const dag = new TaskDAG();
       dag.addTask(makeTask({ id: "a", agentRole: "architect" }));
-      dag.addTask(makeTask({ id: "b", agentRole: "coder", dependencies: ["a"] }));
+      dag.addTask(
+        makeTask({ id: "b", agentRole: "coder", dependencies: ["a"] }),
+      );
       dag.addTask(makeTask({ id: "c", agentRole: "tester" })); // no dependency on a
 
       dag.markFailed("a", "crash");
@@ -184,7 +206,13 @@ describe("TaskDAG", () => {
   describe("validate", () => {
     it("returns errors for missing dependencies", () => {
       const dag = new TaskDAG();
-      dag.addTask(makeTask({ id: "a", agentRole: "coder", dependencies: ["nonexistent"] }));
+      dag.addTask(
+        makeTask({
+          id: "a",
+          agentRole: "coder",
+          dependencies: ["nonexistent"],
+        }),
+      );
 
       const errors = dag.validate();
       expect(errors).toHaveLength(1);
@@ -192,7 +220,10 @@ describe("TaskDAG", () => {
     });
 
     it("returns empty for valid DAG", () => {
-      const dag = TaskDAG.buildFromRoles(["architect", "coder", "tester", "security", "reviewer"], "test");
+      const dag = TaskDAG.buildFromRoles(
+        ["architect", "coder", "tester", "security", "reviewer"],
+        "test",
+      );
       const errors = dag.validate();
       expect(errors).toHaveLength(0);
     });
@@ -200,7 +231,10 @@ describe("TaskDAG", () => {
 
   describe("buildFromRoles — complex DAG structure", () => {
     it("creates correct dependency edges for complex workflow", () => {
-      const dag = TaskDAG.buildFromRoles(["architect", "coder", "tester", "security", "reviewer"], "test");
+      const dag = TaskDAG.buildFromRoles(
+        ["architect", "coder", "tester", "security", "reviewer"],
+        "test",
+      );
 
       const tasks = dag.getAllTasks();
       expect(tasks).toHaveLength(5);

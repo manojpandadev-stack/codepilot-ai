@@ -105,7 +105,11 @@ export class EventBus {
  */
 export function createEventEmitter(bus: EventBus, sessionId: string) {
   return {
-    emit<T>(type: EventType, payload: T, metadata?: Record<string, unknown>): void {
+    emit<T>(
+      type: EventType,
+      payload: T,
+      metadata?: Record<string, unknown>,
+    ): void {
       bus.emit({
         type,
         timestamp: Date.now(),

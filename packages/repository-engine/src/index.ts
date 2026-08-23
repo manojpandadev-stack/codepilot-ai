@@ -40,11 +40,22 @@ export class RepositoryEngine {
     const languages: Record<string, number> = {};
 
     const languageMap: Record<string, string> = {
-      ".java": "Java", ".ts": "TypeScript", ".tsx": "TypeScript",
-      ".js": "JavaScript", ".jsx": "JavaScript", ".py": "Python",
-      ".sql": "SQL", ".json": "JSON", ".yaml": "YAML", ".yml": "YAML",
-      ".xml": "XML", ".md": "Markdown", ".go": "Go", ".rs": "Rust",
-      ".kt": "Kotlin", ".gradle": "Gradle",
+      ".java": "Java",
+      ".ts": "TypeScript",
+      ".tsx": "TypeScript",
+      ".js": "JavaScript",
+      ".jsx": "JavaScript",
+      ".py": "Python",
+      ".sql": "SQL",
+      ".json": "JSON",
+      ".yaml": "YAML",
+      ".yml": "YAML",
+      ".xml": "XML",
+      ".md": "Markdown",
+      ".go": "Go",
+      ".rs": "Rust",
+      ".kt": "Kotlin",
+      ".gradle": "Gradle",
     };
 
     const scan = async (dir: string, depth = 0): Promise<void> => {
@@ -72,20 +83,31 @@ export class RepositoryEngine {
             languages[lang] = (languages[lang] ?? 0) + 1;
           }
         }
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     };
 
     await scan(this.rootPath);
 
     this.index = {
-      rootPath: this.rootPath, files, languages,
-      totalFiles: files.length, indexedAt: Date.now(),
+      rootPath: this.rootPath,
+      files,
+      languages,
+      totalFiles: files.length,
+      indexedAt: Date.now(),
     };
 
     return this.index;
   }
 
-  getIndex(): RepositoryIndex | null { return this.index; }
-  getFilesByLanguage(lang: string): RepositoryFile[] { return this.index?.files.filter(f => f.language === lang) ?? []; }
-  getFileByPath(relativePath: string): RepositoryFile | undefined { return this.index?.files.find(f => f.relativePath === relativePath); }
+  getIndex(): RepositoryIndex | null {
+    return this.index;
+  }
+  getFilesByLanguage(lang: string): RepositoryFile[] {
+    return this.index?.files.filter((f) => f.language === lang) ?? [];
+  }
+  getFileByPath(relativePath: string): RepositoryFile | undefined {
+    return this.index?.files.find((f) => f.relativePath === relativePath);
+  }
 }

@@ -8,10 +8,7 @@
 
 import { createGateway, DefaultGateway } from "@cline/llms";
 import type { GatewayModelDefinition } from "@cline/shared";
-import {
-  OLLAMA_DEFAULT_BASE_URL,
-  type ModelInfo,
-} from "@codepilot/shared";
+import { OLLAMA_DEFAULT_BASE_URL, type ModelInfo } from "@codepilot/shared";
 
 // ============================================================================
 // Provider Registry
@@ -61,9 +58,27 @@ export class ProviderRegistry {
       apiKeyRequired: true,
       connected: false,
       models: [
-        { id: "gpt-4o", name: "GPT-4o", provider: "openai", contextWindow: 128_000, capabilities: ["coding", "reasoning", "tool_use"] },
-        { id: "gpt-4o-mini", name: "GPT-4o Mini", provider: "openai", contextWindow: 128_000, capabilities: ["coding", "tool_use"] },
-        { id: "o3", name: "o3", provider: "openai", contextWindow: 200_000, capabilities: ["coding", "reasoning", "tool_use"] },
+        {
+          id: "gpt-4o",
+          name: "GPT-4o",
+          provider: "openai",
+          contextWindow: 128_000,
+          capabilities: ["coding", "reasoning", "tool_use"],
+        },
+        {
+          id: "gpt-4o-mini",
+          name: "GPT-4o Mini",
+          provider: "openai",
+          contextWindow: 128_000,
+          capabilities: ["coding", "tool_use"],
+        },
+        {
+          id: "o3",
+          name: "o3",
+          provider: "openai",
+          contextWindow: 200_000,
+          capabilities: ["coding", "reasoning", "tool_use"],
+        },
       ],
     });
 
@@ -74,8 +89,20 @@ export class ProviderRegistry {
       apiKeyRequired: true,
       connected: false,
       models: [
-        { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", provider: "anthropic", contextWindow: 200_000, capabilities: ["coding", "reasoning", "tool_use", "long_context"] },
-        { id: "claude-opus-4-1", name: "Claude Opus 4", provider: "anthropic", contextWindow: 200_000, capabilities: ["coding", "reasoning", "tool_use", "long_context"] },
+        {
+          id: "claude-sonnet-4-20250514",
+          name: "Claude Sonnet 4",
+          provider: "anthropic",
+          contextWindow: 200_000,
+          capabilities: ["coding", "reasoning", "tool_use", "long_context"],
+        },
+        {
+          id: "claude-opus-4-1",
+          name: "Claude Opus 4",
+          provider: "anthropic",
+          contextWindow: 200_000,
+          capabilities: ["coding", "reasoning", "tool_use", "long_context"],
+        },
       ],
     });
 
@@ -86,8 +113,26 @@ export class ProviderRegistry {
       apiKeyRequired: true,
       connected: false,
       models: [
-        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google", contextWindow: 1_000_000, capabilities: ["coding", "reasoning", "tool_use", "long_context", "vision"] },
-        { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", provider: "google", contextWindow: 1_000_000, capabilities: ["coding", "tool_use", "speed"] },
+        {
+          id: "gemini-2.5-pro",
+          name: "Gemini 2.5 Pro",
+          provider: "google",
+          contextWindow: 1_000_000,
+          capabilities: [
+            "coding",
+            "reasoning",
+            "tool_use",
+            "long_context",
+            "vision",
+          ],
+        },
+        {
+          id: "gemini-2.5-flash",
+          name: "Gemini 2.5 Flash",
+          provider: "google",
+          contextWindow: 1_000_000,
+          capabilities: ["coding", "tool_use", "speed"],
+        },
       ],
     });
 
@@ -107,7 +152,13 @@ export class ProviderRegistry {
       apiKeyRequired: true,
       connected: false,
       models: [
-        { id: "codestral-latest", name: "Codestral", provider: "mistral", contextWindow: 32_000, capabilities: ["coding", "tool_use"] },
+        {
+          id: "codestral-latest",
+          name: "Codestral",
+          provider: "mistral",
+          contextWindow: 32_000,
+          capabilities: ["coding", "tool_use"],
+        },
       ],
     });
   }
@@ -129,7 +180,8 @@ export class ProviderRegistry {
         name: m.name,
         providerId: provider.id,
         contextWindow: m.contextWindow,
-        capabilities: m.capabilities as unknown as GatewayModelDefinition["capabilities"],
+        capabilities:
+          m.capabilities as unknown as GatewayModelDefinition["capabilities"],
       })),
     } as any);
   }
@@ -279,7 +331,7 @@ export class OllamaClient {
       numPredict?: number;
       keepAlive?: string;
       stream?: boolean;
-    }
+    },
   ): AsyncGenerator<{ role: string; content: string; done: boolean }> {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
@@ -379,7 +431,13 @@ export class ModelCapabilityRouter {
     preferredProvider?: string;
     preferredModel?: string;
   }): { providerId: string; modelId: string } | null {
-    const { taskType, complexity, privacyMode, preferredProvider, preferredModel } = options;
+    const {
+      taskType,
+      complexity,
+      privacyMode,
+      preferredProvider,
+      preferredModel,
+    } = options;
 
     // If a specific model is preferred, use it
     if (preferredProvider && preferredModel) {
@@ -395,7 +453,7 @@ export class ModelCapabilityRouter {
       if (ollama?.connected && ollama.models.length > 0) {
         // Prefer coding models for coding tasks
         const codingModel = ollama.models.find(
-          (m) => m.id.includes("coder") || m.id.includes("code")
+          (m) => m.id.includes("coder") || m.id.includes("code"),
         );
         const selected = codingModel ?? ollama.models[0]!;
         return { providerId: "ollama", modelId: selected.id };

@@ -68,7 +68,11 @@ describe("Shared types", () => {
 
   it("CodePilotAgentMode type works with string literals", () => {
     const modes: Array<"ask" | "plan" | "act" | "review" | "auto"> = [
-      "ask", "plan", "act", "review", "auto",
+      "ask",
+      "plan",
+      "act",
+      "review",
+      "auto",
     ];
     expect(modes).toHaveLength(5);
   });

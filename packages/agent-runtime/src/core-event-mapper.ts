@@ -131,8 +131,10 @@ export function mapCoreEvent(raw: unknown): MappedCoreEvent {
   return out;
 }
 
-
-function mapInnerAgentEvent(inner: Record<string, unknown>, out: MappedCoreEvent): void {
+function mapInnerAgentEvent(
+  inner: Record<string, unknown>,
+  out: MappedCoreEvent,
+): void {
   switch (str(inner.type)) {
     case "iteration_start":
       out.events.push({ type: "thinking", iteration: num(inner.iteration) });
@@ -141,10 +143,18 @@ function mapInnerAgentEvent(inner: Record<string, unknown>, out: MappedCoreEvent
     case "content_start": {
       const contentType = str(inner.contentType, "text");
       if (contentType === "text") {
-        out.events.push({ type: "text_delta", text: str(inner.text), accumulated: str(inner.accumulated, str(inner.text)) });
+        out.events.push({
+          type: "text_delta",
+          text: str(inner.text),
+          accumulated: str(inner.accumulated, str(inner.text)),
+        });
       } else if (contentType === "reasoning") {
         // qwen3 thinking tokens → surfaced as reasoning status, never as chat text.
-        out.events.push({ type: "reasoning_delta", text: str(inner.text), accumulated: str(inner.accumulated, str(inner.text)) });
+        out.events.push({
+          type: "reasoning_delta",
+          text: str(inner.text),
+          accumulated: str(inner.accumulated, str(inner.text)),
+        });
       } else if (contentType === "tool") {
         out.events.push({
           type: "tool_started",
@@ -192,8 +202,16 @@ function mapInnerAgentEvent(inner: Record<string, unknown>, out: MappedCoreEvent
       if (finalUsage) out.usage = finalUsage;
       const reason = str(inner.reason, "completed");
       if (reason === "completed") {
-        out.events.push({ type: "completed", result: str(inner.text), usage: out.usage ?? emptyUsage() });
-      } else if (reason === "aborted" || reason === "cancelled" || reason === "stopped") {
+        out.events.push({
+          type: "completed",
+          result: str(inner.text),
+          usage: out.usage ?? emptyUsage(),
+        });
+      } else if (
+        reason === "aborted" ||
+        reason === "cancelled" ||
+        reason === "stopped"
+      ) {
         out.events.push({ type: "cancelled" });
       } else {
         out.events.push({
@@ -226,5 +244,10 @@ function extractToolError(output: unknown): string | undefined {
 }
 
 function emptyUsage(): MappedUsage {
-  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
 }

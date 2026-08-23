@@ -4,11 +4,7 @@
 
 /** Lifecycle of a proposed file change inside the Changes tab. */
 export type ChangeStatus =
-  | "added"
-  | "modified"
-  | "deleted"
-  | "applied"
-  | "rolled_back";
+  "added" | "modified" | "deleted" | "applied" | "rolled_back";
 
 export interface FileChange {
   path: string;
@@ -33,13 +29,13 @@ export interface DiffResultPayload {
 }
 
 export type DiffResultKind =
-  | "accept"
-  | "reject"
-  | "accept_all"
-  | "reject_all"
-  | "rollback";
+  "accept" | "reject" | "accept_all" | "reject_all" | "rollback";
 
-const ACTIVE_STATUSES: readonly ChangeStatus[] = ["added", "modified", "deleted"];
+const ACTIVE_STATUSES: readonly ChangeStatus[] = [
+  "added",
+  "modified",
+  "deleted",
+];
 
 /** True while a change still needs (or allows) user action. */
 export function isActiveChange(change: FileChange): boolean {
@@ -50,7 +46,10 @@ export function isActiveChange(change: FileChange): boolean {
  * Count additions/deletions from a unified diff body.
  * Header lines (+++/---) are excluded; hunk headers (@@) count as neither.
  */
-export function computeDiffStats(diff: string | undefined): { additions: number; deletions: number } {
+export function computeDiffStats(diff: string | undefined): {
+  additions: number;
+  deletions: number;
+} {
   if (!diff) return { additions: 0, deletions: 0 };
   let additions = 0;
   let deletions = 0;
@@ -76,20 +75,28 @@ export function computeDiffStats(diff: string | undefined): { additions: number;
 export function applyDiffResult(
   changes: FileChange[],
   kind: DiffResultKind,
-  result: DiffResultPayload
+  result: DiffResultPayload,
 ): { changes: FileChange[]; pendingApproval: boolean; error?: string } {
   if (result.success === false) {
-    return { changes, pendingApproval: changes.some(isActiveChange), error: result.error ?? "Operation failed" };
+    return {
+      changes,
+      pendingApproval: changes.some(isActiveChange),
+      error: result.error ?? "Operation failed",
+    };
   }
 
   const byId = (change: FileChange): boolean =>
-    change.changeSetId === result.changeSetId && change.changeId === result.changeId;
+    change.changeSetId === result.changeSetId &&
+    change.changeId === result.changeId;
 
   switch (kind) {
     case "accept":
     case "rollback": {
-      const nextStatus: ChangeStatus = kind === "accept" ? "applied" : "rolled_back";
-      const next = changes.map((change) => (byId(change) ? { ...change, status: nextStatus } : change));
+      const nextStatus: ChangeStatus =
+        kind === "accept" ? "applied" : "rolled_back";
+      const next = changes.map((change) =>
+        byId(change) ? { ...change, status: nextStatus } : change,
+      );
       return { changes: next, pendingApproval: next.some(isActiveChange) };
     }
     case "reject": {
@@ -98,12 +105,16 @@ export function applyDiffResult(
     }
     case "accept_all": {
       const next = changes.map((change) =>
-        change.changeSetId === result.changeSetId ? { ...change, status: "applied" as const } : change
+        change.changeSetId === result.changeSetId
+          ? { ...change, status: "applied" as const }
+          : change,
       );
       return { changes: next, pendingApproval: false };
     }
     case "reject_all": {
-      const next = changes.filter((change) => change.changeSetId !== result.changeSetId);
+      const next = changes.filter(
+        (change) => change.changeSetId !== result.changeSetId,
+      );
       return { changes: next, pendingApproval: false };
     }
   }
@@ -147,15 +158,25 @@ export function normalizeProviderList(payload: unknown): ProviderInfo[] {
 /** Derive the header connection line from provider state + models. */
 export function connectionSummary(
   providers: ProviderInfo[],
-  modelCount: number
+  modelCount: number,
 ): { connected: boolean; label: string } {
   const active = providers.find((p) => p.connected);
   if (active) {
-    return { connected: true, label: active.name + (modelCount > 0 ? ` · ${modelCount} model${modelCount !== 1 ? "s" : ""}` : "") };
+    return {
+      connected: true,
+      label:
+        active.name +
+        (modelCount > 0
+          ? ` · ${modelCount} model${modelCount !== 1 ? "s" : ""}`
+          : ""),
+    };
   }
   const ollama = providers.find((p) => p.id === "ollama");
   if (ollama && !ollama.connected) {
-    return { connected: false, label: "Ollama unavailable — start Ollama and refresh" };
+    return {
+      connected: false,
+      label: "Ollama unavailable — start Ollama and refresh",
+    };
   }
   return { connected: false, label: "No provider connected" };
 }
@@ -191,18 +212,70 @@ export interface SlashCommandDef {
  * No fake commands.
  */
 export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
-  { command: "plan", mode: "plan", description: "Plan mode — analyze without modifying files" },
-  { command: "act", mode: "act", description: "Act mode — implement with ChangeSet approval" },
+  {
+    command: "plan",
+    mode: "plan",
+    description: "Plan mode — analyze without modifying files",
+  },
+  {
+    command: "act",
+    mode: "act",
+    description: "Act mode — implement with ChangeSet approval",
+  },
   { command: "ask", mode: "ask", description: "Ask mode — read-only Q&A" },
-  { command: "auto", mode: "auto", description: "Auto mode — decide and act under policy" },
-  { command: "review", mode: "review", description: "Review mode — analyze bugs/security/perf" },
-  { command: "explain", mode: "ask", instruction: "Explain the following:\n", description: "Explain code or concepts" },
-  { command: "fix", mode: "act", instruction: "Fix the following issue:\n", description: "Fix a bug or issue" },
-  { command: "test", mode: "act", instruction: "Write or run tests for:\n", description: "Generate or run tests" },
-  { command: "refactor", mode: "act", instruction: "Refactor the following:\n", description: "Refactor code" },
-  { command: "docs", mode: "ask", instruction: "Write documentation for:\n", description: "Add documentation" },
-  { command: "search", mode: "ask", instruction: "Search the repository for:\n", description: "Search the codebase" },
-  { command: "compact", mode: "ask", instruction: "Compactly summarize the current task, decisions, pending file changes, and unresolved issues for continuation:\n", description: "Produce a continuation brief" },
+  {
+    command: "auto",
+    mode: "auto",
+    description: "Auto mode — decide and act under policy",
+  },
+  {
+    command: "review",
+    mode: "review",
+    description: "Review mode — analyze bugs/security/perf",
+  },
+  {
+    command: "explain",
+    mode: "ask",
+    instruction: "Explain the following:\n",
+    description: "Explain code or concepts",
+  },
+  {
+    command: "fix",
+    mode: "act",
+    instruction: "Fix the following issue:\n",
+    description: "Fix a bug or issue",
+  },
+  {
+    command: "test",
+    mode: "act",
+    instruction: "Write or run tests for:\n",
+    description: "Generate or run tests",
+  },
+  {
+    command: "refactor",
+    mode: "act",
+    instruction: "Refactor the following:\n",
+    description: "Refactor code",
+  },
+  {
+    command: "docs",
+    mode: "ask",
+    instruction: "Write documentation for:\n",
+    description: "Add documentation",
+  },
+  {
+    command: "search",
+    mode: "ask",
+    instruction: "Search the repository for:\n",
+    description: "Search the codebase",
+  },
+  {
+    command: "compact",
+    mode: "ask",
+    instruction:
+      "Compactly summarize the current task, decisions, pending file changes, and unresolved issues for continuation:\n",
+    description: "Produce a continuation brief",
+  },
   { command: "clear", uiOnly: true, description: "Clear this conversation" },
   { command: "help", uiOnly: true, description: "Show available commands" },
 ];
@@ -257,7 +330,8 @@ export interface ToolRegistryEntry {
 // Composer context (chips + structured metadata — never part of user text)
 // ============================================================================
 
-export type ComposerChipKind = "file" | "folder" | "url" | "problems" | "selection";
+export type ComposerChipKind =
+  "file" | "folder" | "url" | "problems" | "selection";
 
 /** A single removable chip shown above the composer textarea. */
 export interface ComposerChip {
@@ -278,12 +352,23 @@ function nextChipId(kind: ComposerChipKind): string {
 type ComposerCtx = import("@codepilot/shared").ComposerContext;
 
 export function createEmptyComposerContext(): ComposerCtx {
-  return { files: [], folders: [], urls: [], diagnostics: null, selection: null };
+  return {
+    files: [],
+    folders: [],
+    urls: [],
+    diagnostics: null,
+    selection: null,
+  };
 }
 
 export function addFileEntriesToContext(
   ctx: ComposerCtx,
-  files: Array<{ relativePath: string; name?: string; sizeBytes?: number; isBinary?: boolean }>
+  files: Array<{
+    relativePath: string;
+    name?: string;
+    sizeBytes?: number;
+    isBinary?: boolean;
+  }>,
 ): ComposerCtx {
   const next = [...ctx.files];
   for (const f of files) {
@@ -304,14 +389,18 @@ export function addFileEntriesToContext(
 
 export function addFolderEntriesToContext(
   ctx: ComposerCtx,
-  folders: Array<{ relativePath: string; name?: string }>
+  folders: Array<{ relativePath: string; name?: string }>,
 ): ComposerCtx {
   const next = [...ctx.folders];
   for (const f of folders) {
     const rel = (f.relativePath ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
     if (!rel) continue;
     if (next.some((existing) => existing.relativePath === rel)) continue;
-    next.push({ id: nextChipId("folder"), relativePath: rel, name: f.name ?? rel.split("/").pop() ?? rel });
+    next.push({
+      id: nextChipId("folder"),
+      relativePath: rel,
+      name: f.name ?? rel.split("/").pop() ?? rel,
+    });
   }
   return { ...ctx, folders: next };
 }
@@ -320,19 +409,22 @@ export function addUrlToContext(ctx: ComposerCtx, url: string): ComposerCtx {
   const trimmed = url.trim();
   if (!trimmed || !/^https?:\/\//i.test(trimmed)) return ctx;
   if (ctx.urls.some((u) => u.url === trimmed)) return ctx;
-  return { ...ctx, urls: [...ctx.urls, { id: nextChipId("url"), url: trimmed }] };
+  return {
+    ...ctx,
+    urls: [...ctx.urls, { id: nextChipId("url"), url: trimmed }],
+  };
 }
 
 export function setProblemsInContext(
   ctx: ComposerCtx,
-  diagnostics: import("@codepilot/shared").DiagnosticsContextPayload | null
+  diagnostics: import("@codepilot/shared").DiagnosticsContextPayload | null,
 ): ComposerCtx {
   return { ...ctx, diagnostics };
 }
 
 export function setSelectionInContext(
   ctx: ComposerCtx,
-  selection: import("@codepilot/shared").SelectionContextPayload | null
+  selection: import("@codepilot/shared").SelectionContextPayload | null,
 ): ComposerCtx {
   return { ...ctx, selection };
 }
@@ -361,21 +453,48 @@ export function hasAnyContext(ctx: ComposerCtx): boolean {
 /** Derive the chip list rendered above the textarea. */
 export function contextToChips(ctx: ComposerCtx): ComposerChip[] {
   const chips: ComposerChip[] = [];
-  for (const f of ctx.files) chips.push({ id: f.id, kind: "file", label: `📄 ${f.name}`, ref: f.relativePath });
-  for (const fo of ctx.folders) chips.push({ id: fo.id, kind: "folder", label: `📁 ${fo.name}`, ref: fo.relativePath });
+  for (const f of ctx.files)
+    chips.push({
+      id: f.id,
+      kind: "file",
+      label: `📄 ${f.name}`,
+      ref: f.relativePath,
+    });
+  for (const fo of ctx.folders)
+    chips.push({
+      id: fo.id,
+      kind: "folder",
+      label: `📁 ${fo.name}`,
+      ref: fo.relativePath,
+    });
   for (const u of ctx.urls) {
-    chips.push({ id: u.id, kind: "url", label: `🔗 ${u.url.length > 40 ? u.url.slice(0, 37) + "…" : u.url}`, ref: u.url });
+    chips.push({
+      id: u.id,
+      kind: "url",
+      label: `🔗 ${u.url.length > 40 ? u.url.slice(0, 37) + "…" : u.url}`,
+      ref: u.url,
+    });
   }
   if (ctx.diagnostics) {
     const n = ctx.diagnostics.items.length;
-    chips.push({ id: "problems", kind: "problems", label: n === 0 ? "✓ Problems: 0" : `⚠ Problems (${n})` });
+    chips.push({
+      id: "problems",
+      kind: "problems",
+      label: n === 0 ? "✓ Problems: 0" : `⚠ Problems (${n})`,
+    });
   }
   if (ctx.selection) {
-    const lines = ctx.selection.startLine === ctx.selection.endLine
-      ? `${ctx.selection.startLine}`
-      : `${ctx.selection.startLine}–${ctx.selection.endLine}`;
-    const name = ctx.selection.filePath.split("/").pop() ?? ctx.selection.filePath;
-    chips.push({ id: "selection", kind: "selection", label: `📝 Selection: ${name} L${lines}` });
+    const lines =
+      ctx.selection.startLine === ctx.selection.endLine
+        ? `${ctx.selection.startLine}`
+        : `${ctx.selection.startLine}–${ctx.selection.endLine}`;
+    const name =
+      ctx.selection.filePath.split("/").pop() ?? ctx.selection.filePath;
+    chips.push({
+      id: "selection",
+      kind: "selection",
+      label: `📝 Selection: ${name} L${lines}`,
+    });
   }
   return chips;
 }
@@ -395,15 +514,22 @@ export function buildChatSendPayload(
   text: string,
   mode: string,
   ctx: ComposerCtx,
-  requestId?: string
-): { text: string; mode: string; context: Partial<ComposerCtx>; requestId?: string } {
+  requestId?: string,
+): {
+  text: string;
+  mode: string;
+  context: Partial<ComposerCtx>;
+  requestId?: string;
+} {
   const context: Record<string, unknown> = {};
   if (ctx.files.length > 0) context.files = ctx.files;
   if (ctx.folders.length > 0) context.folders = ctx.folders;
   if (ctx.urls.length > 0) context.urls = ctx.urls;
   if (ctx.diagnostics) context.diagnostics = ctx.diagnostics;
   if (ctx.selection) context.selection = ctx.selection;
-  return requestId ? { text, mode, context, requestId } : { text, mode, context };
+  return requestId
+    ? { text, mode, context, requestId }
+    : { text, mode, context };
 }
 
 /**
@@ -421,14 +547,18 @@ export function createRequestId(): string {
  */
 export function applyContextResult(
   ctx: ComposerCtx,
-  result: import("@codepilot/shared").ContextResultPayload
+  result: import("@codepilot/shared").ContextResultPayload,
 ): ComposerCtx {
   if (!result || result.error) return ctx;
   let next = ctx;
   if (result.kind === "filePicker" && result.files && result.files.length > 0) {
     next = addFileEntriesToContext(next, result.files);
   }
-  if (result.kind === "folderPicker" && result.folders && result.folders.length > 0) {
+  if (
+    result.kind === "folderPicker" &&
+    result.folders &&
+    result.folders.length > 0
+  ) {
     next = addFolderEntriesToContext(next, result.folders);
   }
   if (result.kind === "problems" && result.diagnostics) {
@@ -466,7 +596,14 @@ export interface HealingStatusState {
 }
 
 export type HealingUiEvent =
-  | { kind: "started"; attempt: number; maxAttempts: number; exitCode?: number; stderrExcerpt?: string; command?: string }
+  | {
+      kind: "started";
+      attempt: number;
+      maxAttempts: number;
+      exitCode?: number;
+      stderrExcerpt?: string;
+      command?: string;
+    }
   | { kind: "progress"; phase: string; attempt: number; message?: string }
   | { kind: "succeeded"; attempt: number; durationMs?: number }
   | { kind: "failed"; message: string }
@@ -476,7 +613,10 @@ export type HealingUiEvent =
  * Reduce healing events into ONE status object. Every event mutates this
  * single state — events never append duplicate status messages.
  */
-export function reduceHealingState(prev: HealingStatusState | null, event: HealingUiEvent): HealingStatusState {
+export function reduceHealingState(
+  prev: HealingStatusState | null,
+  event: HealingUiEvent,
+): HealingStatusState {
   switch (event.kind) {
     case "started":
       return {
@@ -486,16 +626,25 @@ export function reduceHealingState(prev: HealingStatusState | null, event: Heali
         phase: "validation_failed",
         message: "Self-healing started",
         success: false,
-        failureDetail: [
-          event.exitCode !== undefined ? `exit code ${event.exitCode}` : "",
-          event.command ? `command: ${event.command}` : "",
-          event.stderrExcerpt ? `output: ${event.stderrExcerpt.slice(0, 300)}` : "",
-        ].filter(Boolean).join(" · ") || undefined,
+        failureDetail:
+          [
+            event.exitCode !== undefined ? `exit code ${event.exitCode}` : "",
+            event.command ? `command: ${event.command}` : "",
+            event.stderrExcerpt
+              ? `output: ${event.stderrExcerpt.slice(0, 300)}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" · ") || undefined,
       };
     case "progress": {
       const base = prev ?? {
-        active: true, attempt: event.attempt, maxAttempts: 3,
-        phase: event.phase, message: "", success: false,
+        active: true,
+        attempt: event.attempt,
+        maxAttempts: 3,
+        phase: event.phase,
+        message: "",
+        success: false,
       };
       return {
         ...base,
@@ -509,8 +658,11 @@ export function reduceHealingState(prev: HealingStatusState | null, event: Heali
     case "succeeded":
       return {
         ...(prev ?? {
-          attempt: event.attempt, maxAttempts: event.attempt,
-          phase: "healing_succeeded", message: "", success: false,
+          attempt: event.attempt,
+          maxAttempts: event.attempt,
+          phase: "healing_succeeded",
+          message: "",
+          success: false,
         }),
         active: false,
         attempt: event.attempt,
@@ -519,7 +671,13 @@ export function reduceHealingState(prev: HealingStatusState | null, event: Heali
       };
     case "failed":
       return {
-        ...(prev ?? { attempt: 1, maxAttempts: 3, phase: "repair_failed", message: "", success: false }),
+        ...(prev ?? {
+          attempt: 1,
+          maxAttempts: 3,
+          phase: "repair_failed",
+          message: "",
+          success: false,
+        }),
         active: false,
         success: false,
         message: event.message,
@@ -527,8 +685,11 @@ export function reduceHealingState(prev: HealingStatusState | null, event: Heali
     case "exhausted":
       return {
         ...(prev ?? {
-          attempt: event.maxAttempts, maxAttempts: event.maxAttempts,
-          phase: "healing_exhausted", message: "", success: false,
+          attempt: event.maxAttempts,
+          maxAttempts: event.maxAttempts,
+          phase: "healing_exhausted",
+          message: "",
+          success: false,
         }),
         active: false,
         success: false,
@@ -544,7 +705,9 @@ export function reduceHealingState(prev: HealingStatusState | null, event: Heali
 export function normalizeToolList(payload: unknown): ToolRegistryEntry[] {
   const raw = Array.isArray(payload)
     ? payload
-    : payload && typeof payload === "object" && Array.isArray((payload as { tools?: unknown }).tools)
+    : payload &&
+        typeof payload === "object" &&
+        Array.isArray((payload as { tools?: unknown }).tools)
       ? (payload as { tools: unknown[] }).tools
       : [];
   const result: ToolRegistryEntry[] = [];
@@ -552,7 +715,10 @@ export function normalizeToolList(payload: unknown): ToolRegistryEntry[] {
     if (!item || typeof item !== "object") continue;
     const t = item as Record<string, unknown>;
     if (typeof t.name !== "string" || t.name === "") continue;
-    const permission = t.permission === "auto" || t.permission === "blocked" ? t.permission : "approval";
+    const permission =
+      t.permission === "auto" || t.permission === "blocked"
+        ? t.permission
+        : "approval";
     result.push({
       name: t.name,
       category: typeof t.category === "string" ? t.category : "system",
@@ -569,4 +735,8 @@ export function normalizeToolList(payload: unknown): ToolRegistryEntry[] {
 // Self-healing labels (re-exported from @codepilot/shared for the webview)
 // ============================================================================
 
-export { healingPhaseLabel, healingNextActionLabel, describeValidationFailure } from "@codepilot/shared";
+export {
+  healingPhaseLabel,
+  healingNextActionLabel,
+  describeValidationFailure,
+} from "@codepilot/shared";

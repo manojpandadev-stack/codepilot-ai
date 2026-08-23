@@ -80,11 +80,14 @@ export interface MCPApprovalResolution {
 // ============================================================================
 
 export class MCPApprovalManager {
-  private pendingRequests = new Map<string, {
-    request: MCPApprovalRequest;
-    resolve: (resolution: MCPApprovalResolution) => void;
-    timer: ReturnType<typeof setTimeout> | null;
-  }>();
+  private pendingRequests = new Map<
+    string,
+    {
+      request: MCPApprovalRequest;
+      resolve: (resolution: MCPApprovalResolution) => void;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
 
   private resolvedRequests: MCPApprovalRequest[] = [];
   private defaultTimeoutMs: number;
@@ -336,12 +339,24 @@ export class CodePilotMCPManager {
           });
         }
 
-        this.audit({ timestamp: Date.now(), server: name, tool: "*", action: "connected", detail: `Discovered ${response.tools.length} tools` });
+        this.audit({
+          timestamp: Date.now(),
+          server: name,
+          tool: "*",
+          action: "connected",
+          detail: `Discovered ${response.tools.length} tools`,
+        });
         return true;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.audit({ timestamp: Date.now(), server: name, tool: "*", action: "connect_failed", detail: msg });
+      this.audit({
+        timestamp: Date.now(),
+        server: name,
+        tool: "*",
+        action: "connect_failed",
+        detail: msg,
+      });
     }
     return false;
   }
@@ -422,10 +437,20 @@ export class CodePilotMCPManager {
     // Check if server is disabled
     const serverConfig = this.servers.get(tool.serverName);
     if (!serverConfig?.enabled) {
-      this.audit({ timestamp: Date.now(), server: tool.serverName, tool: tool.name, action: "blocked_server_disabled" });
+      this.audit({
+        timestamp: Date.now(),
+        server: tool.serverName,
+        tool: tool.name,
+        action: "blocked_server_disabled",
+      });
       return {
         result: {
-          content: [{ type: "text", text: `MCP server '${tool.serverName}' is disabled` }],
+          content: [
+            {
+              type: "text",
+              text: `MCP server '${tool.serverName}' is disabled`,
+            },
+          ],
           isError: true,
         },
       };
@@ -435,10 +460,20 @@ export class CodePilotMCPManager {
     const permission = this.getToolPermission(toolId);
 
     if (permission === "blocked") {
-      this.audit({ timestamp: Date.now(), server: tool.serverName, tool: tool.name, action: "blocked_by_policy" });
+      this.audit({
+        timestamp: Date.now(),
+        server: tool.serverName,
+        tool: tool.name,
+        action: "blocked_by_policy",
+      });
       return {
         result: {
-          content: [{ type: "text", text: `MCP tool '${toolId}' is blocked by security policy` }],
+          content: [
+            {
+              type: "text",
+              text: `MCP tool '${toolId}' is blocked by security policy`,
+            },
+          ],
           isError: true,
         },
       };
@@ -454,11 +489,19 @@ export class CodePilotMCPManager {
         options?.approvalTimeoutMs,
       );
 
-      this.audit({ timestamp: Date.now(), server: tool.serverName, tool: tool.name, action: "approval_required", detail: request.requestId });
+      this.audit({
+        timestamp: Date.now(),
+        server: tool.serverName,
+        tool: tool.name,
+        action: "approval_required",
+        detail: request.requestId,
+      });
 
       return {
         result: {
-          content: [{ type: "text", text: `MCP tool '${toolId}' requires approval` }],
+          content: [
+            { type: "text", text: `MCP tool '${toolId}' requires approval` },
+          ],
           isError: false,
         },
         approvalRequest: request,
@@ -498,23 +541,48 @@ export class CodePilotMCPManager {
   ): Promise<MCPToolResult> {
     const client = this.clients.get(tool.serverName);
     if (!client) {
-      this.audit({ timestamp: Date.now(), server: tool.serverName, tool: tool.name, action: "server_not_connected" });
+      this.audit({
+        timestamp: Date.now(),
+        server: tool.serverName,
+        tool: tool.name,
+        action: "server_not_connected",
+      });
       return {
-        content: [{ type: "text", text: `MCP server not connected: ${tool.serverName}` }],
+        content: [
+          {
+            type: "text",
+            text: `MCP server not connected: ${tool.serverName}`,
+          },
+        ],
         isError: true,
       };
     }
 
     try {
-      const result = await client.callTool({ name: tool.name, arguments: input });
-      this.audit({ timestamp: Date.now(), server: tool.serverName, tool: tool.name, action: "success" });
+      const result = await client.callTool({
+        name: tool.name,
+        arguments: input,
+      });
+      this.audit({
+        timestamp: Date.now(),
+        server: tool.serverName,
+        tool: tool.name,
+        action: "success",
+      });
       return {
-        content: (result.content as Array<{ type: string; text?: string }>) ?? [],
+        content:
+          (result.content as Array<{ type: string; text?: string }>) ?? [],
         isError: result.isError as boolean | undefined,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.audit({ timestamp: Date.now(), server: tool.serverName, tool: tool.name, action: "error", detail: msg });
+      this.audit({
+        timestamp: Date.now(),
+        server: tool.serverName,
+        tool: tool.name,
+        action: "error",
+        detail: msg,
+      });
       return {
         content: [{ type: "text", text: msg }],
         isError: true,
@@ -534,7 +602,10 @@ export class CodePilotMCPManager {
   /**
    * Set permission for all tools from a given server.
    */
-  setServerPermission(serverName: string, permission: ToolPermissionLevel): void {
+  setServerPermission(
+    serverName: string,
+    permission: ToolPermissionLevel,
+  ): void {
     for (const tool of this.tools) {
       if (tool.serverName === serverName) {
         this.toolPermissions.set(tool.id, permission);
@@ -633,7 +704,9 @@ export function createToolId(serverName: string, toolName: string): string {
  * Parse a tool ID back into server name + tool name.
  * Returns null if the format is invalid.
  */
-export function parseToolId(toolId: string): { serverName: string; toolName: string } | null {
+export function parseToolId(
+  toolId: string,
+): { serverName: string; toolName: string } | null {
   const idx = toolId.indexOf(":");
   if (idx <= 0 || idx >= toolId.length - 1) return null;
   return {

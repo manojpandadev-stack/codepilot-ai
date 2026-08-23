@@ -20,7 +20,10 @@ export interface EmbeddingResult {
  */
 export async function generateEmbedding(
   text: string,
-  config: EmbeddingConfig = { baseUrl: "http://localhost:11434", model: "nomic-embed-text" }
+  config: EmbeddingConfig = {
+    baseUrl: "http://localhost:11434",
+    model: "nomic-embed-text",
+  },
 ): Promise<EmbeddingResult> {
   const response = await fetch(`${config.baseUrl}/api/embed`, {
     method: "POST",
@@ -32,10 +35,12 @@ export async function generateEmbedding(
   });
 
   if (!response.ok) {
-    throw new Error(`Ollama embedding failed: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Ollama embedding failed: ${response.status} ${response.statusText}`,
+    );
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     embeddings: number[][];
     model: string;
     prompt_eval_count?: number;
@@ -58,8 +63,11 @@ export async function generateEmbedding(
  */
 export async function generateBatchEmbeddings(
   texts: string[],
-  config: EmbeddingConfig = { baseUrl: "http://localhost:11434", model: "nomic-embed-text" },
-  onProgress?: (current: number, total: number) => void
+  config: EmbeddingConfig = {
+    baseUrl: "http://localhost:11434",
+    model: "nomic-embed-text",
+  },
+  onProgress?: (current: number, total: number) => void,
 ): Promise<EmbeddingResult[]> {
   const results: EmbeddingResult[] = [];
   for (let i = 0; i < texts.length; i++) {
@@ -74,7 +82,7 @@ export async function generateBatchEmbeddings(
  * Check if Ollama embedding service is available.
  */
 export async function checkEmbeddingService(
-  baseUrl: string = "http://localhost:11434"
+  baseUrl: string = "http://localhost:11434",
 ): Promise<{ available: boolean; model?: string }> {
   try {
     const response = await fetch(`${baseUrl}/api/tags`, {
@@ -82,11 +90,11 @@ export async function checkEmbeddingService(
     });
     if (!response.ok) return { available: false };
 
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       models: Array<{ name: string }>;
     };
-    const hasEmbedding = data.models.some((m) =>
-      m.name.includes("nomic") || m.name.includes("embed")
+    const hasEmbedding = data.models.some(
+      (m) => m.name.includes("nomic") || m.name.includes("embed"),
     );
     return {
       available: true,

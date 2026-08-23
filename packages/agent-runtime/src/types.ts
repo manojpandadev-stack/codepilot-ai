@@ -43,7 +43,11 @@ export interface CodePilotRuntimeOptions {
    */
   onWriteProposal?: (
     toolName: string,
-    proposals: Array<{ filePath: string; relativePath: string; proposedContent: string }>
+    proposals: Array<{
+      filePath: string;
+      relativePath: string;
+      proposedContent: string;
+    }>,
   ) => Promise<{ changeSetId: string }>;
   /**
    * Approval callback for tools that are neither auto-approved nor staged
@@ -53,7 +57,9 @@ export interface CodePilotRuntimeOptions {
     toolCallId: string;
     toolName: string;
     input: unknown;
-  }) => Promise<{ approved: boolean; reason?: string }> | { approved: boolean; reason?: string };
+  }) =>
+    | Promise<{ approved: boolean; reason?: string }>
+    | { approved: boolean; reason?: string };
 }
 
 /**
@@ -64,10 +70,21 @@ export type AgentEvent =
   | { type: "thinking"; iteration: number }
   | { type: "text_delta"; text: string; accumulated: string }
   | { type: "reasoning_delta"; text: string; accumulated: string }
-  | { type: "tool_requested"; toolCallId: string; toolName: string; input: unknown }
+  | {
+      type: "tool_requested";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+    }
   | { type: "tool_approved"; toolCallId: string; approved: boolean }
   | { type: "tool_started"; toolCallId: string; toolName: string }
-  | { type: "tool_completed"; toolCallId: string; toolName: string; output: unknown; durationMs: number }
+  | {
+      type: "tool_completed";
+      toolCallId: string;
+      toolName: string;
+      output: unknown;
+      durationMs: number;
+    }
   | { type: "tool_failed"; toolCallId: string; toolName: string; error: string }
   | { type: "file_changed"; path: string; status: string }
   | { type: "test_started"; command: string }
@@ -77,7 +94,13 @@ export type AgentEvent =
   | { type: "cancelled" }
   | { type: "status"; message: string; metadata?: Record<string, unknown> }
   | { type: "healing_started"; attempt: number; maxAttempts: number }
-  | { type: "healing_progress"; attempt: number; maxAttempts: number; phase: string; message: string }
+  | {
+      type: "healing_progress";
+      attempt: number;
+      maxAttempts: number;
+      phase: string;
+      message: string;
+    }
   | { type: "healing_succeeded"; attempt: number; durationMs: number }
   | { type: "healing_failed"; attempts: number; error: string };
 
@@ -93,6 +116,10 @@ export interface AgentRuntimeState {
   messages: AgentMessage[];
   usage: AgentUsage;
   filesChanged: string[];
-  toolCallHistory: Array<{ name: string; count: number; totalDurationMs: number }>;
+  toolCallHistory: Array<{
+    name: string;
+    count: number;
+    totalDurationMs: number;
+  }>;
   lastError: string | null;
 }

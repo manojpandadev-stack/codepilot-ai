@@ -48,7 +48,8 @@ export interface ChangeSet {
   taskId: string;
   changes: FileChange[];
   createdAt: number;
-  status: "pending" | "partially_applied" | "fully_applied" | "rejected" | "failed";
+  status:
+    "pending" | "partially_applied" | "fully_applied" | "rejected" | "failed";
 }
 
 export interface ChangeSetOptions {
@@ -60,7 +61,11 @@ export interface ChangeSetOptions {
 // Diff Generation
 // ============================================================================
 
-export function generateDiff(original: string, proposed: string, _filePath: string): string {
+export function generateDiff(
+  original: string,
+  proposed: string,
+  _filePath: string,
+): string {
   const origLines = original.split("\n");
   const propLines = proposed.split("\n");
   const diff: string[] = [];
@@ -101,7 +106,10 @@ export function generateDiff(original: string, proposed: string, _filePath: stri
 }
 
 function hashContent(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex").substring(0, 16);
+  return createHash("sha256")
+    .update(content, "utf8")
+    .digest("hex")
+    .substring(0, 16);
 }
 
 // ============================================================================
@@ -121,7 +129,7 @@ export class ChangeSetManager {
    */
   createChangeSet(
     taskId: string,
-    changes: Array<{ filePath: string; proposedContent: string }>
+    changes: Array<{ filePath: string; proposedContent: string }>,
   ): ChangeSet {
     const changeSetId = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
@@ -189,15 +197,21 @@ export class ChangeSetManager {
   /**
    * Accept a single change and apply it to the workspace.
    */
-  acceptChange(changeSetId: string, changeId: string): { success: boolean; error?: string } {
+  acceptChange(
+    changeSetId: string,
+    changeId: string,
+  ): { success: boolean; error?: string } {
     const changeSet = this.changeSets.get(changeSetId);
     if (!changeSet) return { success: false, error: "ChangeSet not found" };
 
-    const change = changeSet.changes.find(c => c.id === changeId);
+    const change = changeSet.changes.find((c) => c.id === changeId);
     if (!change) return { success: false, error: "Change not found" };
 
     if (change.status !== "pending") {
-      return { success: false, error: `Change is ${change.status}, not pending` };
+      return {
+        success: false,
+        error: `Change is ${change.status}, not pending`,
+      };
     }
 
     // Conflict check
@@ -241,7 +255,7 @@ export class ChangeSetManager {
     const changeSet = this.changeSets.get(changeSetId);
     if (!changeSet) return false;
 
-    const change = changeSet.changes.find(c => c.id === changeId);
+    const change = changeSet.changes.find((c) => c.id === changeId);
     if (!change) return false;
 
     change.status = "rejected";
@@ -255,18 +269,26 @@ export class ChangeSetManager {
   /**
    * Accept all pending changes in a ChangeSet.
    */
-  acceptAll(changeSetId: string): { applied: number; failed: number; conflicts: number } {
+  acceptAll(changeSetId: string): {
+    applied: number;
+    failed: number;
+    conflicts: number;
+  } {
     const changeSet = this.changeSets.get(changeSetId);
     if (!changeSet) return { applied: 0, failed: 0, conflicts: 0 };
 
-    let applied = 0, failed = 0, conflicts = 0;
+    let applied = 0,
+      failed = 0,
+      conflicts = 0;
 
     for (const change of changeSet.changes) {
       if (change.status !== "pending") continue;
 
       const result = this.acceptChange(changeSetId, change.id);
       // Re-read status since acceptChange may have mutated it
-      const currentStatus = this.changeSets.get(changeSetId)?.changes.find(c => c.id === change.id)?.status;
+      const currentStatus = this.changeSets
+        .get(changeSetId)
+        ?.changes.find((c) => c.id === change.id)?.status;
       if (result.success) {
         applied++;
       } else if (currentStatus === "conflict") {
@@ -299,15 +321,21 @@ export class ChangeSetManager {
   /**
    * Rollback a previously applied change.
    */
-  rollbackChange(changeSetId: string, changeId: string): { success: boolean; error?: string } {
+  rollbackChange(
+    changeSetId: string,
+    changeId: string,
+  ): { success: boolean; error?: string } {
     const changeSet = this.changeSets.get(changeSetId);
     if (!changeSet) return { success: false, error: "ChangeSet not found" };
 
-    const change = changeSet.changes.find(c => c.id === changeId);
+    const change = changeSet.changes.find((c) => c.id === changeId);
     if (!change) return { success: false, error: "Change not found" };
 
     if (change.status !== "applied") {
-      return { success: false, error: `Can only rollback applied changes (current: ${change.status})` };
+      return {
+        success: false,
+        error: `Can only rollback applied changes (current: ${change.status})`,
+      };
     }
 
     try {
@@ -322,7 +350,8 @@ export class ChangeSetManager {
       if (currentContent !== change.proposedContent) {
         return {
           success: false,
-          error: "File was modified after agent applied this change. Manual rollback required.",
+          error:
+            "File was modified after agent applied this change. Manual rollback required.",
         };
       }
 
@@ -351,7 +380,9 @@ export class ChangeSetManager {
    * Get all pending ChangeSets.
    */
   getPendingChangeSets(): ChangeSet[] {
-    return Array.from(this.changeSets.values()).filter(cs => cs.status === "pending");
+    return Array.from(this.changeSets.values()).filter(
+      (cs) => cs.status === "pending",
+    );
   }
 
   /**
@@ -373,7 +404,9 @@ export class ChangeSetManager {
     const workspaceRelativePath = relative(workspaceRoot, fullPath);
     if (
       workspaceRelativePath === ".." ||
-      workspaceRelativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+      workspaceRelativePath.startsWith(
+        `..${process.platform === "win32" ? "\\" : "/"}`,
+      ) ||
       isAbsolute(workspaceRelativePath)
     ) {
       throw new Error(`Path escapes workspace boundary: ${filePath}`);
@@ -391,14 +424,14 @@ export class ChangeSetManager {
   }
 
   private updateChangeSetStatus(changeSet: ChangeSet): void {
-    const statuses = changeSet.changes.map(c => c.status);
-    if (statuses.every(s => s === "applied")) {
+    const statuses = changeSet.changes.map((c) => c.status);
+    if (statuses.every((s) => s === "applied")) {
       changeSet.status = "fully_applied";
-    } else if (statuses.every(s => s === "rejected" || s === "rolled_back")) {
+    } else if (statuses.every((s) => s === "rejected" || s === "rolled_back")) {
       changeSet.status = "rejected";
-    } else if (statuses.some(s => s === "applied")) {
+    } else if (statuses.some((s) => s === "applied")) {
       changeSet.status = "partially_applied";
-    } else if (statuses.every(s => s === "failed" || s === "conflict")) {
+    } else if (statuses.every((s) => s === "failed" || s === "conflict")) {
       changeSet.status = "failed";
     }
   }

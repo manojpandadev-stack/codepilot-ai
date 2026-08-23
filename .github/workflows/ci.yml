@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20, 22]
+        node-version: [22]
     steps:
       - uses: actions/checkout@v4
 
@@ -26,24 +26,19 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile || pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm build:packages
 
       - name: Typecheck all packages
-        run: |
-          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
-            echo "Checking $pkg..."
-            cd packages/$pkg && npx tsc --noEmit && cd ../..
-          done
+        run: pnpm -r typecheck
 
       - name: Run all tests
         run: pnpm exec vitest run
 
       - name: Build all packages
-        run: |
-          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
-            echo "Building $pkg..."
-            cd packages/$pkg && npx tsc -p tsconfig.json && cd ../..
-          done
+        run: pnpm build:packages
 
   java-build:
     name: Java Build & Test
@@ -76,13 +71,10 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile || pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript packages
-        run: |
-          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
-            cd packages/$pkg && npx tsc -p tsconfig.json && cd ../..
-          done
+        run: pnpm build:packages
 
       - name: Build webview
         run: cd apps/webview && npx vite build
@@ -90,13 +82,12 @@ jobs:
       - name: Build extension
         run: |
           cd apps/vscode-extension
-          cp -r ../webview/dist/* dist/ 2>/dev/null || true
           node esbuild.mjs
 
       - name: Package VSIX
         run: |
           cd apps/vscode-extension
-          npx @vscode/vsce package --no-dependencies --allow-missing-repository
+          npx @vscode/vsce package --no-dependencies --allow-missing-repository --skip-license
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
@@ -132,10 +123,10 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile || pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Check no type errors
-        run: |
-          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
-            cd packages/$pkg && npx tsc --noEmit && cd ../..
-          done
+        run: pnpm -r typecheck
+
+      - name: Check formatting
+        run: pnpm exec prettier --check "packages/*/src/**/*.ts" "apps/*/src/**/*.ts" "apps/*/webview/**/*.js"

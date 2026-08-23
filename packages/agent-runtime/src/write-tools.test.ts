@@ -27,9 +27,13 @@ describe("resolveWorkspacePath", () => {
   });
 
   it("rejects absolute paths outside the workspace", () => {
-    expect(resolveWorkspacePath("C:/Windows/System32", "C:/proj").ok).toBe(false);
+    expect(resolveWorkspacePath("C:/Windows/System32", "C:/proj").ok).toBe(
+      false,
+    );
     expect(resolveWorkspacePath("/etc/hosts", "C:/proj").ok).toBe(false);
-    expect(resolveWorkspacePath("\\\\server\\share\\x", "C:/proj").ok).toBe(false);
+    expect(resolveWorkspacePath("\\\\server\\share\\x", "C:/proj").ok).toBe(
+      false,
+    );
   });
 
   it("rejects empty paths and '.' segments", () => {
@@ -44,42 +48,64 @@ describe("resolveWorkspacePath", () => {
 
 describe("applyEditorOperation", () => {
   it("creates a new file when no original content exists", () => {
-    const r = applyEditorOperation(undefined, { op: "create", new_string: "CodePilot AI test" });
+    const r = applyEditorOperation(undefined, {
+      op: "create",
+      new_string: "CodePilot AI test",
+    });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.content).toBe("CodePilot AI test");
   });
 
   it("str_replace replaces the first occurrence only", () => {
-    const r = applyEditorOperation("a b a", { op: "str_replace", old_string: "a", new_string: "X" });
+    const r = applyEditorOperation("a b a", {
+      op: "str_replace",
+      old_string: "a",
+      new_string: "X",
+    });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.content).toBe("X b a");
   });
 
   it("replace_all replaces every occurrence", () => {
-    const r = applyEditorOperation("a b a", { op: "replace_all", old_string: "a", new_string: "X" });
+    const r = applyEditorOperation("a b a", {
+      op: "replace_all",
+      old_string: "a",
+      new_string: "X",
+    });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.content).toBe("X b X");
   });
 
   it("insert places new_string before old_string", () => {
-    const r = applyEditorOperation("hello", { op: "insert", old_string: "hello", new_string: "// hi\n" });
+    const r = applyEditorOperation("hello", {
+      op: "insert",
+      old_string: "hello",
+      new_string: "// hi\n",
+    });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.content).toBe("// hi\nhello");
   });
 
   it("delete removes the matched text", () => {
-    const r = applyEditorOperation("keep it keep", { op: "delete", old_string: " it" });
+    const r = applyEditorOperation("keep it keep", {
+      op: "delete",
+      old_string: " it",
+    });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.content).toBe("keep keep");
   });
 
   it("fails when old_string is not found", () => {
-    const r = applyEditorOperation("abc", { op: "str_replace", old_string: "zzz", new_string: "y" });
+    const r = applyEditorOperation("abc", {
+      op: "str_replace",
+      old_string: "zzz",
+      new_string: "y",
+    });
     expect(r.ok).toBe(false);
   });
 });
@@ -91,9 +117,13 @@ describe("applyEditorOperation", () => {
 describe("parseEditorInput", () => {
   it("stages a brand-new file proposal without touching the filesystem", () => {
     const r = parseEditorInput(
-      { file_path: "codepilot-test.txt", old_string: "", new_string: "CodePilot AI test" },
+      {
+        file_path: "codepilot-test.txt",
+        old_string: "",
+        new_string: "CodePilot AI test",
+      },
       "C:/ws",
-      () => undefined
+      () => undefined,
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -106,7 +136,7 @@ describe("parseEditorInput", () => {
     const r = parseEditorInput(
       { file_path: "src/app.ts", old_string: "old", new_string: "new" },
       "C:/ws",
-      () => "const old = 1;"
+      () => "const old = 1;",
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -117,7 +147,7 @@ describe("parseEditorInput", () => {
     const r = parseEditorInput(
       { file_path: "../../escape.txt", old_string: "", new_string: "x" },
       "C:/ws",
-      () => undefined
+      () => undefined,
     );
     expect(r.ok).toBe(false);
   });
@@ -126,7 +156,11 @@ describe("parseEditorInput", () => {
 describe("formatStagedResult", () => {
   it("mentions the ChangeSet id and that no file was modified", () => {
     const out = formatStagedResult("editor", "cs-1", [
-      { filePath: "codepilot-test.txt", relativePath: "codepilot-test.txt", proposedContent: "hi" },
+      {
+        filePath: "codepilot-test.txt",
+        relativePath: "codepilot-test.txt",
+        proposedContent: "hi",
+      },
     ]);
     expect(out).toContain("cs-1");
     expect(out).toContain("No file was modified");

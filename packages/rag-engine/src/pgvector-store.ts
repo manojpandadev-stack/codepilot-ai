@@ -56,11 +56,11 @@ export class PgVectorStore {
         `SELECT EXISTS (
            SELECT FROM information_schema.tables
            WHERE table_name = 'rag_chunks'
-         ) as exists`
+         ) as exists`,
       );
       if (!check.rows[0]?.exists) {
         throw new Error(
-          "rag_chunks table not found. Run Flyway migrations first (V2__normalize_rag_schema.sql)."
+          "rag_chunks table not found. Run Flyway migrations first (V2__normalize_rag_schema.sql).",
         );
       }
     } finally {
@@ -80,10 +80,17 @@ export class PgVectorStore {
          metadata = EXCLUDED.metadata,
          indexed_at = EXCLUDED.indexed_at`,
       [
-        chunk.id, chunk.projectId, chunk.filePath, chunk.language,
-        chunk.startLine, chunk.endLine, chunk.content,
-        embeddingStr, JSON.stringify(chunk.metadata), chunk.indexedAt,
-      ]
+        chunk.id,
+        chunk.projectId,
+        chunk.filePath,
+        chunk.language,
+        chunk.startLine,
+        chunk.endLine,
+        chunk.content,
+        embeddingStr,
+        JSON.stringify(chunk.metadata),
+        chunk.indexedAt,
+      ],
     );
   }
 
@@ -91,7 +98,7 @@ export class PgVectorStore {
   async deleteFileChunks(projectId: string, filePath: string): Promise<number> {
     const result = await this.pool.query(
       "DELETE FROM rag_chunks WHERE project_id = $1 AND file_path = $2",
-      [projectId, filePath]
+      [projectId, filePath],
     );
     return result.rowCount ?? 0;
   }
@@ -99,7 +106,7 @@ export class PgVectorStore {
   /** Semantic search using cosine similarity */
   async semanticSearch(
     embedding: number[],
-    options: { projectId?: string; limit?: number; language?: string } = {}
+    options: { projectId?: string; limit?: number; language?: string } = {},
   ): Promise<Array<StoredChunk & { score: number }>> {
     const limit = options.limit ?? 10;
     const embeddingStr = `[${embedding.join(",")}]`;
@@ -143,7 +150,7 @@ export class PgVectorStore {
   /** Keyword search (fallback when embeddings unavailable) */
   async keywordSearch(
     query: string,
-    options: { projectId?: string; limit?: number; language?: string } = {}
+    options: { projectId?: string; limit?: number; language?: string } = {},
   ): Promise<Array<StoredChunk & { score: number }>> {
     const limit = options.limit ?? 10;
     const searchTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -188,7 +195,7 @@ export class PgVectorStore {
   async hybridSearch(
     query: string,
     embedding: number[],
-    options: { projectId?: string; limit?: number } = {}
+    options: { projectId?: string; limit?: number } = {},
   ): Promise<Array<StoredChunk & { score: number; matchType: string }>> {
     const limit = options.limit ?? 10;
     const [semanticResults, keywordResults] = await Promise.all([
@@ -196,7 +203,14 @@ export class PgVectorStore {
       this.keywordSearch(query, { ...options, limit: limit * 2 }),
     ]);
 
-    const scoreMap = new Map<string, { chunk: StoredChunk & { score: number }; semanticScore: number; keywordScore: number }>();
+    const scoreMap = new Map<
+      string,
+      {
+        chunk: StoredChunk & { score: number };
+        semanticScore: number;
+        keywordScore: number;
+      }
+    >();
 
     for (const r of semanticResults) {
       scoreMap.set(r.id, { chunk: r, semanticScore: r.score, keywordScore: 0 });
@@ -206,13 +220,18 @@ export class PgVectorStore {
       if (existing) {
         existing.keywordScore = r.score;
       } else {
-        scoreMap.set(r.id, { chunk: r, semanticScore: 0, keywordScore: r.score });
+        scoreMap.set(r.id, {
+          chunk: r,
+          semanticScore: 0,
+          keywordScore: r.score,
+        });
       }
     }
 
     const combined = Array.from(scoreMap.values()).map((entry) => {
       const hybridScore = entry.semanticScore * 0.7 + entry.keywordScore * 0.3;
-      const matchType = entry.semanticScore > entry.keywordScore ? "semantic" : "keyword";
+      const matchType =
+        entry.semanticScore > entry.keywordScore ? "semantic" : "keyword";
       return { ...entry.chunk, score: hybridScore, matchType };
     });
 
@@ -224,7 +243,7 @@ export class PgVectorStore {
   async getChunkCount(projectId: string): Promise<number> {
     const result = await this.pool.query(
       "SELECT COUNT(*) as count FROM rag_chunks WHERE project_id = $1",
-      [projectId]
+      [projectId],
     );
     return parseInt(result.rows[0].count, 10);
   }
@@ -233,7 +252,7 @@ export class PgVectorStore {
   async clearProject(projectId: string): Promise<number> {
     const result = await this.pool.query(
       "DELETE FROM rag_chunks WHERE project_id = $1",
-      [projectId]
+      [projectId],
     );
     return result.rowCount ?? 0;
   }
@@ -241,16 +260,24 @@ export class PgVectorStore {
   // --- Repository files (incremental indexing metadata) ---
 
   /** Get the stored content hash for a file */
-  async getFileHash(projectId: string, filePath: string): Promise<string | null> {
+  async getFileHash(
+    projectId: string,
+    filePath: string,
+  ): Promise<string | null> {
     const result = await this.pool.query(
       "SELECT content_hash FROM repository_files WHERE project_id = $1 AND file_path = $2",
-      [projectId, filePath]
+      [projectId, filePath],
     );
     return result.rows[0]?.content_hash ?? null;
   }
 
   /** Upsert file hash metadata */
-  async upsertFileHash(projectId: string, filePath: string, contentHash: string, fileSize: number): Promise<void> {
+  async upsertFileHash(
+    projectId: string,
+    filePath: string,
+    contentHash: string,
+    fileSize: number,
+  ): Promise<void> {
     await this.pool.query(
       `INSERT INTO repository_files (project_id, file_path, content_hash, file_size, last_indexed_at)
        VALUES ($1, $2, $3, $4, NOW())
@@ -258,7 +285,7 @@ export class PgVectorStore {
          content_hash = EXCLUDED.content_hash,
          file_size = EXCLUDED.file_size,
          last_indexed_at = NOW()`,
-      [projectId, filePath, contentHash, fileSize]
+      [projectId, filePath, contentHash, fileSize],
     );
   }
 
@@ -266,15 +293,22 @@ export class PgVectorStore {
   async removeFileRecord(projectId: string, filePath: string): Promise<void> {
     await this.pool.query(
       "DELETE FROM repository_files WHERE project_id = $1 AND file_path = $2",
-      [projectId, filePath]
+      [projectId, filePath],
     );
   }
 
   /** List all tracked files for a project */
-  async listTrackedFiles(projectId: string): Promise<Array<{ filePath: string; contentHash: string; fileSize: number; lastIndexedAt: Date }>> {
+  async listTrackedFiles(projectId: string): Promise<
+    Array<{
+      filePath: string;
+      contentHash: string;
+      fileSize: number;
+      lastIndexedAt: Date;
+    }>
+  > {
     const result = await this.pool.query(
       "SELECT file_path, content_hash, file_size, last_indexed_at FROM repository_files WHERE project_id = $1",
-      [projectId]
+      [projectId],
     );
     return result.rows.map((row) => ({
       filePath: row.file_path,

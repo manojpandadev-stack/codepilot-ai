@@ -98,14 +98,18 @@ export type ValidationRunner = () => Promise<ValidationResult>;
 export type RepairDiagnoser = (
   failure: ValidationResult,
   attemptNumber: number,
-  previousAttempts: RepairAttempt[]
-) => Promise<{ diagnosis: string; repairDescription: string; filesChanged: string[] }>;
+  previousAttempts: RepairAttempt[],
+) => Promise<{
+  diagnosis: string;
+  repairDescription: string;
+  filesChanged: string[];
+}>;
 
 /** Callback to apply a proposed repair. Returns whether it succeeded. */
 export type RepairApplier = (
   diagnosis: string,
   repairDescription: string,
-  filesChanged: string[]
+  filesChanged: string[],
 ) => Promise<{ success: boolean; error?: string; filesChanged?: string[] }>;
 
 // ============================================================================
@@ -116,7 +120,9 @@ export class SelfHealingEngine {
   private listeners = new Set<HealingEventListener>();
   private abortController: AbortController | null = null;
   private cancelled = false;
-  private readonly config: Required<Omit<SelfHealingConfig, "workspaceRoot" | "isPlanMode">> & {
+  private readonly config: Required<
+    Omit<SelfHealingConfig, "workspaceRoot" | "isPlanMode">
+  > & {
     workspaceRoot: string;
     isPlanMode: boolean;
   };
@@ -144,7 +150,7 @@ export class SelfHealingEngine {
     initialFailure: ValidationResult,
     validate: ValidationRunner,
     diagnose: RepairDiagnoser,
-    applyRepair: RepairApplier
+    applyRepair: RepairApplier,
   ): Promise<HealingResult> {
     // If the initial validation already passes, nothing to heal.
     if (initialFailure.passed) {
@@ -227,12 +233,16 @@ export class SelfHealingEngine {
         timestamp: Date.now(),
       });
 
-      let diagnosisResult: { diagnosis: string; repairDescription: string; filesChanged: string[] };
+      let diagnosisResult: {
+        diagnosis: string;
+        repairDescription: string;
+        filesChanged: string[];
+      };
       try {
         diagnosisResult = await this.withTimeout(
           () => diagnose(lastValidation, attempt, repairHistory),
           this.config.attemptTimeoutMs,
-          `diagnosis-${attempt}`
+          `diagnosis-${attempt}`,
         );
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
@@ -276,16 +286,21 @@ export class SelfHealingEngine {
         data: { repairDescription: diagnosisResult.repairDescription },
       });
 
-      let repairResult: { success: boolean; error?: string; filesChanged?: string[] };
+      let repairResult: {
+        success: boolean;
+        error?: string;
+        filesChanged?: string[];
+      };
       try {
         repairResult = await this.withTimeout(
-          () => applyRepair(
-            diagnosisResult.diagnosis,
-            diagnosisResult.repairDescription,
-            diagnosisResult.filesChanged
-          ),
+          () =>
+            applyRepair(
+              diagnosisResult.diagnosis,
+              diagnosisResult.repairDescription,
+              diagnosisResult.filesChanged,
+            ),
           this.config.attemptTimeoutMs,
-          `repair-${attempt}`
+          `repair-${attempt}`,
         );
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
@@ -341,7 +356,10 @@ export class SelfHealingEngine {
         attempt,
         maxAttempts: this.config.maxAttempts,
         timestamp: Date.now(),
-        data: { filesChanged: repairResult.filesChanged ?? diagnosisResult.filesChanged },
+        data: {
+          filesChanged:
+            repairResult.filesChanged ?? diagnosisResult.filesChanged,
+        },
       });
 
       // Phase 3: Re-validate
@@ -357,7 +375,7 @@ export class SelfHealingEngine {
         revalidation = await this.withTimeout(
           () => validate(),
           this.config.attemptTimeoutMs,
-          `validation-${attempt}`
+          `validation-${attempt}`,
         );
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
@@ -440,18 +458,28 @@ export class SelfHealingEngine {
   /** Subscribe to healing events. */
   subscribe(listener: HealingEventListener): () => void {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /** Emit an event to all listeners. */
   private emitHealingEvent(event: HealingEvent): void {
     for (const listener of this.listeners) {
-      try { listener(event); } catch { /* don't break */ }
+      try {
+        listener(event);
+      } catch {
+        /* don't break */
+      }
     }
   }
 
   /** Run a promise with a timeout. */
-  private withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  private withTimeout<T>(
+    fn: () => Promise<T>,
+    timeoutMs: number,
+    label: string,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(new Error(`${label} timed out after ${timeoutMs}ms`));
@@ -480,29 +508,60 @@ export class SelfHealingEngine {
 export function healingEventToAgentEvent(event: HealingEvent): AgentEvent {
   switch (event.type) {
     case "validation_started":
-      return { type: "status", message: `🔄 Validation attempt ${event.attempt}/${event.maxAttempts}...` };
+      return {
+        type: "status",
+        message: `🔄 Validation attempt ${event.attempt}/${event.maxAttempts}...`,
+      };
     case "validation_passed":
-      return { type: "status", message: `✅ Validation passed after ${event.attempt} repair(s)` };
+      return {
+        type: "status",
+        message: `✅ Validation passed after ${event.attempt} repair(s)`,
+      };
     case "validation_failed":
-      return { type: "status", message: `❌ Validation failed — initiating self-healing (${event.maxAttempts} max attempts)` };
+      return {
+        type: "status",
+        message: `❌ Validation failed — initiating self-healing (${event.maxAttempts} max attempts)`,
+      };
     case "diagnosis_started":
-      return { type: "status", message: `🔍 Diagnosing failure (attempt ${event.attempt}/${event.maxAttempts})...` };
+      return {
+        type: "status",
+        message: `🔍 Diagnosing failure (attempt ${event.attempt}/${event.maxAttempts})...`,
+      };
     case "diagnosis_completed":
-      return { type: "status", message: `📋 Diagnosis: ${String(event.data?.diagnosis ?? "").substring(0, 200)}` };
+      return {
+        type: "status",
+        message: `📋 Diagnosis: ${String(event.data?.diagnosis ?? "").substring(0, 200)}`,
+      };
     case "repair_started":
-      return { type: "status", message: `🔧 Applying repair (attempt ${event.attempt}/${event.maxAttempts})...` };
+      return {
+        type: "status",
+        message: `🔧 Applying repair (attempt ${event.attempt}/${event.maxAttempts})...`,
+      };
     case "repair_completed":
       return {
         type: "file_changed",
-        path: (event.data?.filesChanged as string[] | undefined)?.join(", ") ?? "unknown",
+        path:
+          (event.data?.filesChanged as string[] | undefined)?.join(", ") ??
+          "unknown",
         status: "modified",
       };
     case "repair_failed":
-      return { type: "error", error: `Repair failed: ${String(event.data?.error ?? "unknown")}`, recoverable: true };
+      return {
+        type: "error",
+        error: `Repair failed: ${String(event.data?.error ?? "unknown")}`,
+        recoverable: true,
+      };
     case "healing_succeeded":
-      return { type: "status", message: `✅ Self-healing succeeded after ${event.attempt} attempt(s) (${String(event.data?.durationMs ?? 0)}ms)` };
+      return {
+        type: "status",
+        message: `✅ Self-healing succeeded after ${event.attempt} attempt(s) (${String(event.data?.durationMs ?? 0)}ms)`,
+      };
     case "healing_exhausted":
-      return { type: "error", error: `Self-healing exhausted after ${event.maxAttempts} attempts`, recoverable: false };
+      return {
+        type: "error",
+        error: `Self-healing exhausted after ${event.maxAttempts} attempts`,
+        recoverable: false,
+      };
     default:
       return { type: "status", message: `Healing event: ${event.type}` };
   }
@@ -519,7 +578,7 @@ export function healingEventToAgentEvent(event: HealingEvent): AgentEvent {
 export function createCommandValidator(
   command: string,
   cwd: string,
-  options?: { timeoutMs?: number }
+  options?: { timeoutMs?: number },
 ): ValidationRunner {
   return async (): Promise<ValidationResult> => {
     const { execSync } = await import("child_process");
@@ -554,10 +613,18 @@ export function createCommandValidator(
         passed: false,
         command,
         exitCode: execErr.status ?? 1,
-        stdout: typeof execErr.stdout === "string" ? execErr.stdout : String(execErr.stdout ?? ""),
-        stderr: typeof execErr.stderr === "string" ? execErr.stderr : String(execErr.stderr ?? execErr.message ?? ""),
+        stdout:
+          typeof execErr.stdout === "string"
+            ? execErr.stdout
+            : String(execErr.stdout ?? ""),
+        stderr:
+          typeof execErr.stderr === "string"
+            ? execErr.stderr
+            : String(execErr.stderr ?? execErr.message ?? ""),
         diagnostics: parseDiagnostics(
-          typeof execErr.stderr === "string" ? execErr.stderr : String(execErr.stderr ?? "")
+          typeof execErr.stderr === "string"
+            ? execErr.stderr
+            : String(execErr.stderr ?? ""),
         ),
         durationMs: Date.now() - startTime,
       };
@@ -585,7 +652,11 @@ function parseDiagnostics(stderr: string): string[] {
       diagnostics.push(trimmed);
     }
     // Test failures
-    else if (trimmed.includes("FAIL") || trimmed.includes("failed") || trimmed.includes("AssertionError")) {
+    else if (
+      trimmed.includes("FAIL") ||
+      trimmed.includes("failed") ||
+      trimmed.includes("AssertionError")
+    ) {
       diagnostics.push(trimmed);
     }
     // ESLint errors
@@ -671,11 +742,7 @@ const TRANSIENT_PATTERNS = [
 ];
 
 /** Patterns that indicate timeouts. */
-const TIMEOUT_PATTERNS = [
-  /timed? ?out/i,
-  /timeout/i,
-  /deadline exceeded/i,
-];
+const TIMEOUT_PATTERNS = [/timed? ?out/i, /timeout/i, /deadline exceeded/i];
 
 /** Patterns that indicate errors requiring user approval. */
 const APPROVAL_PATTERNS = [
@@ -690,7 +757,7 @@ const APPROVAL_PATTERNS = [
 export function classifyError(
   error: string,
   _toolName?: string,
-  exitCode?: number
+  exitCode?: number,
 ): ErrorClassification {
   const lower = error.toLowerCase();
 
@@ -832,7 +899,11 @@ export class RecoveryManager {
   }
 
   /** Check whether auto-recovery is allowed for this error. */
-  canRecover(error: string, _toolName?: string, exitCode?: number): {
+  canRecover(
+    error: string,
+    _toolName?: string,
+    exitCode?: number,
+  ): {
     allowed: boolean;
     classification: ErrorClassification;
     reason?: string;

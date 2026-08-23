@@ -21,7 +21,7 @@ import type { CodePilotRuntimeOptions } from "./types.js";
  * ```
  */
 export async function createCodePilotRuntime(
-  options: CodePilotRuntimeOptions
+  options: CodePilotRuntimeOptions,
 ): Promise<CodePilotRuntime> {
   const runtime = new CodePilotRuntime(options);
   await runtime.initialize();

@@ -4,7 +4,11 @@ import { MemoryEngine, MemoryEngine as ME } from "./index.js";
 describe("MemoryEngine", () => {
   it("stores and retrieves project memory", () => {
     const engine = new MemoryEngine();
-    const entry = engine.set("project", "architecture", "Spring Boot microservice");
+    const entry = engine.set(
+      "project",
+      "architecture",
+      "Spring Boot microservice",
+    );
     expect(entry.key).toBe("architecture");
     expect(entry.scope).toBe("project");
     expect(entry.value).toBe("Spring Boot microservice");

@@ -72,14 +72,15 @@ describe("MCPApprovalManager", () => {
   });
 
   it("resolves with approval", async () => {
-    const { request, promise } = manager.requestApproval(
-      "fs",
-      "read_file",
-      { path: "/tmp/test.txt" },
-    );
+    const { request, promise } = manager.requestApproval("fs", "read_file", {
+      path: "/tmp/test.txt",
+    });
 
     setTimeout(() => {
-      manager.resolveRequest(request.requestId, { approved: true, reason: "User approved" });
+      manager.resolveRequest(request.requestId, {
+        approved: true,
+        reason: "User approved",
+      });
     }, 10);
 
     const resolution = await promise;
@@ -97,7 +98,10 @@ describe("MCPApprovalManager", () => {
     );
 
     setTimeout(() => {
-      manager.resolveRequest(request.requestId, { approved: false, reason: "Too dangerous" });
+      manager.resolveRequest(request.requestId, {
+        approved: false,
+        reason: "Too dangerous",
+      });
     }, 10);
 
     const resolution = await promise;
@@ -109,7 +113,9 @@ describe("MCPApprovalManager", () => {
     const { request } = manager.requestApproval("s", "t", {});
 
     manager.resolveRequest(request.requestId, { approved: true });
-    expect(manager.resolveRequest(request.requestId, { approved: true })).toBe(false);
+    expect(manager.resolveRequest(request.requestId, { approved: true })).toBe(
+      false,
+    );
   });
 
   it("times out after default timeout", async () => {
@@ -278,10 +284,36 @@ describe("CodePilotMCPManager", () => {
 
   it("setServerPermission sets all tools from that server", () => {
     // Manually push tools since we can't connect to a real server
-    (manager as unknown as { tools: typeof manager.getTools extends () => infer R ? R extends Array<infer T> ? T[] : never : never }).tools = [
-      { id: "s1:read", name: "read", description: "", inputSchema: {}, serverName: "s1" },
-      { id: "s1:write", name: "write", description: "", inputSchema: {}, serverName: "s1" },
-      { id: "s2:query", name: "query", description: "", inputSchema: {}, serverName: "s2" },
+    (
+      manager as unknown as {
+        tools: typeof manager.getTools extends () => infer R
+          ? R extends Array<infer T>
+            ? T[]
+            : never
+          : never;
+      }
+    ).tools = [
+      {
+        id: "s1:read",
+        name: "read",
+        description: "",
+        inputSchema: {},
+        serverName: "s1",
+      },
+      {
+        id: "s1:write",
+        name: "write",
+        description: "",
+        inputSchema: {},
+        serverName: "s1",
+      },
+      {
+        id: "s2:query",
+        name: "query",
+        description: "",
+        inputSchema: {},
+        serverName: "s2",
+      },
     ];
 
     manager.setServerPermission("s1", "approval");
@@ -304,9 +336,31 @@ describe("CodePilotMCPManager", () => {
   // --- Tool Lookup ---
 
   it("findToolById finds the correct tool", () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }> }).tools = [
-      { id: "s1:read", name: "read", description: "Read file", inputSchema: {}, serverName: "s1" },
-      { id: "s2:query", name: "query", description: "SQL query", inputSchema: {}, serverName: "s2" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+      }
+    ).tools = [
+      {
+        id: "s1:read",
+        name: "read",
+        description: "Read file",
+        inputSchema: {},
+        serverName: "s1",
+      },
+      {
+        id: "s2:query",
+        name: "query",
+        description: "SQL query",
+        inputSchema: {},
+        serverName: "s2",
+      },
     ];
 
     expect(manager.findToolById("s1:read")?.description).toBe("Read file");
@@ -315,9 +369,31 @@ describe("CodePilotMCPManager", () => {
   });
 
   it("findTool finds by server+name", () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }> }).tools = [
-      { id: "s1:read", name: "read", description: "R", inputSchema: {}, serverName: "s1" },
-      { id: "s2:read", name: "read", description: "R2", inputSchema: {}, serverName: "s2" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+      }
+    ).tools = [
+      {
+        id: "s1:read",
+        name: "read",
+        description: "R",
+        inputSchema: {},
+        serverName: "s1",
+      },
+      {
+        id: "s2:read",
+        name: "read",
+        description: "R2",
+        inputSchema: {},
+        serverName: "s2",
+      },
     ];
 
     expect(manager.findTool("s1", "read")?.id).toBe("s1:read");
@@ -325,9 +401,31 @@ describe("CodePilotMCPManager", () => {
   });
 
   it("tool name collisions are isolated by server namespace", () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }> }).tools = [
-      { id: "server-a:query", name: "query", description: "A", inputSchema: {}, serverName: "server-a" },
-      { id: "server-b:query", name: "query", description: "B", inputSchema: {}, serverName: "server-b" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+      }
+    ).tools = [
+      {
+        id: "server-a:query",
+        name: "query",
+        description: "A",
+        inputSchema: {},
+        serverName: "server-a",
+      },
+      {
+        id: "server-b:query",
+        name: "query",
+        description: "B",
+        inputSchema: {},
+        serverName: "server-b",
+      },
     ];
 
     const toolA = manager.findToolById("server-a:query");
@@ -354,7 +452,17 @@ describe("CodePilotMCPManager", () => {
       enabled: false,
     });
 
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }> }).tools.push({
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+      }
+    ).tools.push({
       id: "disabled-server:tool1",
       name: "tool1",
       description: "T1",
@@ -368,10 +476,37 @@ describe("CodePilotMCPManager", () => {
   });
 
   it("blocks execution for blocked permission", async () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }>; servers: Map<string, { name: string; enabled: boolean; transport: string }> }).tools = [
-      { id: "s1:dangerous", name: "dangerous", description: "", inputSchema: {}, serverName: "s1" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).tools = [
+      {
+        id: "s1:dangerous",
+        name: "dangerous",
+        description: "",
+        inputSchema: {},
+        serverName: "s1",
+      },
     ];
-    (manager as unknown as { servers: Map<string, { name: string; enabled: boolean; transport: string }> }).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
+    (
+      manager as unknown as {
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
 
     manager.setToolPermission("s1:dangerous", "blocked");
 
@@ -381,17 +516,45 @@ describe("CodePilotMCPManager", () => {
   });
 
   it("returns approval request for approval-required tool", async () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }>; servers: Map<string, { name: string; enabled: boolean; transport: string }> }).tools = [
-      { id: "s1:write", name: "write", description: "", inputSchema: {}, serverName: "s1" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).tools = [
+      {
+        id: "s1:write",
+        name: "write",
+        description: "",
+        inputSchema: {},
+        serverName: "s1",
+      },
     ];
-    (manager as unknown as { servers: Map<string, { name: string; enabled: boolean; transport: string }> }).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
+    (
+      manager as unknown as {
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
 
     manager.setToolPermission("s1:write", "approval");
 
-    const { result, approvalRequest, approvalPromise } = await manager.executeTool(
-      "s1:write",
-      { path: "/tmp/file.txt", content: "hello" },
-    );
+    const { result, approvalRequest, approvalPromise } =
+      await manager.executeTool("s1:write", {
+        path: "/tmp/file.txt",
+        content: "hello",
+      });
 
     expect(result.isError).toBe(false);
     expect(result.content[0]!.text).toContain("requires approval");
@@ -407,10 +570,37 @@ describe("CodePilotMCPManager", () => {
   });
 
   it("bypasses approval when forceApproved is true", async () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }>; servers: Map<string, { name: string; enabled: boolean; transport: string }> }).tools = [
-      { id: "s1:exec", name: "exec", description: "", inputSchema: {}, serverName: "s1" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).tools = [
+      {
+        id: "s1:exec",
+        name: "exec",
+        description: "",
+        inputSchema: {},
+        serverName: "s1",
+      },
     ];
-    (manager as unknown as { servers: Map<string, { name: string; enabled: boolean; transport: string }> }).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
+    (
+      manager as unknown as {
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
 
     manager.setToolPermission("s1:exec", "approval");
 
@@ -450,10 +640,37 @@ describe("CodePilotMCPManager", () => {
   // --- Audit ---
 
   it("records audit entries", async () => {
-    (manager as unknown as { tools: Array<{ id: string; name: string; description: string; inputSchema: Record<string, unknown>; serverName: string }>; servers: Map<string, { name: string; enabled: boolean; transport: string }> }).tools = [
-      { id: "s1:bad", name: "bad", description: "", inputSchema: {}, serverName: "s1" },
+    (
+      manager as unknown as {
+        tools: Array<{
+          id: string;
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          serverName: string;
+        }>;
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).tools = [
+      {
+        id: "s1:bad",
+        name: "bad",
+        description: "",
+        inputSchema: {},
+        serverName: "s1",
+      },
     ];
-    (manager as unknown as { servers: Map<string, { name: string; enabled: boolean; transport: string }> }).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
+    (
+      manager as unknown as {
+        servers: Map<
+          string,
+          { name: string; enabled: boolean; transport: string }
+        >;
+      }
+    ).servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
     manager.setToolPermission("s1:bad", "blocked");
 
     await manager.executeTool("s1:bad", {});
