@@ -1,0 +1,265 @@
+{
+  "name": "codepilot-ai",
+  "displayName": "CodePilot AI",
+  "description": "Production-Grade Agentic Software Engineering Platform for VS Code",
+  "version": "0.1.0",
+  "publisher": "codepilot",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "assistant",
+    "ollama",
+    "llm",
+    "code-generation",
+    "code-review"
+  ],
+  "icon": "resources/icon.png",
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:codepilot.chat",
+    "onCommand:codepilot.openAgent",
+    "onCommand:codepilot.runAgent",
+    "onCommand:codepilot.explainSelection",
+    "onCommand:codepilot.refactorSelection",
+    "onCommand:codepilot.generateTests",
+    "onCommand:codepilot.reviewFile",
+    "onCommand:codepilot.reviewChanges",
+    "onCommand:codepilot.analyzeRepository",
+    "onCommand:codepilot.createPlan",
+    "onCommand:codepilot.stopAgent",
+    "onCommand:codepilot.refreshModels",
+    "onCommand:codepilot.openSettings",
+    "onCommand:codepilot.openCheckpoints",
+    "onCommand:codepilot.openMcpManager"
+  ],
+  "files": [
+    "dist/**",
+    "webview/**",
+    "resources/**"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codepilot.openAgent",
+        "title": "CodePilot: Open Agent"
+      },
+      {
+        "command": "codepilot.explainSelection",
+        "title": "CodePilot: Explain Selection"
+      },
+      {
+        "command": "codepilot.refactorSelection",
+        "title": "CodePilot: Refactor Selection"
+      },
+      {
+        "command": "codepilot.generateTests",
+        "title": "CodePilot: Generate Tests"
+      },
+      {
+        "command": "codepilot.reviewFile",
+        "title": "CodePilot: Review File"
+      },
+      {
+        "command": "codepilot.reviewChanges",
+        "title": "CodePilot: Review Changes"
+      },
+      {
+        "command": "codepilot.analyzeRepository",
+        "title": "CodePilot: Analyze Repository"
+      },
+      {
+        "command": "codepilot.createPlan",
+        "title": "CodePilot: Create Plan"
+      },
+      {
+        "command": "codepilot.runAgent",
+        "title": "CodePilot: Run Agent"
+      },
+      {
+        "command": "codepilot.stopAgent",
+        "title": "CodePilot: Stop Agent"
+      },
+      {
+        "command": "codepilot.refreshModels",
+        "title": "CodePilot: Refresh Models"
+      },
+      {
+        "command": "codepilot.openSettings",
+        "title": "CodePilot: Open Settings"
+      },
+      {
+        "command": "codepilot.openCheckpoints",
+        "title": "CodePilot: Open Checkpoints"
+      },
+      {
+        "command": "codepilot.openMcpManager",
+        "title": "CodePilot: Open MCP Manager"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codepilot",
+          "title": "CodePilot AI",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "codepilot": [
+        {
+          "type": "webview",
+          "id": "codepilot.chat",
+          "name": "CodePilot Agent"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CodePilot AI",
+      "properties": {
+        "codepilot.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "openai",
+            "anthropic",
+            "google",
+            "bedrock",
+            "mistral",
+            "openai-compatible"
+          ],
+          "description": "AI model provider"
+        },
+        "codepilot.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model ID to use (leave empty for provider default)"
+        },
+        "codepilot.privacyMode": {
+          "type": "string",
+          "default": "local",
+          "enum": ["local", "hybrid", "cloud"],
+          "description": "Privacy mode: local (no data leaves machine), hybrid, or cloud"
+        },
+        "codepilot.agentMode": {
+          "type": "string",
+          "default": "act",
+          "enum": ["ask", "plan", "act", "review", "auto"],
+          "description": "Default agent mode"
+        },
+        "codepilot.localAI.ollama.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API base URL"
+        },
+        "codepilot.localAI.ollama.model": {
+          "type": "string",
+          "default": "",
+          "description": "Ollama model to use"
+        },
+        "codepilot.localAI.ollama.contextLength": {
+          "type": "number",
+          "default": 32768,
+          "description": "Context window length for Ollama models"
+        },
+        "codepilot.localAI.ollama.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "description": "Temperature for Ollama inference"
+        },
+        "codepilot.localAI.ollama.numPredict": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens to predict"
+        },
+        "codepilot.localAI.ollama.keepAlive": {
+          "type": "number",
+          "default": 5,
+          "description": "Keep model loaded for N minutes"
+        },
+        "codepilot.autoApproval.read": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-approve read operations"
+        },
+        "codepilot.autoApproval.write": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve write operations"
+        },
+        "codepilot.autoApproval.terminal": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve terminal commands"
+        },
+        "codepilot.autoApproval.git": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve git operations"
+        },
+        "codepilot.maxIterations": {
+          "type": "number",
+          "default": 50,
+          "description": "Maximum agent iterations per turn"
+        },
+        "codepilot.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable telemetry (opt-in)"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "codepilot.openAgent",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      },
+      {
+        "command": "codepilot.stopAgent",
+        "key": "ctrl+shift+."
+      },
+      {
+        "command": "codepilot.explainSelection",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "dev": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "clean": "rm -rf dist out"
+  },
+  "dependencies": {
+    "@cline/sdk": "^0.0.75",
+    "@cline/core": "^0.0.75",
+    "@codepilot/agent-runtime": "workspace:*",
+    "@codepilot/changeset-engine": "workspace:*",
+    "@codepilot/context-engine": "workspace:*",
+    "@codepilot/mcp-manager": "workspace:*",
+    "@codepilot/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "@vscode/vsce": "^3.2.0"
+  }
+}

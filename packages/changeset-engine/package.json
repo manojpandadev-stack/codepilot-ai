@@ -1,0 +1,14 @@
+{
+  "name": "@codepilot/changeset-engine",
+  "version": "0.1.0",
+  "description": "Real ChangeSet/Diff/Approval lifecycle for CodePilot AI",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
+  }
+}

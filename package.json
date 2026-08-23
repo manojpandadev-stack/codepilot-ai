@@ -1,0 +1,33 @@
+{
+  "name": "codepilot-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CodePilot AI — Production-Grade Agentic Software Engineering Platform",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:extension": "pnpm --filter codepilot-ai build",
+    "build:packages": "pnpm --dir packages -r build",
+    "build:webview": "pnpm --filter @codepilot/webview build",
+    "dev:extension": "pnpm --filter @codepilot/vscode-extension dev",
+    "dev:webview": "pnpm --filter @codepilot/webview dev",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r clean",
+    "format": "prettier --write 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts'"
+  },
+  "devDependencies": {
+    "@cline/agents": "^0.0.75",
+    "@cline/core": "^0.0.75",
+    "@types/node": "^22.0.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.7"
+  }
+}

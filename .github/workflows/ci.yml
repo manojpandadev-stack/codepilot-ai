@@ -1,0 +1,141 @@
+name: CodePilot AI CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typescript-build:
+    name: TypeScript Build & Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Typecheck all packages
+        run: |
+          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
+            echo "Checking $pkg..."
+            cd packages/$pkg && npx tsc --noEmit && cd ../..
+          done
+
+      - name: Run all tests
+        run: pnpm exec vitest run
+
+      - name: Build all packages
+        run: |
+          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
+            echo "Building $pkg..."
+            cd packages/$pkg && npx tsc -p tsconfig.json && cd ../..
+          done
+
+  java-build:
+    name: Java Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and test
+        run: cd services/control-plane && mvn clean verify -B
+
+  extension-build:
+    name: VS Code Extension Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Build TypeScript packages
+        run: |
+          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
+            cd packages/$pkg && npx tsc -p tsconfig.json && cd ../..
+          done
+
+      - name: Build webview
+        run: cd apps/webview && npx vite build
+
+      - name: Build extension
+        run: |
+          cd apps/vscode-extension
+          cp -r ../webview/dist/* dist/ 2>/dev/null || true
+          node esbuild.mjs
+
+      - name: Package VSIX
+        run: |
+          cd apps/vscode-extension
+          npx @vscode/vsce package --no-dependencies --allow-missing-repository
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codepilot-ai-vsix
+          path: apps/vscode-extension/*.vsix
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Docker Compose
+        run: docker compose config
+
+      - name: Build control plane
+        run: docker compose build control-plane
+
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Check no type errors
+        run: |
+          for pkg in shared agent-runtime model-gateway policy-engine context-engine event-engine memory-engine tool-engine git-engine repository-engine rag-engine mcp-manager; do
+            cd packages/$pkg && npx tsc --noEmit && cd ../..
+          done
