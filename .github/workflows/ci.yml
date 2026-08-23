@@ -125,6 +125,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts --reporter=append-only --fetch-retries=5 --fetch-timeout=120000
 
+      - name: Build workspace packages
+        run: pnpm build:packages
+
       - name: Check no type errors
         run: pnpm -r typecheck
 
