@@ -10,6 +10,15 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+
+export {
+  MCPConfigStore,
+  REDACTED_ENV_PLACEHOLDER,
+  redactEnvForPersistence,
+  restoreEnvFromPersistence,
+} from "./config-store.js";
 
 // ============================================================================
 // Types
@@ -38,6 +47,27 @@ export interface MCPTool {
 export interface MCPToolResult {
   content: Array<{ type: string; text?: string }>;
   isError?: boolean;
+}
+
+export type MCPServerHealthStatus = "connected" | "disconnected" | "error";
+
+export interface MCPServerHealth {
+  status: MCPServerHealthStatus;
+  connectedAt?: number;
+  toolCount: number;
+  lastError?: string;
+}
+
+export interface MCPResource {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface MCPPrompt {
+  name: string;
+  description?: string;
 }
 
 export type ToolPermissionLevel = "auto" | "approval" | "blocked";
@@ -257,6 +287,9 @@ export class CodePilotMCPManager {
   private toolPermissions: Map<string, ToolPermissionLevel> = new Map();
   private approvalManager: MCPApprovalManager;
   private auditLog: AuditEntry[] = [];
+  private health = new Map<string, MCPServerHealth>();
+  private resources = new Map<string, MCPResource[]>();
+  private prompts = new Map<string, MCPPrompt[]>();
 
   constructor(options?: { approvalTimeoutMs?: number }) {
     this.approvalManager = new MCPApprovalManager({
@@ -268,6 +301,10 @@ export class CodePilotMCPManager {
 
   async addServer(config: MCPServerConfig): Promise<void> {
     this.servers.set(config.name, config);
+    this.health.set(config.name, {
+      status: "disconnected",
+      toolCount: 0,
+    });
     if (config.enabled) {
       await this.connectServer(config.name);
     }
@@ -277,6 +314,9 @@ export class CodePilotMCPManager {
     await this.disconnectServer(name);
     this.servers.delete(name);
     this.tools = this.tools.filter((t) => t.serverName !== name);
+    this.health.delete(name);
+    this.resources.delete(name);
+    this.prompts.delete(name);
   }
 
   async enableServer(name: string): Promise<void> {
@@ -295,6 +335,13 @@ export class CodePilotMCPManager {
     }
   }
 
+  /** Reconnect a server (disconnect + connect). Returns the new state. */
+  async reconnect(name: string): Promise<MCPServerHealth> {
+    await this.disconnectServer(name);
+    await this.connectServer(name);
+    return this.getServerStatus(name);
+  }
+
   listServers(): MCPServerConfig[] {
     return Array.from(this.servers.values());
   }
@@ -309,47 +356,16 @@ export class CodePilotMCPManager {
     const config = this.servers.get(name);
     if (!config || !config.enabled) return false;
 
+    let client: Client;
     try {
-      if (config.transport === "stdio" && config.command) {
-        const transport = new StdioClientTransport({
-          command: config.command,
-          args: config.args ?? [],
-          env: config.env as Record<string, string>,
-        });
-
-        const client = new Client({
-          name: "codepilot-ai",
-          version: "0.1.0",
-        });
-
-        await client.connect(transport);
-        this.clients.set(name, client);
-
-        // Discover tools
-        const response = await client.listTools();
-        for (const tool of response.tools) {
-          const toolName = tool.name;
-          const toolId = `${name}:${toolName}`;
-          this.tools.push({
-            id: toolId,
-            name: toolName,
-            description: tool.description ?? "",
-            inputSchema: (tool.inputSchema as Record<string, unknown>) ?? {},
-            serverName: name,
-          });
-        }
-
-        this.audit({
-          timestamp: Date.now(),
-          server: name,
-          tool: "*",
-          action: "connected",
-          detail: `Discovered ${response.tools.length} tools`,
-        });
-        return true;
-      }
+      client = await this.createConnectedClient(config);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      this.health.set(name, {
+        status: "error",
+        toolCount: 0,
+        lastError: msg,
+      });
       this.audit({
         timestamp: Date.now(),
         server: name,
@@ -357,8 +373,131 @@ export class CodePilotMCPManager {
         action: "connect_failed",
         detail: msg,
       });
+      return false;
     }
-    return false;
+
+    this.clients.set(name, client);
+    await this.afterConnect(name, config, client);
+    return true;
+  }
+
+  /**
+   * Build the transport for a server config and connect a client.
+   * Unsupported or misconfigured transports throw explicitly — never a
+   * silent fallback to a different transport type.
+   */
+  private async createConnectedClient(
+    config: MCPServerConfig,
+  ): Promise<Client> {
+    if (config.transport === "stdio") {
+      if (!config.command) {
+        throw new Error(
+          `stdio transport requires a command for server '${config.name}'`,
+        );
+      }
+      const transport = new StdioClientTransport({
+        command: config.command,
+        args: config.args ?? [],
+        env: config.env as Record<string, string>,
+      });
+      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
+      await client.connect(transport);
+      return client;
+    }
+
+    if (config.transport === "streamable-http") {
+      if (!config.url || !/^https?:\/\//i.test(config.url)) {
+        throw new Error(
+          `streamable-http transport requires an http(s) url for server '${config.name}'`,
+        );
+      }
+      const transport = new StreamableHTTPClientTransport(new URL(config.url), {
+        requestInit: { headers: buildHttpHeaders(config) },
+      });
+      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
+      await client.connect(transport);
+      return client;
+    }
+
+    if (config.transport === "sse") {
+      if (!config.url || !/^https?:\/\//i.test(config.url)) {
+        throw new Error(
+          `sse transport requires an http(s) url for server '${config.name}'`,
+        );
+      }
+      const transport = new SSEClientTransport(new URL(config.url), {
+        requestInit: { headers: buildHttpHeaders(config) },
+      });
+      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
+      await client.connect(transport);
+      return client;
+    }
+
+    throw new Error(
+      `unsupported MCP transport '${String(config.transport)}' for server '${config.name}'`,
+    );
+  }
+
+  /** Shared post-connect discovery: tools, resources, prompts, health, audit. */
+  private async afterConnect(
+    name: string,
+    _config: MCPServerConfig,
+    client: Client,
+  ): Promise<void> {
+    const response = await client.listTools();
+    for (const tool of response.tools) {
+      const toolName = tool.name;
+      const toolId = `${name}:${toolName}`;
+      this.tools.push({
+        id: toolId,
+        name: toolName,
+        description: tool.description ?? "",
+        inputSchema: (tool.inputSchema as Record<string, unknown>) ?? {},
+        serverName: name,
+      });
+    }
+
+    this.health.set(name, {
+      status: "connected",
+      connectedAt: Date.now(),
+      toolCount: response.tools.length,
+    });
+
+    // Optional capability discovery: resources and prompts.
+    try {
+      const res = await client.listResources();
+      this.resources.set(
+        name,
+        res.resources.map((r) => ({
+          uri: r.uri,
+          name: r.name ?? "",
+          description: r.description ?? undefined,
+          mimeType: r.mimeType ?? undefined,
+        })),
+      );
+    } catch {
+      this.resources.set(name, []);
+    }
+    try {
+      const prompts = await client.listPrompts();
+      this.prompts.set(
+        name,
+        prompts.prompts.map((p) => ({
+          name: p.name,
+          description: p.description ?? undefined,
+        })),
+      );
+    } catch {
+      this.prompts.set(name, []);
+    }
+
+    this.audit({
+      timestamp: Date.now(),
+      server: name,
+      tool: "*",
+      action: "connected",
+      detail: `Discovered ${response.tools.length} tools`,
+    });
   }
 
   async disconnectServer(name: string): Promise<void> {
@@ -371,6 +510,9 @@ export class CodePilotMCPManager {
       }
       this.clients.delete(name);
     }
+    this.health.set(name, { status: "disconnected", toolCount: 0 });
+    this.resources.delete(name);
+    this.prompts.delete(name);
   }
 
   // ---- Tool Discovery ----
@@ -643,6 +785,69 @@ export class CodePilotMCPManager {
     return result;
   }
 
+  // ---- Health, Resources and Prompts ----
+
+  /** Current health of a server (undefined when the server is unknown). */
+  getServerStatus(name: string): MCPServerHealth {
+    return this.health.get(name) ?? { status: "disconnected", toolCount: 0 };
+  }
+
+  /** Health for every configured server. */
+  listServerStatuses(): Array<{ name: string; health: MCPServerHealth }> {
+    return Array.from(this.servers.keys()).map((name) => ({
+      name,
+      health: this.getServerStatus(name),
+    }));
+  }
+
+  /** Resources exposed by a connected server. */
+  listResources(name: string): MCPResource[] {
+    return this.resources.get(name) ?? [];
+  }
+
+  /** Read a resource from a connected server (requires approval). */
+  async readResource(
+    name: string,
+    uri: string,
+    options?: { forceApproved?: boolean },
+  ): Promise<{
+    contents: Array<{ uri: string; text?: string; mimeType?: string }>;
+    isError: boolean;
+  }> {
+    const client = this.clients.get(name);
+    if (!client) {
+      return { contents: [], isError: true };
+    }
+    const permission = this.getToolPermission(`server:${name}`);
+    if (permission === "blocked" && !options?.forceApproved) {
+      return { contents: [], isError: true };
+    }
+    try {
+      const result = await client.readResource({ uri });
+      const contents = (result.contents ?? []).map((c) => ({
+        uri: c.uri,
+        text: "text" in c && typeof c.text === "string" ? c.text : undefined,
+        mimeType: c.mimeType ?? undefined,
+      }));
+      return { contents, isError: false };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.audit({
+        timestamp: Date.now(),
+        server: name,
+        tool: "*",
+        action: "resource_read_failed",
+        detail: msg,
+      });
+      return { contents: [], isError: true };
+    }
+  }
+
+  /** Prompts exposed by a connected server. */
+  listPrompts(name: string): MCPPrompt[] {
+    return this.prompts.get(name) ?? [];
+  }
+
   // ---- Approval Manager Access ----
 
   getApprovalManager(): MCPApprovalManager {
@@ -713,4 +918,18 @@ export function parseToolId(
     serverName: toolId.slice(0, idx),
     toolName: toolId.slice(idx + 1),
   };
+}
+
+/**
+ * HTTP transport headers: only non-secret config fields (a bearer token
+ * supplied via the redacted env round-trip) are forwarded. Env values that
+ * were persisted redacted are restored by MCPConfigStore before connect.
+ */
+function buildHttpHeaders(config: MCPServerConfig): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = config.env?.["MCP_AUTH_TOKEN"];
+  if (token && token !== "[REDACTED]") {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
 }

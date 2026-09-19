@@ -6,13 +6,17 @@ CodePilot AI is designed as a **local-first, privacy-conscious** AI coding assis
 
 ## Privacy Modes
 
-| Mode | Description |
-|------|-------------|
+| Mode           | Description                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------- |
 | **LOCAL ONLY** | All model inference happens locally. No source code leaves the machine. No cloud API calls. |
-| **HYBRID** | User explicitly selects which operations may use cloud providers. All others stay local. |
-| **CLOUD** | Selected cloud provider handles inference. Source code is sent to the provider's API. |
+| **HYBRID**     | Remote providers are permitted where configured; turns that stay on local providers keep local-only guarantees. |
+| **CLOUD**      | Selected cloud provider handles inference. Source code is sent to the provider's API.       |
 
-The current privacy mode is displayed prominently in the UI. **CodePilot AI never silently sends source code to external services.**
+The current privacy mode is displayed prominently in the UI. **CodePilot AI never silently sends source code to external services** — remote use under LOCAL ONLY is refused loudly, not downgraded quietly.
+
+> CodePilot's guarantees end where your data leaves for a provider: once
+> source code reaches a cloud provider's API, that provider's own data
+> policy governs it. Choose LOCAL ONLY when nothing may leave the machine.
 
 ## Tool Governance
 
@@ -24,18 +28,18 @@ Agent → Tool Request → PolicyEngine → Permission Decision → Execution
 
 ### Default Tool Permissions
 
-| Tool | Permission | Category |
-|------|-----------|----------|
-| `read_files` | AUTO | read |
-| `search` | AUTO | read |
-| `git_diff` | AUTO | read |
-| `git_status` | AUTO | read |
-| `list_directory` | AUTO | read |
-| `write_file` | APPROVAL | write |
-| `apply_patch` | APPROVAL | write |
-| `bash` | APPROVAL | execute |
-| `web_fetch` | APPROVAL | network |
-| `web_search` | APPROVAL | network |
+| Tool             | Permission | Category |
+| ---------------- | ---------- | -------- |
+| `read_files`     | AUTO       | read     |
+| `search`         | AUTO       | read     |
+| `git_diff`       | AUTO       | read     |
+| `git_status`     | AUTO       | read     |
+| `list_directory` | AUTO       | read     |
+| `write_file`     | APPROVAL   | write    |
+| `apply_patch`    | APPROVAL   | write    |
+| `bash`           | APPROVAL   | execute  |
+| `web_fetch`      | APPROVAL   | network  |
+| `web_search`     | APPROVAL   | network  |
 
 ### Blocked Commands
 
@@ -79,7 +83,8 @@ The `CommandValidator` class applies regex-based security checks before any shel
 
 ### Redaction
 
-The `MemoryEngine.sanitizeValue()` method detects and redacts:
+A single canonical scrubber in `@codepilot/shared` (`scrubSecretsText`, exposed
+as `redactSecrets` by the audit logger) detects and redacts:
 
 - `API_KEY=...`
 - `SECRET=...`
@@ -88,9 +93,14 @@ The `MemoryEngine.sanitizeValue()` method detects and redacts:
 - `BEARER ...`
 - `sk-...` (OpenAI-style keys)
 
+Every audit path — the in-memory ring and the persistent JSONL sink — funnels
+through it, so no second redaction implementation can drift.
+
 ### Memory Safety
 
-The memory system never stores credentials. All memory values are sanitized before persistence.
+Credentials are never persisted: task history, audit entries, and provider
+usage records store redacted metadata only. Provider API keys live exclusively
+in VS Code SecretStorage.
 
 ## WebView Security
 
@@ -130,20 +140,21 @@ Audit logs are stored locally and never sent externally.
 
 ## Offline Mode
 
-When operating in LOCAL ONLY mode with Ollama:
+When operating in LOCAL ONLY mode with Ollama, CodePilot itself makes no
+external network requests:
 
-- No internet connection required
-- No telemetry is sent
-- No external network requests are made
-- All features (chat, editing, Git, tests, RAG) work offline
+- No internet connection required by CodePilot
+- No telemetry is sent (telemetry is opt-in and defaults off)
+- Chat, editing, git, terminal, and test tooling work offline
 - Local MCP servers continue to function
 
 ## Dependency Security
 
-- Dependencies are audited via CI/CD
-- No hardcoded secrets in any dependency
-- Docker images use minimal base images
-- Flyway migrations are versioned and immutable
+- Dependencies are installed from lockfile-pinned versions; CI runs the
+  test suite on changes
+- No hardcoded secrets in the CodePilot codebase (enforced by redaction
+  tests and secret sweeps)
+- Docker infrastructure uses minimal base images
 
 ## Reporting Security Issues
 

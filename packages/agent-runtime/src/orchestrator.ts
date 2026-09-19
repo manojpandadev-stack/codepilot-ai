@@ -458,10 +458,15 @@ export class MultiAgentOrchestrator {
   /**
    * Execute a task through the multi-agent pipeline.
    * Creates a Task DAG, assigns agents, and executes with real dependency awareness.
+   *
+   * When `opts.roles` is provided, the DAG is built from those roles instead
+   * of classifying the description (used by the Team UI so role selection is
+   * real). Omitting it preserves the legacy classify-from-text behavior.
    */
   async execute(
     description: string,
     mode: "plan" | "act" | "review" = "act",
+    opts?: { roles?: AgentRole[] },
   ): Promise<{
     results: Array<{
       role: AgentRole;
@@ -475,8 +480,11 @@ export class MultiAgentOrchestrator {
     this.abortController = new AbortController();
     this.activeAgents.clear();
 
-    // Classify the task
-    const roles = TaskDAG.classifyTask(description);
+    // Classify the task (or honor an explicit role selection)
+    const roles =
+      opts?.roles && opts.roles.length > 0
+        ? [...opts.roles]
+        : TaskDAG.classifyTask(description);
     this.currentDAG = TaskDAG.buildFromRoles(roles, description);
 
     // Validate DAG
@@ -875,6 +883,31 @@ export class MultiAgentOrchestrator {
       this.currentDAG?.markCancelled(taskId);
     }
     this.activeAgents.clear();
+  }
+
+  private disposed = false;
+
+  /**
+   * Dispose the orchestrator: cancel in-flight work, drop listeners and
+   * release the DAG reference so completed/cancelled sessions retain
+   * nothing. Idempotent.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    try {
+      this.cancel();
+    } catch {
+      // best effort
+    }
+    this.listeners.clear();
+    this.currentDAG = null;
+    this.abortController = null;
+  }
+
+  /** Number of active listeners (lifecycle introspection for tests). */
+  listenerCount(): number {
+    return this.listeners.size;
   }
 
   /** Get the current task DAG */

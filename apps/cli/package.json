@@ -1,0 +1,27 @@
+{
+  "name": "@codepilot/cli",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "CodePilot AI — headless CLI for CI/automation",
+  "main": "dist/cli.js",
+  "bin": {
+    "codepilot": "./bin/codepilot"
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@codepilot/agent-runtime": "workspace:*",
+    "@codepilot/changeset-engine": "workspace:*",
+    "@codepilot/context-engine": "workspace:*",
+    "@codepilot/mcp-manager": "workspace:*",
+    "@codepilot/model-gateway": "workspace:*",
+    "@codepilot/shared": "workspace:*",
+    "@codepilot/tool-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "esbuild": "^0.24.0"
+  }
+}

@@ -5,7 +5,42 @@
  * test intelligence, code review, security analysis, and task DAG management.
  */
 
-import { createTool } from "@cline/agents";
+// CodePilot-owned tool factory (native agent-runtime contracts).
+// Kept local to avoid a cross-package cycle: the shape is the JSON-schema
+// tool contract every provider speaks.
+function createTool<TInput, TOutput>(config: {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  execute: (
+    input: TInput,
+    context: {
+      agentId: string;
+      sessionId?: string;
+      conversationId?: string;
+      iteration: number;
+      toolCallId?: string;
+      signal?: AbortSignal;
+    },
+  ) => Promise<TOutput>;
+}): {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  execute: (
+    input: TInput,
+    context: {
+      agentId: string;
+      sessionId?: string;
+      conversationId?: string;
+      iteration: number;
+      toolCallId?: string;
+      signal?: AbortSignal;
+    },
+  ) => Promise<TOutput>;
+} {
+  return config;
+}
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -301,8 +336,54 @@ function findAffectedTests(changedFiles: string[]): string[] {
 }
 
 // ============================================================================
-// Factory: Create all CodePilot tools
+// M3 — Production Tool Registry and Execution System
 // ============================================================================
+
+export * from "./m3/index.js";
+
+// ============================================================================
+// M4 — Permission / Approval / Security Pipeline
+// ============================================================================
+
+export * from "./m4/integration.js";
+export * from "./m4/live-bridge.js";
+export * from "./m4/policy-engine.js";
+export * from "./m4/approval-manager.js";
+export * from "./m4/risk-engine.js";
+export * from "./m4/security-validator.js";
+export type {
+  PermissionAction,
+  PermissionContext,
+  PermissionEvaluation,
+  PermissionPolicy,
+  PermissionScope,
+  RiskAssessment,
+  RiskLevel,
+  ApprovalStatus,
+  ApprovalResult,
+  ScopedPermission,
+  PermissionDecision as M4PermissionDecision,
+  ApprovalRequest as M4ApprovalRequest,
+} from "./m4/permission-types.js";
+
+// =============================================================================
+// M5 — File mutation / changeset / diff / checkpoints
+// =============================================================================
+export * from "./m5/index.js";
+
+// =============================================================================
+// M7 — Terminal sessions
+// =============================================================================
+export * from "./m7/terminal-session.js";
+
+// =============================================================================
+// M15 — Plugin / extension platform
+// =============================================================================
+export * from "./m15-plugin-platform.js";
+
+// =============================================================================
+// CodePilot-specific agent tools (native tool shape)
+// =============================================================================
 
 export function createCodePilotTools(workspaceRoot: string): any[] {
   return [

@@ -101,14 +101,14 @@ curl http://localhost:8081/actuator/health
 
 Open Settings (Ctrl+,) and search for "CodePilot":
 
-| Setting | Default | Description |
-|---|---|---|
-| `codepilot.provider` | `ollama` | AI provider |
-| `codepilot.model` | `qwen3:8b` | Model ID |
-| `codepilot.privacyMode` | `local` | Privacy mode (local/hybrid/cloud) |
-| `codepilot.agentMode` | `act` | Default agent mode |
-| `codepilot.localAI.ollama.baseUrl` | `http://localhost:11434` | Ollama URL |
-| `codepilot.maxIterations` | `50` | Max agent iterations |
+| Setting                            | Default                  | Description                       |
+| ---------------------------------- | ------------------------ | --------------------------------- |
+| `codepilot.provider`               | `ollama`                 | AI provider                       |
+| `codepilot.model`                  | `qwen3:8b`               | Model ID                          |
+| `codepilot.privacyMode`            | `local`                  | Privacy mode (local/hybrid/cloud) |
+| `codepilot.agentMode`              | `act`                    | Default agent mode                |
+| `codepilot.localAI.ollama.baseUrl` | `http://localhost:11434` | Ollama URL                        |
+| `codepilot.maxIterations`          | `50`                     | Max agent iterations              |
 
 ### Privacy Modes
 
@@ -122,8 +122,8 @@ Open Settings (Ctrl+,) and search for "CodePilot":
 VS Code Extension
 ├── React WebView (sidebar UI)
 ├── Extension Host (Node.js)
-├── Agent Runtime (Cline SDK)
-│   └── ClineCore
+├── Agent Runtime (CodePilot native engine)
+│   └── CodePilotRuntime → native sessions, tools, continuity
 ├── Provider Gateway
 │   ├── Ollama (local)
 │   ├── OpenAI

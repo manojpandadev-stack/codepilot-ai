@@ -51,3 +51,6 @@ coverage/
 *.tmp
 *.err
 
+# Benchmark run outputs (thresholds are committed; raw run results stay local)
+scripts/benchmark/results/
+

@@ -455,6 +455,29 @@ export class SelfHealingEngine {
     this.abortController?.abort();
   }
 
+  private disposed = false;
+
+  /**
+   * Dispose the engine: cancel in-flight healing and drop listeners so
+   * completed/cancelled sessions retain nothing. Idempotent.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    try {
+      this.cancel();
+    } catch {
+      // best effort
+    }
+    this.listeners.clear();
+    this.abortController = null;
+  }
+
+  /** Number of active listeners (lifecycle introspection for tests). */
+  listenerCount(): number {
+    return this.listeners.size;
+  }
+
   /** Subscribe to healing events. */
   subscribe(listener: HealingEventListener): () => void {
     this.listeners.add(listener);

@@ -5,6 +5,10 @@
   "version": "0.1.0",
   "publisher": "codepilot",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/manojpandadev-stack/codepilot-ai.git"
+  },
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -44,9 +48,11 @@
     "onCommand:codepilot.openMcpManager"
   ],
   "files": [
-    "dist/**",
-    "webview/**",
-    "resources/**"
+    "dist/extension.js",
+    "dist/webview.js",
+    "dist/node_modules/**",
+    "resources/**",
+    "LICENSE"
   ],
   "contributes": {
     "commands": [
@@ -131,16 +137,7 @@
         "codepilot.provider": {
           "type": "string",
           "default": "ollama",
-          "enum": [
-            "ollama",
-            "openai",
-            "anthropic",
-            "google",
-            "bedrock",
-            "mistral",
-            "openai-compatible"
-          ],
-          "description": "AI model provider"
+          "description": "AI model provider (id from the @codepilot/model-gateway catalogue)"
         },
         "codepilot.model": {
           "type": "string",
@@ -150,13 +147,23 @@
         "codepilot.privacyMode": {
           "type": "string",
           "default": "local",
-          "enum": ["local", "hybrid", "cloud"],
+          "enum": [
+            "local",
+            "hybrid",
+            "cloud"
+          ],
           "description": "Privacy mode: local (no data leaves machine), hybrid, or cloud"
         },
         "codepilot.agentMode": {
           "type": "string",
           "default": "act",
-          "enum": ["ask", "plan", "act", "review", "auto"],
+          "enum": [
+            "ask",
+            "plan",
+            "act",
+            "review",
+            "auto"
+          ],
           "description": "Default agent mode"
         },
         "codepilot.localAI.ollama.baseUrl": {
@@ -246,13 +253,14 @@
     "clean": "rm -rf dist out"
   },
   "dependencies": {
-    "@cline/sdk": "^0.0.75",
-    "@cline/core": "^0.0.75",
     "@codepilot/agent-runtime": "workspace:*",
+    "@codepilot/browser-engine": "workspace:*",
     "@codepilot/changeset-engine": "workspace:*",
     "@codepilot/context-engine": "workspace:*",
+    "@codepilot/model-gateway": "workspace:*",
     "@codepilot/mcp-manager": "workspace:*",
     "@codepilot/shared": "workspace:*",
+    "@codepilot/tool-engine": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {

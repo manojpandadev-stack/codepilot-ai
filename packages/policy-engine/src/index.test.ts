@@ -129,21 +129,21 @@ describe("PolicyEngine", () => {
     expect(result.enabled).toBe(false);
   });
 
-  it("toClineToolPolicies produces correct format", () => {
+  it("toNativeToolPolicies produces correct format", () => {
     const engine = createPolicyEngine();
-    const clinePolicies = engine.toClineToolPolicies();
-    expect(clinePolicies).toBeDefined();
-    expect(typeof clinePolicies).toBe("object");
+    const nativePolicies = engine.toNativeToolPolicies();
+    expect(nativePolicies).toBeDefined();
+    expect(typeof nativePolicies).toBe("object");
 
     // read_files should be auto-approved
-    expect(clinePolicies["read_files"]).toEqual({
+    expect(nativePolicies["read_files"]).toEqual({
       enabled: true,
       autoApprove: true,
     });
 
     // blocked tools should have enabled: false
     engine.setPolicy("test_tool", "blocked");
-    const updated = engine.toClineToolPolicies();
+    const updated = engine.toNativeToolPolicies();
     expect(updated["test_tool"]).toEqual({
       enabled: false,
       autoApprove: false,
@@ -273,9 +273,9 @@ describe("Plan Mode Enforcement", () => {
     expect(engine.checkPermission("write_file").enabled).toBe(true);
   });
 
-  it("toClineToolPolicies reflects plan mode", () => {
+  it("toNativeToolPolicies reflects plan mode", () => {
     const engine = createPolicyEngine({ initialMode: "plan" });
-    const policies = engine.toClineToolPolicies();
+    const policies = engine.toNativeToolPolicies();
     expect(policies["write_file"]?.enabled).toBe(false);
     expect(policies["read_files"]?.enabled).toBe(true);
   });

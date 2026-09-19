@@ -1,21 +1,25 @@
-import { Agent, createBuiltinTools } from "@cline/core";
-import type {
-  AgentRuntimeConfig,
-  AgentRuntimeEvent,
-  AgentTool,
-  AgentUsage,
-} from "@cline/agents";
 import type {
   CodePilotAgentConfig,
   AgentEvent,
   AgentEventListener,
 } from "./types.js";
+import type { AgentTool, AgentUsage } from "./native/types.js";
+import { runAgentLoop } from "./native/engine/agent-loop.js";
+import type { AgentLoopEvent } from "./native/engine/agent-loop.js";
+import type { ToolGate } from "./native/engine/tool-dispatch.js";
+import type { LlmProvider } from "./native/llm/types.js";
+import { createLlmProvider } from "./native/llm/registry.js";
 
 /**
- * CodePilotAgent wraps the Cline AgentRuntime (Agent) class directly.
+ * CodePilotAgent — the lightweight agent facade over the native engine.
+ *
+ * Independently implemented on the CodePilot-owned agent loop and LLM layer.
+ * Preserved surface: initialize/run/continue/abort/subscribe/dispose/
+ * listenerCount/getUsage, with the same event mapping the orchestrator and
+ * CLI-headless consumers rely on.
  */
 export class CodePilotAgent {
-  private agent: Agent | null = null;
+  private messages: import("./native/types.js").AgentMessage[] = [];
   private listeners = new Set<AgentEventListener>();
   private usage: AgentUsage = {
     inputTokens: 0,
@@ -23,54 +27,111 @@ export class CodePilotAgent {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
   };
+  private provider: LlmProvider | null = null;
+  private controller: AbortController | null = null;
+  private running = false;
 
   constructor(private readonly config: CodePilotAgentConfig) {}
 
   async initialize(): Promise<void> {
-    const tools: AgentTool[] = [];
-    if (this.config.enableTools !== false) {
-      tools.push(
-        ...createBuiltinTools({
-          cwd: this.config.workspaceRoot,
-          enableBash: true,
-          enableWebFetch: this.config.privacyMode !== "local",
-        }),
-      );
-    }
-    if (this.config.extraTools) tools.push(...this.config.extraTools);
-
-    this.agent = new Agent({
-      providerId: this.config.providerId,
-      modelId: this.config.modelId,
-      apiKey: this.config.apiKey,
-      baseUrl: this.config.baseUrl,
-      systemPrompt: this.buildSystemPrompt(),
-      tools,
-      maxIterations: this.config.maxIterations ?? 50,
-      hooks: {
-        onEvent: (event: AgentRuntimeEvent) => this.handleAgentEvent(event),
+    // Resolve the native provider for this session's config. The registry
+    // throws for remote providers without credentials — a permanent,
+    // user-actionable failure.
+    this.provider = createLlmProvider(
+      { providerId: this.config.providerId, modelId: this.config.modelId },
+      {
+        configs: [
+          {
+            providerId: this.config.providerId,
+            ...(this.config.apiKey ? { apiKey: this.config.apiKey } : {}),
+            ...(this.config.baseUrl ? { baseUrl: this.config.baseUrl } : {}),
+          },
+        ],
       },
-    } as AgentRuntimeConfig);
+    );
   }
 
   async run(message: string): Promise<{ text: string; usage: AgentUsage }> {
-    if (!this.agent) throw new Error("Agent not initialized.");
-    const result = await this.agent.run(message);
-    this.usage = result.usage;
-    return { text: result.outputText, usage: result.usage };
+    return this.execute(message);
   }
 
   async continue(
     message?: string,
   ): Promise<{ text: string; usage: AgentUsage }> {
-    if (!this.agent) throw new Error("Agent not initialized.");
-    const result = await this.agent.continue(message);
-    this.usage = result.usage;
-    return { text: result.outputText, usage: result.usage };
+    return this.execute(message ?? "Continue.");
+  }
+
+  private async execute(
+    message: string,
+  ): Promise<{ text: string; usage: AgentUsage }> {
+    if (!this.provider) throw new Error("Agent not initialized.");
+    if (this.running) throw new Error("Agent is already running.");
+    this.running = true;
+    this.controller = new AbortController();
+    const gate: ToolGate = async (request) => {
+      if (!this.config.requestApproval) {
+        // Fail closed — no permission pipeline configured.
+        return {
+          approved: false,
+          reason:
+            "Permission pipeline unavailable — tool execution blocked for safety",
+        };
+      }
+      try {
+        return await this.config.requestApproval({
+          toolCallId: request.toolCallId,
+          toolName: request.toolName,
+          input: request.input,
+        });
+      } catch (err) {
+        return {
+          approved: false,
+          reason: `Permission evaluation failed (deny-closed): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+    };
+
+    try {
+      const result = await runAgentLoop(
+        this.messages,
+        message,
+        {
+          provider: this.provider,
+          modelId: this.config.modelId,
+          sessionId: "codepilot-agent",
+          systemPrompt: this.buildSystemPrompt(),
+          tools: (this.config.extraTools ?? []) as AgentTool[],
+          gate,
+          maxIterations: this.config.maxIterations ?? 50,
+          ...(this.config.temperature !== undefined
+            ? { temperature: this.config.temperature }
+            : {}),
+          onEvent: (event: AgentLoopEvent) => this.handleLoopEvent(event),
+        },
+        this.controller.signal,
+      );
+      this.usage = result.usage;
+      if (result.reason === "error") {
+        this.emit({
+          type: "error",
+          error: result.error ?? "agent run failed",
+          recoverable: false,
+        });
+      }
+      if (result.reason === "aborted") {
+        this.emit({ type: "cancelled" });
+      }
+      return { text: result.text, usage: result.usage };
+    } finally {
+      this.running = false;
+      this.controller = null;
+    }
   }
 
   abort(): void {
-    this.agent?.abort();
+    this.controller?.abort();
     this.emit({ type: "cancelled" });
   }
 
@@ -79,6 +140,29 @@ export class CodePilotAgent {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  private disposed = false;
+
+  /**
+   * Dispose the agent wrapper: abort in-flight work and drop listeners so
+   * completed/cancelled sessions retain nothing. Idempotent.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    try {
+      this.controller?.abort();
+    } catch {
+      // best effort
+    }
+    this.listeners.clear();
+    this.provider = null;
+  }
+
+  /** Number of active listeners (lifecycle introspection for tests). */
+  listenerCount(): number {
+    return this.listeners.size;
   }
 
   getUsage(): AgentUsage {
@@ -105,54 +189,65 @@ export class CodePilotAgent {
       .join("\n");
   }
 
-  private handleAgentEvent(event: AgentRuntimeEvent): void {
+  private handleLoopEvent(event: AgentLoopEvent): void {
     switch (event.type) {
-      case "assistant-text-delta":
+      case "text_delta":
         this.emit({
           type: "text_delta",
           text: event.text,
-          accumulated: event.accumulatedText,
+          accumulated: event.accumulated,
         });
         break;
-      case "assistant-reasoning-delta":
+      case "reasoning_delta":
         this.emit({
           type: "reasoning_delta",
           text: event.text,
-          accumulated: event.accumulatedText,
+          accumulated: event.accumulated,
         });
         break;
-      case "tool-started":
+      case "tool_started":
         this.emit({
           type: "tool_started",
-          toolCallId: event.toolCall.toolCallId,
-          toolName: event.toolCall.toolName,
+          toolCallId: event.call.toolCallId,
+          toolName: event.toolName,
         });
         break;
-      case "tool-finished":
+      case "tool_completed":
         this.emit({
           type: "tool_completed",
-          toolCallId: event.toolCall.toolCallId,
-          toolName: event.toolCall.toolName,
-          output: null,
-          durationMs: 0,
+          toolCallId: event.call.toolCallId,
+          toolName: event.toolName,
+          output: event.output,
+          durationMs: event.durationMs,
         });
         break;
-      case "usage-updated":
+      case "tool_denied":
+        this.emit({
+          type: "tool_failed",
+          toolCallId: event.call.toolCallId,
+          toolName: event.toolName,
+          error: event.reason,
+        });
+        break;
+      case "usage":
         this.usage = event.usage;
         break;
-      case "run-finished":
-        this.emit({
-          type: "completed",
-          result: event.result.outputText,
-          usage: event.result.usage,
-        });
+      case "finish":
+        if (event.reason === "complete") {
+          this.emit({
+            type: "completed",
+            result: event.text,
+            usage: event.usage,
+          });
+        } else if (event.reason === "error") {
+          this.emit({
+            type: "error",
+            error: event.error ?? "agent run failed",
+            recoverable: false,
+          });
+        }
         break;
-      case "run-failed":
-        this.emit({
-          type: "error",
-          error: event.error.message,
-          recoverable: false,
-        });
+      default:
         break;
     }
   }

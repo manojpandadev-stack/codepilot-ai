@@ -38,7 +38,7 @@ function cleanup() {
   rmSync(testDir, { recursive: true, force: true });
 }
 
-function runTests() {
+async function runTests() {
   setup();
   const manager = new ChangeSetManager({ workspaceRoot: testDir });
   let passed = 0;
@@ -68,7 +68,7 @@ function runTests() {
     const cs = manager.createChangeSet("task-2", [
       { filePath: "src/App.java", proposedContent: "package com.demo;\npublic class App {\n    public String greet() { return \"Hi\"; }\n}\n" },
     ]);
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     assert(result.success === true, "Accept returned success");
     const content = readFileSync(join(testDir, "src/App.java"), "utf8");
     assert(content.includes("Hi"), "File content was updated to 'Hi'");
@@ -88,7 +88,7 @@ function runTests() {
       { filePath: "src/App.java", proposedContent: "CHANGE_A" },
       { filePath: "src/Service.java", proposedContent: "CHANGE_B" },
     ]);
-    const result = manager.acceptAll(cs.id);
+    const result = await manager.acceptAll(cs.id);
     assert(result.applied === 2, `All 2 changes applied (got ${result.applied})`);
     assert(readFileSync(join(testDir, "src/App.java"), "utf8") === "CHANGE_A", "App.java contains CHANGE_A");
     assert(readFileSync(join(testDir, "src/Service.java"), "utf8") === "CHANGE_B", "Service.java contains CHANGE_B");
@@ -124,7 +124,7 @@ function runTests() {
     ]);
     // External modification between proposal and accept
     writeFileSync(join(testDir, "src/App.java"), "USER_MODIFIED_THIS_EXTERNALLY");
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     assert(result.success === false, "Accept failed due to conflict");
     assert(cs.changes[0].status === "conflict", "Change status is conflict");
     assert(cs.changes[0].conflictInfo !== undefined, "Conflict info is present");
@@ -143,11 +143,11 @@ function runTests() {
     const cs = manager.createChangeSet("task-6", [
       { filePath: "src/App.java", proposedContent: "package com.demo;\npublic class App {\n    public String greet() { return \"AfterAccept\"; }\n}\n" },
     ]);
-    manager.acceptChange(cs.id, cs.changes[0].id);
+    await manager.acceptChange(cs.id, cs.changes[0].id);
     const afterAccept = readFileSync(join(testDir, "src/App.java"), "utf8");
     assert(afterAccept.includes("AfterAccept"), "File was modified after accept");
 
-    const rb = manager.rollbackChange(cs.id, cs.changes[0].id);
+    const rb = await manager.rollbackChange(cs.id, cs.changes[0].id);
     assert(rb.success === true, "Rollback succeeded");
     const afterRollback = readFileSync(join(testDir, "src/App.java"), "utf8");
     assert(afterRollback.includes("BeforeRollback"), "File restored to original after rollback");
@@ -165,7 +165,7 @@ function runTests() {
     const cs = manager.createChangeSet("task-7", [
       { filePath: newPath, proposedContent: "package com.demo;\npublic class NewService {}\n" },
     ]);
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     assert(result.success === true, "Accept succeeded for new file");
     assert(existsSync(join(testDir, newPath)), "File now exists on disk");
     assert(readFileSync(join(testDir, newPath), "utf8").includes("NewService"), "File contains correct content");
@@ -183,7 +183,7 @@ function runTests() {
       { filePath: "src/App.java", proposedContent: "ACCEPT_THIS" },
       { filePath: "src/Service.java", proposedContent: "REJECT_THIS" },
     ]);
-    manager.acceptChange(cs.id, cs.changes[0].id);
+    await manager.acceptChange(cs.id, cs.changes[0].id);
     manager.rejectChange(cs.id, cs.changes[1].id);
     assert(readFileSync(join(testDir, "src/App.java"), "utf8") === "ACCEPT_THIS", "App.java was accepted");
     assert(readFileSync(join(testDir, "src/Service.java"), "utf8") === "ALSO_KEEP", "Service.java was rejected and untouched");

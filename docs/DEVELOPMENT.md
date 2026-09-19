@@ -11,7 +11,7 @@ codepilot-ai/
 │
 ├── packages/
 │   ├── shared/                # Shared types and utilities
-│   ├── agent-runtime/         # Cline SDK integration, multi-agent orchestrator
+│   ├── agent-runtime/         # Native CodePilot agent runtime, multi-agent orchestrator
 │   ├── model-gateway/         # Provider abstraction (Ollama, OpenAI, etc.)
 │   ├── tool-engine/           # Tool definitions and execution
 │   ├── policy-engine/         # Tool permission governance
@@ -36,19 +36,19 @@ codepilot-ai/
 
 ## Technology Stack
 
-| Layer | Technology |
-|---|---|
-| Extension | TypeScript, VS Code API |
-| UI | React 19, Vite, Tailwind CSS |
-| Agent Runtime | Cline SDK 0.0.75 |
-| AI Provider | Ollama (local), OpenAI, Anthropic, Gemini |
-| Embeddings | Ollama nomic-embed-text |
-| Database | PostgreSQL 16 + pgvector |
-| Cache | Redis 7 |
-| Events | Apache Kafka |
-| Backend | Java 21, Spring Boot 3.5 |
-| Testing | Vitest (TS), JUnit 5 (Java) |
-| CI/CD | GitHub Actions |
+| Layer         | Technology                                |
+| ------------- | ----------------------------------------- |
+| Extension     | TypeScript, VS Code API                   |
+| UI            | React 19, Vite, Tailwind CSS              |
+| Agent Runtime | CodePilot native engine (TypeScript)          |
+| AI Provider   | Ollama (local), OpenAI, Anthropic, Gemini |
+| Embeddings    | Ollama nomic-embed-text                   |
+| Database      | PostgreSQL 16 + pgvector                  |
+| Cache         | Redis 7                                   |
+| Events        | Apache Kafka                              |
+| Backend       | Java 21, Spring Boot 3.5                  |
+| Testing       | Vitest (TS), JUnit 5 (Java)               |
+| CI/CD         | GitHub Actions                            |
 
 ## Development Workflow
 
@@ -107,6 +107,7 @@ code --install-extension apps/vscode-extension/codepilot-ai-0.1.0.vsix
 
 1. Create directory: `packages/my-package/`
 2. Add `package.json`:
+
 ```json
 {
   "name": "@codepilot/my-package",
@@ -136,6 +137,7 @@ code --install-extension apps/vscode-extension/codepilot-ai-0.1.0.vsix
   }
 }
 ```
+
 3. Add `tsconfig.json` extending the root
 4. Create `src/index.ts`
 5. Run `pnpm install`
@@ -183,17 +185,25 @@ mvn verify  # Includes integration tests
 
 ## Architecture Decisions
 
-### Why Cline SDK?
+### Why a CodePilot-owned native runtime?
 
-CodePilot AI uses the official Cline SDK (`@cline/sdk`, `@cline/core`, `@cline/agents`) as the agent runtime foundation. This provides:
+CodePilot AI runs on its own native TypeScript agent runtime
+(`@codepilot/agent-runtime`: sessions, agent loop, tool dispatch) and its
+own LLM provider layer (`@codepilot/llm` + native providers). This provides:
+
 - Proven agent loop implementation
 - Structured tool calling
 - Session persistence
 - Provider abstraction
 
+with no third-party runtime in the generation path. (Historical design
+documents under `docs/` may still describe the earlier delegated
+architecture; `docs/PROVIDERS.md` is the current provider contract.)
+
 ### Why pgvector?
 
 PostgreSQL with pgvector provides:
+
 - Vector similarity search for RAG
 - Hybrid search (semantic + keyword)
 - Incremental indexing
@@ -202,6 +212,7 @@ PostgreSQL with pgvector provides:
 ### Why qwen3:8b?
 
 `qwen3:8b` is the recommended local model because it:
+
 - Supports structured tool calls (not just text)
 - Has strong coding capability
 - Runs on 16GB RAM
@@ -210,6 +221,7 @@ PostgreSQL with pgvector provides:
 ### Modular Architecture
 
 Each package has a single responsibility:
+
 - Changes to the RAG engine don't affect the policy engine
 - The MCP manager can be used independently
 - The policy engine works with any tool provider

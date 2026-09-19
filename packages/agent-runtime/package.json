@@ -18,10 +18,12 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@cline/core": "^0.0.75",
-    "@cline/agents": "^0.0.75",
+    "@codepilot/llm": "workspace:*",
+    "@codepilot/model-gateway": "workspace:*",
     "@codepilot/shared": "workspace:*",
-    "@codepilot/policy-engine": "workspace:*"
+    "@codepilot/policy-engine": "workspace:*",
+    "@codepilot/tool-engine": "workspace:*",
+    "@codepilot/context-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

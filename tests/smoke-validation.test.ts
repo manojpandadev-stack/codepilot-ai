@@ -318,11 +318,11 @@ describe("ChangeSet Engine", () => {
     expect(cs.changes[0].status).toMatch(/pending/i);
   });
 
-  it("accept applies change to filesystem", () => {
+  it("accept applies change to filesystem", async () => {
     const cs = csm.createChangeSet("task-2", [
       { filePath: "changeset-test.txt", proposedContent: "accepted content" },
     ]);
-    const result = csm.acceptChange(cs.id, cs.changes[0].id);
+    const result = await csm.acceptChange(cs.id, cs.changes[0].id);
     expect(result.success).toBe(true);
     const content = fs.readFileSync(changeSetFile, "utf-8");
     expect(content).toBe("accepted content");
@@ -338,26 +338,26 @@ describe("ChangeSet Engine", () => {
     expect(content).toBe("original content");
   });
 
-  it("rollback restores original content", () => {
+  it("rollback restores original content", async () => {
     fs.writeFileSync(changeSetFile, "original content", "utf-8");
     const cs = csm.createChangeSet("task-4", [
       { filePath: "changeset-test.txt", proposedContent: "rolled back content" },
     ]);
-    csm.acceptChange(cs.id, cs.changes[0].id);
-    const rbResult = csm.rollbackChange(cs.id, cs.changes[0].id);
+    await csm.acceptChange(cs.id, cs.changes[0].id);
+    const rbResult = await csm.rollbackChange(cs.id, cs.changes[0].id);
     expect(rbResult.success).toBe(true);
     const content = fs.readFileSync(changeSetFile, "utf-8");
     expect(content).toBe("original content");
   });
 
-  it("detects external file modification conflict", () => {
+  it("detects external file modification conflict", async () => {
     fs.writeFileSync(changeSetFile, "user modified this", "utf-8");
     const cs = csm.createChangeSet("task-5", [
       { filePath: "changeset-test.txt", proposedContent: "agent change" },
     ]);
     // Modify file externally after ChangeSet was created
     fs.writeFileSync(changeSetFile, "external change", "utf-8");
-    const result = csm.acceptChange(cs.id, cs.changes[0].id);
+    const result = await csm.acceptChange(cs.id, cs.changes[0].id);
     // Should detect conflict or handle gracefully
     expect(result).toBeDefined();
   });

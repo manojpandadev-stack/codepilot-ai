@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { computeDiffStats, type FileChange } from "./lib/messages.js";
+import { IconCheck, IconX } from "./lib/icons";
+import { Button, EmptyState } from "./lib/ui";
 
 // Re-export for existing consumers
 export type { FileChange } from "./lib/messages.js";
@@ -14,43 +16,65 @@ interface DiffViewerProps {
   pendingApproval: boolean;
 }
 
-const STATUS_STYLES: Record<FileChange["status"], string> = {
-  added: "bg-green-900 text-green-300",
-  modified: "bg-yellow-900 text-yellow-300",
-  deleted: "bg-red-900 text-red-300",
-  applied: "bg-blue-900 text-blue-300",
-  rolled_back: "bg-gray-800 text-gray-300",
+const STATUS_META: Record<
+  FileChange["status"],
+  { letter: string; label: string; cls: string }
+> = {
+  added: { letter: "A", label: "added", cls: "text-vscode-success-fg" },
+  modified: { letter: "M", label: "modified", cls: "text-vscode-warning-fg" },
+  deleted: { letter: "D", label: "deleted", cls: "text-vscode-error-fg" },
+  applied: { letter: "✓", label: "applied", cls: "text-vscode-text-link" },
+  rolled_back: { letter: "↩", label: "rolled back", cls: "text-vscode-desc" },
 };
 
-const FILE_ICONS: Record<FileChange["status"], { icon: string; color: string }> = {
-  added: { icon: "A", color: "text-green-400" },
-  deleted: { icon: "D", color: "text-red-400" },
-  modified: { icon: "M", color: "text-yellow-400" },
-  applied: { icon: "✓", color: "text-blue-400" },
-  rolled_back: { icon: "↩", color: "text-gray-400" },
-};
-
-// ============================================================================
-// Diff Line Renderer
-// ============================================================================
-
-function DiffLine({ line }: { line: string }) {
-  let className = "px-3 py-0.5 font-mono text-[11px] whitespace-pre";
+function DiffLine({ line, n }: { line: string; n?: number }) {
+  let cls = "whitespace-pre";
+  let tone = "text-vscode-fg/85";
+  let marker = " ";
+  let bg = "";
   if (line.startsWith("+")) {
-    className += " bg-green-950 text-green-300";
+    marker = "+";
+    tone = "text-vscode-success-fg";
+    bg = "bg-vscode-success-fg/10";
   } else if (line.startsWith("-")) {
-    className += " bg-red-950 text-red-300";
+    marker = "−";
+    tone = "text-vscode-error-fg";
+    bg = "bg-vscode-error-fg/10";
   } else if (line.startsWith("@@")) {
-    className += " bg-blue-950 text-blue-300";
+    tone = "text-vscode-text-link";
+    bg = "bg-vscode-text-link/5";
   } else {
-    className += " text-vscode-desc";
+    tone = "text-vscode-desc";
   }
-  return <div className={className}>{line || " "}</div>;
+  return (
+    <div className={`flex font-mono text-[11px] leading-5 ${bg}`}>
+      <span className="w-9 flex-shrink-0 text-right pr-2 select-none text-vscode-desc/50">
+        {n ?? ""}
+      </span>
+      <span className={`w-3 flex-shrink-0 text-center ${tone}`}>{marker}</span>
+      <span className={`pr-3 flex-1 ${tone} ${cls}`}>{line || " "}</span>
+    </div>
+  );
 }
 
-// ============================================================================
-// DiffViewer
-// ============================================================================
+/** Split a unified diff into hunks for cleaner rendering. */
+function splitHunks(diff: string): string[][] {
+  const lines = diff.split("\n");
+  const hunks: string[][] = [];
+  let current: string[] | null = null;
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      if (current) hunks.push(current);
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  if (current) hunks.push(current);
+  return hunks.length > 0
+    ? hunks
+    : [lines.filter((l) => !l.startsWith("---") && !l.startsWith("+++"))];
+}
 
 export function DiffViewer({
   changes,
@@ -61,83 +85,119 @@ export function DiffViewer({
   onRollback,
   pendingApproval,
 }: DiffViewerProps) {
-  const [selectedFile, setSelectedFile] = useState<string | null>(
-    changes.length > 0 ? changes[0]!.path : null
+  const [selectedPath, setSelectedPath] = useState<string | null>(
+    changes.length > 0 ? changes[0]!.path : null,
   );
+  const selected =
+    changes.find((c) => c.path === selectedPath) ?? changes[0] ?? null;
 
-  // Keep the selection valid as the list shrinks/grows
-  const selected = changes.find((c) => c.path === selectedFile) ?? changes[0];
-  const activeCount = changes.filter(
-    (c) => c.status === "added" || c.status === "modified" || c.status === "deleted"
-  ).length;
+  const active = changes.filter(
+    (c) =>
+      c.status === "added" || c.status === "modified" || c.status === "deleted",
+  );
+  const totals = changes.reduce(
+    (acc, c) => {
+      const s = computeDiffStats(c.diff);
+      acc.additions += s.additions;
+      acc.deletions += s.deletions;
+      return acc;
+    },
+    { additions: 0, deletions: 0 },
+  );
 
   if (changes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-vscode-desc text-sm">
-        No file changes to review.
-      </div>
+      <EmptyState
+        title="No file changes to review"
+        hint="File edits the agent proposes appear here as reviewable diffs before anything is written."
+      />
     );
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Actions bar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-vscode-border flex-shrink-0">
-        <span className="text-[11px] font-semibold text-vscode-desc" aria-live="polite">
+    <div className="flex flex-col h-full min-h-0">
+      {/* Summary bar */}
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-vscode-border flex-shrink-0 bg-vscode-bg">
+        <span className="text-[12px] font-medium text-vscode-fg">
           {changes.length} file{changes.length !== 1 ? "s" : ""} changed
-          {activeCount < changes.length ? ` (${activeCount} pending)` : ""}
         </span>
-        <div className="flex-1" />
-        {pendingApproval && activeCount > 0 && (
+        <span className="font-mono text-[11px]">
+          <span className="text-vscode-success-fg">+{totals.additions}</span>{" "}
+          <span className="text-vscode-error-fg">−{totals.deletions}</span>
+        </span>
+        {active.length < changes.length && (
+          <span className="text-[10px] text-vscode-desc">
+            ({active.length} pending)
+          </span>
+        )}
+        <span className="flex-1" />
+        {pendingApproval && active.length > 0 && (
           <>
-            <button
+            <Button
+              variant="primary"
               onClick={onAcceptAll}
               aria-label="Accept all pending changes"
-              className="text-[11px] px-2 py-1 rounded bg-green-900 text-green-300 hover:bg-green-800"
             >
-              ✓ Accept All
-            </button>
-            <button
+              <IconCheck size={11} /> Accept all
+            </Button>
+            <Button
+              variant="danger"
               onClick={onRejectAll}
               aria-label="Reject all pending changes"
-              className="text-[11px] px-2 py-1 rounded bg-red-900 text-red-300 hover:bg-red-800"
             >
-              ✗ Reject All
-            </button>
+              <IconX size={11} /> Reject all
+            </Button>
           </>
         )}
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0 flex-col md:flex-row">
         {/* File list */}
-        <div className="w-56 border-r border-vscode-border overflow-y-auto flex-shrink-0" role="listbox" aria-label="Changed files">
+        <div
+          className="md:w-60 w-full border-b md:border-b-0 md:border-r border-vscode-border overflow-y-auto flex-shrink-0 max-h-40 md:max-h-none"
+          role="listbox"
+          aria-label="Changed files"
+        >
           {changes.map((change) => {
-            const { icon, color } = FILE_ICONS[change.status];
+            const meta = STATUS_META[change.status];
             const fileName = change.path.split(/[\\/]/).pop() ?? change.path;
             const stats = computeDiffStats(change.diff);
+            const isSelected = selected?.path === change.path;
             return (
               <button
                 key={`${change.changeSetId ?? "cs"}:${change.changeId ?? change.path}`}
                 role="option"
-                aria-selected={selected?.path === change.path}
-                onClick={() => setSelectedFile(change.path)}
-                className={`w-full text-left px-3 py-1.5 text-[11px] border-b border-vscode-border ${
-                  selected?.path === change.path
-                    ? "bg-vscode-editor-bg"
-                    : "hover:bg-vscode-editor-bg"
+                aria-selected={isSelected}
+                onClick={() => setSelectedPath(change.path)}
+                className={`w-full text-left px-3 py-1.5 border-b border-vscode-border/50 ${
+                  isSelected
+                    ? "bg-vscode-list-active text-vscode-list-active-fg"
+                    : "hover:bg-vscode-list-hover"
                 }`}
               >
-                <span className={`font-mono font-semibold ${color} mr-1`}>
-                  {icon}
-                </span>
-                <span className="text-vscode-fg">{fileName}</span>
-                {(stats.additions > 0 || stats.deletions > 0) && (
-                  <span className="ml-1 font-mono text-[9px]">
-                    <span className="text-green-400">+{stats.additions}</span>{" "}
-                    <span className="text-red-400">−{stats.deletions}</span>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`font-mono text-[10px] font-bold ${meta.cls}`}
+                  >
+                    {meta.letter}
                   </span>
-                )}
-                <div className="text-[9px] text-vscode-desc truncate">
+                  <span className="text-[11px] truncate flex-1">
+                    {fileName}
+                  </span>
+                  {(stats.additions > 0 || stats.deletions > 0) && (
+                    <span className="font-mono text-[9px] flex-shrink-0">
+                      <span className="text-vscode-success-fg">
+                        +{stats.additions}
+                      </span>{" "}
+                      <span className="text-vscode-error-fg">
+                        −{stats.deletions}
+                      </span>
+                    </span>
+                  )}
+                </div>
+                <div
+                  className={`text-[9px] truncate ${isSelected ? "text-vscode-list-active-fg/70" : "text-vscode-desc"}`}
+                >
                   {change.path}
                 </div>
               </button>
@@ -146,77 +206,83 @@ export function DiffViewer({
         </div>
 
         {/* Diff content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto min-w-0">
           {selected ? (
-            <div>
-              {/* File header */}
-              <div className="flex items-center gap-2 px-3 py-2 bg-vscode-editor-bg border-b border-vscode-border sticky top-0">
-                <span className="text-[11px] font-mono text-vscode-fg">
+            <>
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-vscode-border bg-vscode-panel/70 sticky top-0 z-10">
+                <span className="text-[11px] font-mono text-vscode-fg break-all">
                   {selected.path}
                 </span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_STYLES[selected.status]}`}>
-                  {selected.status}
+                <span
+                  className={`text-[9px] uppercase font-semibold tracking-wide ${STATUS_META[selected.status].cls}`}
+                >
+                  {STATUS_META[selected.status].label}
                 </span>
-                <div className="flex-1 flex justify-end gap-2">
-                  {(selected.status === "added" || selected.status === "modified" || selected.status === "deleted") && pendingApproval && (
+                <span className="flex-1" />
+                {active.some((c) => c.path === selected.path) &&
+                  pendingApproval && (
                     <>
-                      <button
+                      <Button
+                        variant="primary"
+                        size="xs"
                         onClick={() => onAccept(selected.path)}
                         aria-label={`Accept changes to ${selected.path}`}
-                        className="text-[10px] px-2 py-0.5 rounded bg-green-900 text-green-300 hover:bg-green-800"
                       >
-                        ✓ Accept
-                      </button>
-                      <button
+                        Accept
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="xs"
                         onClick={() => onReject(selected.path)}
                         aria-label={`Reject changes to ${selected.path}`}
-                        className="text-[10px] px-2 py-0.5 rounded bg-red-900 text-red-300 hover:bg-red-800"
                       >
-                        ✗ Reject
-                      </button>
+                        Reject
+                      </Button>
                     </>
                   )}
-                  {selected.status === "applied" && onRollback && (
-                    <button
-                      onClick={() => onRollback(selected.path)}
-                      aria-label={`Roll back ${selected.path} to its previous content`}
-                      title="Restore this file to its content before the agent's edit"
-                      className="text-[10px] px-2 py-0.5 rounded bg-orange-900 text-orange-300 hover:bg-orange-800"
-                    >
-                      ↩ Rollback
-                    </button>
-                  )}
-                  {selected.status === "rolled_back" && (
-                    <span className="text-[10px] text-vscode-desc">restored to original</span>
-                  )}
-                </div>
+                {selected.status === "applied" && onRollback && (
+                  <Button
+                    size="xs"
+                    onClick={() => onRollback(selected.path)}
+                    aria-label={`Roll back ${selected.path}`}
+                    title="Restore this file to its content before the agent's edit"
+                  >
+                    ↩ Rollback
+                  </Button>
+                )}
+                {selected.status === "rolled_back" && (
+                  <span className="text-[10px] text-vscode-desc">
+                    restored to original
+                  </span>
+                )}
               </div>
 
-              {/* Diff lines */}
-              <div className="overflow-x-auto">
+              <div className="py-2">
                 {selected.diff ? (
-                  selected.diff.split("\n").map((line, i) => (
-                    <DiffLine key={i} line={line} />
+                  splitHunks(selected.diff).map((hunk, hi) => (
+                    <div key={hi} className="mb-2">
+                      {hunk.map((line, li) => (
+                        <DiffLine key={li} line={line} />
+                      ))}
+                    </div>
                   ))
                 ) : selected.newContent ? (
-                  <pre className="px-3 py-2 text-[11px] font-mono text-vscode-fg whitespace-pre-wrap">
+                  <pre className="px-3 py-2 text-[11px] font-mono text-vscode-fg whitespace-pre-wrap break-words">
                     {selected.newContent}
                   </pre>
                 ) : selected.status === "deleted" && selected.oldContent ? (
-                  <pre className="px-3 py-2 text-[11px] font-mono text-red-300 whitespace-pre-wrap">
+                  <pre className="px-3 py-2 text-[11px] font-mono text-vscode-error-fg whitespace-pre-wrap break-words">
                     {selected.oldContent}
                   </pre>
                 ) : (
-                  <div className="px-3 py-4 text-sm text-vscode-desc text-center">
+                  <div className="px-3 py-4 text-[12px] text-vscode-desc text-center">
                     No diff content available.
                   </div>
                 )}
               </div>
-            </div>
+            </>
           ) : (
-            <div className="flex items-center justify-center h-full text-vscode-desc text-sm">
-              Select a file to view changes.
-            </div>
+            <EmptyState title="Select a file to view changes" />
           )}
         </div>
       </div>

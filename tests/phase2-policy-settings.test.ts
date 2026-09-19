@@ -3,10 +3,10 @@ import { DEFAULT_TOOL_POLICIES, isAllowedSettingKey, ALLOWED_SETTINGS_KEYS } fro
 import { PolicyEngine } from "../packages/policy-engine/src/index.js";
 
 // ============================================================================
-// Policy alignment (Feature Group 13/15 — real ClineCore tool names must map)
+// Policy alignment (native callable tool names must map)
 // ============================================================================
 
-describe("DEFAULT_TOOL_POLICIES align with real ClineCore tool names", () => {
+describe("DEFAULT_TOOL_POLICIES align with native callable tool names", () => {
   it("gates real write tools behind approval", () => {
     expect(DEFAULT_TOOL_POLICIES.editor).toBe("approval");
     expect(DEFAULT_TOOL_POLICIES.apply_patch).toBe("approval");

@@ -18,8 +18,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@cline/llms": "^0.0.75",
-    "@cline/shared": "^0.0.75",
+    "@codepilot/llm": "workspace:*",
     "@codepilot/shared": "workspace:*"
   },
   "devDependencies": {

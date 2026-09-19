@@ -83,3 +83,104 @@ describe("Ollama direct connectivity", () => {
     expect(text.length).toBeGreaterThan(0); // real model output
   });
 });
+
+// ============================================================================
+// Test Connection parity — the exact provider the VS Code host uses
+// ============================================================================
+
+import { OllamaProvider } from "../packages/model-gateway/src/index.js";
+import type { ProviderHealth } from "../packages/model-gateway/src/index.js";
+
+describe("Ollama Test Connection parity (gateway OllamaProvider)", () => {
+  it("gateway healthCheck reports HEALTHY against the live server", { timeout: 30_000 }, async () => {
+    if (!(await ollamaReachable())) return;
+    const provider = new OllamaProvider({
+      id: "ollama",
+      name: "Ollama (Local)",
+      type: "ollama",
+      baseUrl: `${OLLAMA_BASE_URL}/`, // trailing slash, as the settings UI may store it
+      enabled: true,
+    });
+    const health: ProviderHealth = await provider.healthCheck();
+    expect(health.status).toBe("HEALTHY");
+  });
+
+  it("discovers installed models — including qwen3:8b — through /api/tags", { timeout: 30_000 }, async () => {
+    if (!(await ollamaReachable())) return;
+    const provider = new OllamaProvider({
+      id: "ollama",
+      name: "Ollama (Local)",
+      type: "ollama",
+      baseUrl: OLLAMA_BASE_URL,
+      enabled: true,
+    });
+    const models = await provider.listModels();
+    const ids = models.map((m) => m.id);
+    expect(ids).toContain(EXPECTED_MODEL);
+  });
+
+  it("model switching: resolves qwen3:8b and returns null for an absent model", { timeout: 30_000 }, async () => {
+    if (!(await ollamaReachable())) return;
+    const provider = new OllamaProvider({
+      id: "ollama",
+      name: "Ollama (Local)",
+      type: "ollama",
+      baseUrl: OLLAMA_BASE_URL,
+      enabled: true,
+    });
+    expect(await provider.getModel(EXPECTED_MODEL)).not.toBeNull();
+    expect(await provider.getModel("no-such-model:latest")).toBeNull();
+  });
+
+  it("streams a real /api/chat completion — the production generation path", { timeout: 240_000 }, async () => {
+    if (!(await ollamaReachable())) return;
+    // The native Ollama provider POSTs to /api/chat with stream:true
+    // and consumes the NDJSON incrementally. This mirrors that contract.
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: EXPECTED_MODEL,
+        messages: [
+          { role: "user", content: "Reply with exactly: CodePilot Ollama works." },
+        ],
+        stream: true,
+        think: false,
+        options: { num_predict: 64 },
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.body).not.toBeNull();
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    let chunks = 0;
+    let text = "";
+    let sawDone = false;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffered.indexOf("\n")) >= 0) {
+        const line = buffered.slice(0, nl).trim();
+        buffered = buffered.slice(nl + 1);
+        if (!line) continue;
+        const obj = JSON.parse(line) as {
+          message?: { content?: string };
+          done?: boolean;
+        };
+        if (typeof obj.message?.content === "string" && obj.message.content) {
+          chunks += 1;
+          text += obj.message.content;
+        }
+        if (obj.done === true) sawDone = true;
+      }
+    }
+    expect(chunks).toBeGreaterThan(1); // incrementally streamed
+    expect(text.length).toBeGreaterThan(0); // real model output
+    expect(sawDone).toBe(true); // terminal NDJSON frame received
+  });
+});

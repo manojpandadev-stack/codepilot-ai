@@ -8,6 +8,7 @@ import {
   normalizeProviderList,
   normalizeToolList,
   connectionSummary,
+  privacyClaim,
   type FileChange,
 } from "../apps/webview/src/lib/messages.js";
 
@@ -32,12 +33,18 @@ const makeChange = (overrides: Partial<FileChange> = {}): FileChange => ({
 
 describe("computeDiffStats", () => {
   it("counts additions and deletions, excluding diff headers", () => {
-    expect(computeDiffStats(SAMPLE_DIFF)).toEqual({ additions: 2, deletions: 1 });
+    expect(computeDiffStats(SAMPLE_DIFF)).toEqual({
+      additions: 2,
+      deletions: 1,
+    });
   });
 
   it("returns zeros for undefined or header-only diffs", () => {
     expect(computeDiffStats(undefined)).toEqual({ additions: 0, deletions: 0 });
-    expect(computeDiffStats("--- a\n+++ b")).toEqual({ additions: 0, deletions: 0 });
+    expect(computeDiffStats("--- a\n+++ b")).toEqual({
+      additions: 0,
+      deletions: 0,
+    });
   });
 });
 
@@ -47,49 +54,92 @@ describe("applyDiffResult", () => {
       makeChange({ changeId: "ch-1" }),
       makeChange({ changeId: "ch-2", path: "src/other.ts" }),
     ];
-    const result = applyDiffResult(changes, "accept", { changeSetId: "cs-1", changeId: "ch-1", success: true });
-    expect(result.changes.find((c) => c.changeId === "ch-1")?.status).toBe("applied");
-    expect(result.changes.find((c) => c.changeId === "ch-2")?.status).toBe("modified");
+    const result = applyDiffResult(changes, "accept", {
+      changeSetId: "cs-1",
+      changeId: "ch-1",
+      success: true,
+    });
+    expect(result.changes.find((c) => c.changeId === "ch-1")?.status).toBe(
+      "applied",
+    );
+    expect(result.changes.find((c) => c.changeId === "ch-2")?.status).toBe(
+      "modified",
+    );
     expect(result.pendingApproval).toBe(true);
   });
 
   it("pendingApproval clears when the last active change is accepted", () => {
-    const changes = [makeChange({ changeId: "ch-1", status: "applied" }), makeChange({ changeId: "ch-2" })];
-    const result = applyDiffResult(changes, "accept", { changeSetId: "cs-1", changeId: "ch-2", success: true });
+    const changes = [
+      makeChange({ changeId: "ch-1", status: "applied" }),
+      makeChange({ changeId: "ch-2" }),
+    ];
+    const result = applyDiffResult(changes, "accept", {
+      changeSetId: "cs-1",
+      changeId: "ch-2",
+      success: true,
+    });
     expect(result.pendingApproval).toBe(false);
   });
 
   it("single reject removes only that change", () => {
-    const changes = [makeChange({ changeId: "ch-1" }), makeChange({ changeId: "ch-2", path: "b.ts" })];
-    const result = applyDiffResult(changes, "reject", { changeSetId: "cs-1", changeId: "ch-1", success: true });
+    const changes = [
+      makeChange({ changeId: "ch-1" }),
+      makeChange({ changeId: "ch-2", path: "b.ts" }),
+    ];
+    const result = applyDiffResult(changes, "reject", {
+      changeSetId: "cs-1",
+      changeId: "ch-1",
+      success: true,
+    });
     expect(result.changes).toHaveLength(1);
     expect(result.changes[0]!.changeId).toBe("ch-2");
   });
 
   it("accept_all marks the whole set applied", () => {
-    const changes = [makeChange({ changeId: "ch-1" }), makeChange({ changeId: "ch-2" })];
-    const result = applyDiffResult(changes, "accept_all", { changeSetId: "cs-1", success: true });
+    const changes = [
+      makeChange({ changeId: "ch-1" }),
+      makeChange({ changeId: "ch-2" }),
+    ];
+    const result = applyDiffResult(changes, "accept_all", {
+      changeSetId: "cs-1",
+      success: true,
+    });
     expect(result.changes.every((c) => c.status === "applied")).toBe(true);
     expect(result.pendingApproval).toBe(false);
   });
 
   it("reject_all removes the whole set but never touches other sets", () => {
-    const changes = [makeChange({ changeId: "ch-1" }), makeChange({ changeSetId: "cs-2", changeId: "ch-9" })];
-    const result = applyDiffResult(changes, "reject_all", { changeSetId: "cs-1", success: true });
+    const changes = [
+      makeChange({ changeId: "ch-1" }),
+      makeChange({ changeSetId: "cs-2", changeId: "ch-9" }),
+    ];
+    const result = applyDiffResult(changes, "reject_all", {
+      changeSetId: "cs-1",
+      success: true,
+    });
     expect(result.changes).toHaveLength(1);
     expect(result.changes[0]!.changeSetId).toBe("cs-2");
   });
 
   it("rollback marks the change rolled_back and closes approval (engine treats it as terminal)", () => {
     const changes = [makeChange({ status: "applied" })];
-    const result = applyDiffResult(changes, "rollback", { changeSetId: "cs-1", changeId: "ch-1", success: true });
+    const result = applyDiffResult(changes, "rollback", {
+      changeSetId: "cs-1",
+      changeId: "ch-1",
+      success: true,
+    });
     expect(result.changes[0]!.status).toBe("rolled_back");
     expect(result.pendingApproval).toBe(false);
   });
 
   it("failure keeps the list untouched and surfaces the error", () => {
     const changes = [makeChange()];
-    const result = applyDiffResult(changes, "accept", { changeSetId: "cs-1", changeId: "ch-1", success: false, error: "conflict" });
+    const result = applyDiffResult(changes, "accept", {
+      changeSetId: "cs-1",
+      changeId: "ch-1",
+      success: false,
+      error: "conflict",
+    });
     expect(result.changes).toEqual(changes);
     expect(result.pendingApproval).toBe(true);
     expect(result.error).toBe("conflict");
@@ -111,12 +161,20 @@ describe("isActiveChange", () => {
 describe("parseSlashCommand", () => {
   it("parses known commands with args", () => {
     expect(parseSlashCommand("/plan review the auth module")).toEqual({
-      command: "plan", args: "review the auth module", prompt: "review the auth module", instruction: "",
+      command: "plan",
+      args: "review the auth module",
+      prompt: "review the auth module",
+      instruction: "",
     });
   });
 
   it("parses UI-only commands with empty prompt", () => {
-    expect(parseSlashCommand("/clear")).toEqual({ command: "clear", args: "", prompt: "", instruction: "" });
+    expect(parseSlashCommand("/clear")).toEqual({
+      command: "clear",
+      args: "",
+      prompt: "",
+      instruction: "",
+    });
   });
 
   it("passes unknown slash input through as a normal prompt", () => {
@@ -126,7 +184,12 @@ describe("parseSlashCommand", () => {
   });
 
   it("passes plain text through unchanged", () => {
-    expect(parseSlashCommand("  fix the bug  ")).toEqual({ command: "", args: "", prompt: "fix the bug", instruction: "" });
+    expect(parseSlashCommand("  fix the bug  ")).toEqual({
+      command: "",
+      args: "",
+      prompt: "fix the bug",
+      instruction: "",
+    });
   });
 
   it("is case-insensitive", () => {
@@ -155,7 +218,9 @@ describe("normalizeModelList", () => {
 
 describe("normalizeProviderList", () => {
   it("accepts a bare array payload", () => {
-    const providers = [{ id: "ollama", name: "Ollama (Local)", connected: true }];
+    const providers = [
+      { id: "ollama", name: "Ollama (Local)", connected: true },
+    ];
     expect(normalizeProviderList(providers)).toEqual(providers);
   });
 
@@ -167,23 +232,54 @@ describe("normalizeProviderList", () => {
 
 describe("normalizeToolList", () => {
   it("accepts a { tools } wrapper payload", () => {
-    const tools = [{ name: "read_files", category: "read", description: "Read files", source: "builtin", permission: "auto" }];
+    const tools = [
+      {
+        name: "read_files",
+        category: "read",
+        description: "Read files",
+        source: "builtin",
+        permission: "auto",
+      },
+    ];
     expect(normalizeToolList({ tools })).toEqual(tools);
   });
 
   it("accepts a bare array payload", () => {
-    const tools = [{ name: "bash", category: "execute", description: "", source: "builtin", permission: "approval" }];
+    const tools = [
+      {
+        name: "bash",
+        category: "execute",
+        description: "",
+        source: "builtin",
+        permission: "approval",
+      },
+    ];
     expect(normalizeToolList(tools)).toEqual(tools);
   });
 
   it("drops malformed entries and defaults unknown permissions to approval", () => {
     const result = normalizeToolList({
-      tools: [null, 42, { name: "" }, { category: "read" }, { name: "web_fetch", source: "mcp", serverName: "docs", permission: "weird" }],
+      tools: [
+        null,
+        42,
+        { name: "" },
+        { category: "read" },
+        {
+          name: "web_fetch",
+          source: "mcp",
+          serverName: "docs",
+          permission: "weird",
+        },
+      ],
     });
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({
-      name: "web_fetch", category: "system", description: "",
-      source: "mcp", serverName: "docs", permission: "approval",
+      name: "web_fetch",
+      category: "system",
+      description: "",
+      source: "mcp",
+      serverName: "docs",
+      permission: "approval",
     });
   });
 
@@ -195,28 +291,130 @@ describe("normalizeToolList", () => {
 });
 
 describe("connectionSummary", () => {
-  it("reports the connected provider with model count", () => {
-    const summary = connectionSummary(
-      [{ id: "ollama", name: "Ollama (Local)", connected: true }],
-      3
-    );
+  const ollamaCatalog = {
+    id: "ollama",
+    displayName: "Ollama",
+    category: "local" as const,
+  };
+  const openrouterCatalog = {
+    id: "openrouter",
+    displayName: "OpenRouter",
+    category: "gateway" as const,
+  };
+
+  it("A: selected Ollama + Ollama connected → LOCAL / Ollama connected", () => {
+    const summary = connectionSummary({
+      selectedProviderId: "ollama",
+      catalog: ollamaCatalog as never,
+      health: { state: "connected" },
+      credentialConfigured: true,
+      modelCount: 3,
+    });
     expect(summary.connected).toBe(true);
-    expect(summary.label).toContain("Ollama (Local)");
-    expect(summary.label).toContain("3 models");
+    expect(summary.label).toContain("Ollama");
+    expect(summary.label).toContain("Connected");
   });
 
-  it("reports Ollama unavailability distinctly", () => {
-    const summary = connectionSummary(
-      [{ id: "ollama", name: "Ollama (Local)", connected: false }],
-      0
-    );
+  it("B: OpenRouter selected while Ollama happens to be up → OpenRouter status only", () => {
+    // The old bug: first-connected heuristic reported Ollama for any selection.
+    // The header must reflect ONLY the selected provider's own health.
+    const summary = connectionSummary({
+      selectedProviderId: "openrouter",
+      catalog: openrouterCatalog as never,
+      health: { state: "connected" },
+      credentialConfigured: true,
+      modelCount: 284,
+    });
+    expect(summary.connected).toBe(true);
+    expect(summary.label).toContain("OpenRouter");
+    expect(summary.label).not.toMatch(/ollama/i);
+  });
+
+  it("B2: unprobed cloud provider with a stored key stays neutral (CLOUD · name)", () => {
+    const summary = connectionSummary({
+      selectedProviderId: "openrouter",
+      catalog: openrouterCatalog as never,
+      health: undefined,
+      credentialConfigured: true,
+      modelCount: 0,
+    });
+    expect(summary.label).toMatch(/^CLOUD · OpenRouter$/);
+    expect(summary.connected).toBe(false);
+  });
+
+  it("C: OpenRouter selected + Ollama unavailable → no Ollama text at all", () => {
+    const summary = connectionSummary({
+      selectedProviderId: "openrouter",
+      catalog: openrouterCatalog as never,
+      health: undefined,
+      credentialConfigured: false,
+      modelCount: 0,
+    });
+    expect(summary.label).not.toMatch(/ollama/i);
+    expect(summary.label).toMatch(/OpenRouter/);
+  });
+
+  it("C2: selected local provider down → unavailable message names it", () => {
+    const summary = connectionSummary({
+      selectedProviderId: "ollama",
+      catalog: ollamaCatalog as never,
+      health: { state: "unavailable" },
+      credentialConfigured: true,
+      modelCount: 0,
+    });
     expect(summary.connected).toBe(false);
     expect(summary.label).toMatch(/Ollama unavailable/i);
   });
 
-  it("handles an empty provider list", () => {
-    const summary = connectionSummary([], 0);
+  it("reports an empty selection as unknown", () => {
+    const summary = connectionSummary({
+      selectedProviderId: "",
+      catalog: undefined,
+      health: undefined,
+      credentialConfigured: undefined,
+      modelCount: 0,
+    });
     expect(summary.connected).toBe(false);
-    expect(summary.label).toMatch(/No provider connected/i);
+    expect(summary.label).toContain("—");
+  });
+
+  it("never reports connected without a positive host verdict", () => {
+    // No health data + no credential → must NOT claim connected.
+    const summary = connectionSummary({
+      selectedProviderId: "openai-native",
+      catalog: {
+        id: "openai-native",
+        displayName: "OpenAI",
+        category: "cloud" as const,
+      } as never,
+      health: undefined,
+      credentialConfigured: false,
+      modelCount: 0,
+    });
+    expect(summary.connected).toBe(false);
+    expect(summary.label).toMatch(/not verified/i);
+  });
+});
+
+describe("privacyClaim", () => {
+  it("G: cloud provider + local privacy mode must NOT claim local-only", () => {
+    const text = privacyClaim("local", "cloud");
+    expect(text).toMatch(/requests WILL leave this machine/i);
+    expect(text).not.toMatch(/no data leaves this machine/i);
+  });
+
+  it("G: gateway provider + local privacy mode is equally flagged", () => {
+    const text = privacyClaim("local", "gateway");
+    expect(text).toMatch(/WILL leave this machine/i);
+  });
+
+  it("local provider + local privacy mode keeps the local-only promise", () => {
+    const text = privacyClaim("local", "local");
+    expect(text).toMatch(/no data leaves this machine/i);
+  });
+
+  it("cloud/hybrid modes describe their behavior unchanged", () => {
+    expect(privacyClaim("cloud", "cloud")).toMatch(/configured API provider/i);
+    expect(privacyClaim("hybrid", "local")).toMatch(/selected tasks/i);
   });
 });

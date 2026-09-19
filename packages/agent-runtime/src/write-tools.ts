@@ -15,7 +15,8 @@
  *  - Text edits are applied in memory; oversized inputs are rejected.
  */
 
-import { computePatchChanges } from "@cline/core";
+import { computePatchChanges } from "./native/patch-engine.js";
+import { existsSync, readFileSync } from "node:fs";
 
 // ============================================================================
 // Path safety
@@ -71,7 +72,7 @@ export function resolveWorkspacePath(
 }
 
 // ============================================================================
-// In-memory editor operations (classic Cline editor grammar)
+// In-memory editor operations (classic editor grammar)
 // ============================================================================
 
 export type EditorOp =
@@ -189,7 +190,7 @@ export type ParseResult =
   { ok: true; proposals: WriteProposal[] } | { ok: false; error: string };
 
 /**
- * Parse a ClineCore `editor` tool input (classic single-op or `operations`
+ * Parse a CodePilot `editor` tool input (classic single-op or `operations`
  * array) into staged proposals. Original file content is supplied via
  * `readOriginal` so this function stays pure.
  */
@@ -251,9 +252,27 @@ export function parseEditorInput(
 }
 
 /**
- * Parse a ClineCore `apply_patch` tool input into staged proposals. Uses the
- * core's own `computePatchChanges` preview (which reads current file content)
- * so the staged diff exactly matches what the real executor would apply.
+ * Bounded original-content reader for the patch engine: text files within
+ * the size cap only. Binary or oversized content returns undefined (the
+ * patch engine then reports the file as unreadable rather than guessing).
+ */
+function readOriginalSafe(absolutePath: string): string | undefined {
+  try {
+    if (!existsSync(absolutePath)) return undefined;
+    const buffer = readFileSync(absolutePath);
+    if (buffer.length > MAX_PROPOSED_FILE_BYTES) return undefined;
+    if (buffer.includes(0)) return undefined;
+    return buffer.toString("utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Parse an `apply_patch` tool input into staged proposals. Uses the native
+ * patch engine's `computePatchChanges` preview (which reads current file
+ * content via a bounded reader) so the staged diff matches what the real
+ * executor would apply.
  */
 export async function parseApplyPatchInput(
   input: Record<string, unknown>,
@@ -265,37 +284,39 @@ export async function parseApplyPatchInput(
   }
   let computed: Awaited<ReturnType<typeof computePatchChanges>>;
   try {
-    computed = await computePatchChanges(patch, cwd);
+    computed = await computePatchChanges(patch, cwd, readOriginalSafe);
   } catch (err) {
     return {
       ok: false,
       error: `apply_patch parse failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+  if (!computed.ok || !computed.changes) {
+    return { ok: false, error: `apply_patch failed: ${computed.error ?? "unknown patch error"}` };
+  }
 
   const proposals: WriteProposal[] = [];
-  for (const [rawPath, change] of Object.entries(computed.changes)) {
-    const resolved = resolveWorkspacePath(rawPath, cwd);
+  for (const change of computed.changes) {
+    const resolved = resolveWorkspacePath(change.relativePath, cwd);
     if (!resolved.ok) return { ok: false, error: resolved.error };
-    const type = String(change.type ?? "modify");
-    if (type === "delete") {
+    if (change.kind === "delete") {
       // Deleting a file → proposed empty content marks it for removal.
       proposals.push({
-        filePath: rawPath,
+        filePath: change.relativePath,
         relativePath: resolved.relativePath,
         proposedContent: "",
       });
       continue;
     }
-    const content = change.newContent ?? change.oldContent ?? "";
+    const content = change.proposed ?? "";
     if (Buffer.byteLength(content, "utf8") > MAX_PROPOSED_FILE_BYTES) {
       return {
         ok: false,
-        error: `apply_patch failed: ${rawPath} exceeds size limit`,
+        error: `apply_patch failed: ${change.relativePath} exceeds size limit`,
       };
     }
     proposals.push({
-      filePath: rawPath,
+      filePath: change.relativePath,
       relativePath: resolved.relativePath,
       proposedContent: content,
     });

@@ -41,7 +41,7 @@ describe("ChangeSetManager", () => {
     expect(cs.status).toBe("pending");
   });
 
-  it("accepts a change and writes file to disk", () => {
+  it("accepts a change and writes file to disk", async () => {
     const cs = manager.createChangeSet("task-1", [
       {
         filePath: "src/App.java",
@@ -50,7 +50,7 @@ describe("ChangeSetManager", () => {
       },
     ]);
 
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     expect(result.success).toBe(true);
 
     const content = readFileSync(join(testDir, "src/App.java"), "utf8");
@@ -72,7 +72,7 @@ describe("ChangeSetManager", () => {
     expect(cs.changes[0].status).toBe("rejected");
   });
 
-  it("detects external file conflicts", () => {
+  it("detects external file conflicts", async () => {
     const cs = manager.createChangeSet("task-1", [
       { filePath: "src/App.java", proposedContent: "MODIFIED" },
     ]);
@@ -80,14 +80,14 @@ describe("ChangeSetManager", () => {
     // Externally modify the file
     writeFileSync(join(testDir, "src/App.java"), "EXTERNAL CHANGE");
 
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     expect(result.success).toBe(false);
     expect(cs.changes[0].status).toBe("conflict");
     expect(cs.changes[0].conflictInfo).toBeDefined();
     expect(cs.changes[0].conflictInfo?.reason).toContain("modified externally");
   });
 
-  it("rollback restores original content", () => {
+  it("rollback restores original content", async () => {
     const cs = manager.createChangeSet("task-1", [
       {
         filePath: "src/App.java",
@@ -96,12 +96,12 @@ describe("ChangeSetManager", () => {
       },
     ]);
 
-    manager.acceptChange(cs.id, cs.changes[0].id);
+    await manager.acceptChange(cs.id, cs.changes[0].id);
     expect(readFileSync(join(testDir, "src/App.java"), "utf8")).toContain(
       "Rollback",
     );
 
-    const rb = manager.rollbackChange(cs.id, cs.changes[0].id);
+    const rb = await manager.rollbackChange(cs.id, cs.changes[0].id);
     expect(rb.success).toBe(true);
     expect(readFileSync(join(testDir, "src/App.java"), "utf8")).toContain(
       "Hello",
@@ -109,7 +109,7 @@ describe("ChangeSetManager", () => {
     expect(cs.changes[0].status).toBe("rolled_back");
   });
 
-  it("acceptAll applies all pending changes", () => {
+  it("acceptAll applies all pending changes", async () => {
     mkdirSync(join(testDir, "src/sub"), { recursive: true });
     writeFileSync(
       join(testDir, "src/sub/B.java"),
@@ -121,7 +121,7 @@ describe("ChangeSetManager", () => {
       { filePath: "src/sub/B.java", proposedContent: "CHANGE 2" },
     ]);
 
-    const result = manager.acceptAll(cs.id);
+    const result = await manager.acceptAll(cs.id);
     expect(result.applied).toBe(2);
     expect(readFileSync(join(testDir, "src/App.java"), "utf8")).toBe(
       "CHANGE 1",
@@ -141,7 +141,7 @@ describe("ChangeSetManager", () => {
     expect(cs.changes[0].status).toBe("rejected");
   });
 
-  it("creates new files that don't exist", () => {
+  it("creates new files that don't exist", async () => {
     const cs = manager.createChangeSet("task-1", [
       {
         filePath: "src/NewService.java",
@@ -151,7 +151,7 @@ describe("ChangeSetManager", () => {
 
     expect(existsSync(join(testDir, "src/NewService.java"))).toBe(false);
 
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     expect(result.success).toBe(true);
     expect(existsSync(join(testDir, "src/NewService.java"))).toBe(true);
     expect(readFileSync(join(testDir, "src/NewService.java"), "utf8")).toBe(
@@ -169,12 +169,12 @@ describe("ChangeSetManager", () => {
     expect(existsSync(join(testDir, filePath))).toBe(false);
   });
 
-  it("reports filesystem apply failures as failed", () => {
+  it("reports filesystem apply failures as failed", async () => {
     const cs = manager.createChangeSet("task-1", [
       { filePath: "src\u0000Invalid.java", proposedContent: "INVALID PATH" },
     ]);
 
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
     expect(cs.changes[0].status).toBe("failed");
@@ -189,8 +189,8 @@ describe("ChangeSetManager", () => {
     ).toThrow("Path escapes workspace boundary");
   });
 
-  it("returns error for unknown ChangeSet", () => {
-    const result = manager.acceptChange("nonexistent", "change-1");
+  it("returns error for unknown ChangeSet", async () => {
+    const result = await manager.acceptChange("nonexistent", "change-1");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not found");
   });
@@ -214,7 +214,7 @@ describe("ChangeSetManager", () => {
     );
   });
 
-  it("conflict detection prevents overwrite of externally modified file", () => {
+  it("conflict detection prevents overwrite of externally modified file", async () => {
     const cs = manager.createChangeSet("task-1", [
       { filePath: "src/App.java", proposedContent: "AGENT CHANGE" },
     ]);
@@ -222,7 +222,7 @@ describe("ChangeSetManager", () => {
     // File changed externally between proposal and accept
     writeFileSync(join(testDir, "src/App.java"), "USER'S UNRELATED CHANGE");
 
-    const result = manager.acceptChange(cs.id, cs.changes[0].id);
+    const result = await manager.acceptChange(cs.id, cs.changes[0].id);
     expect(result.success).toBe(false);
     expect(cs.changes[0].status).toBe("conflict");
     expect(cs.changes[0].conflictInfo?.reason).toContain("modified externally");
@@ -233,7 +233,7 @@ describe("ChangeSetManager", () => {
     );
   });
 
-  it("partial accept/reject across a ChangeSet", () => {
+  it("partial accept/reject across a ChangeSet", async () => {
     mkdirSync(join(testDir, "src/sub"), { recursive: true });
     writeFileSync(join(testDir, "src/sub/B.java"), "ORIGINAL B\n");
 
@@ -242,7 +242,7 @@ describe("ChangeSetManager", () => {
       { filePath: "src/sub/B.java", proposedContent: "REJECTED" },
     ]);
 
-    manager.acceptChange(cs.id, cs.changes[0].id);
+    await manager.acceptChange(cs.id, cs.changes[0].id);
     manager.rejectChange(cs.id, cs.changes[1].id);
 
     expect(cs.changes[0].status).toBe("applied");

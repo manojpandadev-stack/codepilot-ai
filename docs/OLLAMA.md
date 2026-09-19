@@ -8,23 +8,23 @@ CodePilot AI supports Ollama for local AI inference. In **LOCAL ONLY** mode, no 
 
 ### For Agentic Coding (Tool Calling)
 
-| Model | Tool Calling | Context | Memory | Recommended |
-|---|---|---|---|---|
-| `qwen3:8b` | ✅ Structured | 32K | ~6GB | ✅ **Default** |
-| `qwen3:4b` | ✅ Structured | 32K | ~3GB | Good for low RAM |
-| `qwen2.5-coder:7b` | ❌ Text-only | 32K | ~5GB | Supported (no tools) |
-| `qwen2.5-coder:3b` | ❌ Text-only | 32K | ~3GB | Supported (no tools) |
+| Model              | Tool Calling  | Context | Memory | Recommended          |
+| ------------------ | ------------- | ------- | ------ | -------------------- |
+| `qwen3:8b`         | ✅ Structured | 32K     | ~6GB   | ✅ **Default**       |
+| `qwen3:4b`         | ✅ Structured | 32K     | ~3GB   | Good for low RAM     |
+| `qwen2.5-coder:7b` | ❌ Text-only  | 32K     | ~5GB   | Supported (no tools) |
+| `qwen2.5-coder:3b` | ❌ Text-only  | 32K     | ~3GB   | Supported (no tools) |
 
 ### For Embeddings (RAG)
 
-| Model | Dimensions | Purpose |
-|---|---|---|
-| `nomic-embed-text` | 768 | Repository indexing, semantic search |
+| Model              | Dimensions | Purpose                              |
+| ------------------ | ---------- | ------------------------------------ |
+| `nomic-embed-text` | 768        | Repository indexing, semantic search |
 
 ### For General Chat
 
-| Model | Purpose |
-|---|---|
+| Model      | Purpose              |
+| ---------- | -------------------- |
 | `llama3.2` | General conversation |
 
 ## Setup
@@ -78,16 +78,19 @@ curl http://localhost:11434/api/chat -d '{
 Only certain models support structured tool calls:
 
 **✅ Supports structured tool calls:**
+
 - `qwen3:8b`
 - `qwen3:4b`
 - `qwen3:14b`
 
 **❌ Returns tool calls as text (not structured):**
+
 - `qwen2.5-coder:7b`
 - `qwen2.5-coder:3b`
 - `llama3.2`
 
 When using a model that doesn't support structured tool calls, CodePilot will show:
+
 > "Selected model does not support reliable agentic tool calling."
 
 **Recommendation:** Use `qwen3:8b` for the best agent experience.
@@ -111,15 +114,16 @@ When using a model that doesn't support structured tool calls, CodePilot will sh
 
 ## Local Hardware Recommendations
 
-| RAM | Recommended Model |
-|---|---|
-| 8GB | `qwen3:4b` or `qwen2.5-coder:3b` |
-| 16GB | `qwen3:8b` or `qwen2.5-coder:7b` |
-| 32GB+ | `qwen3:14b` or larger |
+| RAM   | Recommended Model                |
+| ----- | -------------------------------- |
+| 8GB   | `qwen3:4b` or `qwen2.5-coder:3b` |
+| 16GB  | `qwen3:8b` or `qwen2.5-coder:7b` |
+| 32GB+ | `qwen3:14b` or larger            |
 
 ## Privacy
 
 When `codepilot.privacyMode` is set to `local`:
+
 - All inference happens locally via Ollama
 - No source code is sent to cloud services
 - No telemetry is sent externally

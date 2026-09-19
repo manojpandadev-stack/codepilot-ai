@@ -2,7 +2,7 @@
  * @codepilot/shared
  *
  * Common types, constants, and utilities for the CodePilot AI platform.
- * Defines CodePilot-specific types and re-exports what we need from Cline SDK.
+ * Defines CodePilot-owned shared types (no external SDK re-exports).
  */
 
 // ============================================================================
@@ -15,7 +15,7 @@
 export type PrivacyMode = "local" | "hybrid" | "cloud";
 
 /**
- * Extended agent modes beyond the Cline defaults.
+ * Agent modes for the application.
  */
 export type CodePilotAgentMode = "ask" | "plan" | "act" | "review" | "auto";
 
@@ -207,12 +207,25 @@ export type WebviewMessageType =
   | "agent/event"
   | "tool/request_approval"
   | "tool/approval_result"
+  | "tool/approval_resolved"
+  | "checkpoint/created"
   | "tool/started"
   | "tool/completed"
+  | "terminal/output"
   | "file/changed"
   | "model/list"
   | "model/select"
   | "provider/list"
+  | "provider/catalog"
+  | "provider/status"
+  | "provider/test"
+  | "provider/health"
+  | "provider/models"
+  | "provider/usage"
+  | "provider/favorite"
+  | "provider/favorites"
+  | "usage/clear"
+  | "usage/summary"
   | "provider/configure"
   | "settings/get"
   | "settings/set"
@@ -242,9 +255,49 @@ export type WebviewMessageType =
   | "mcp/tools/list_result"
   | "mcp/servers/list"
   | "mcp/servers/list_result"
+  | "mcp/server/add"
+  | "mcp/server/remove"
+  | "mcp/server/toggle"
+  | "mcp/server/reconnect"
+  | "mcp/config_result"
   | "checkpoint/create"
+  | "checkpoint/list"
   | "checkpoint/restore"
   | "checkpoint/compare"
+  | "history/list"
+  | "history/list_result"
+  | "history/details"
+  | "history/details_result"
+  | "history/compare"
+  | "history/compare_result"
+  | "history/checkpoint-compare"
+  | "history/checkpoint-compare_result"
+  | "history/resume"
+  | "history/restart"
+  | "history/discard"
+  | "history/result"
+  | "terminal/start"
+  | "terminal/status"
+  | "terminal/status_result"
+  | "terminal/history"
+  | "terminal/history_result"
+  | "terminal/stop"
+  | "terminal/kill"
+  | "terminal/result"
+  | "schedule/list"
+  | "schedule/list_result"
+  | "schedule/create"
+  | "schedule/update"
+  | "schedule/remove"
+  | "schedule/toggle"
+  | "schedule/run-now"
+  | "schedule/details"
+  | "schedule/details_result"
+  | "schedule/started"
+  | "schedule/run_updated"
+  | "schedule/completed"
+  | "schedule/failed"
+  | "schedule/result"
   | "git/status"
   | "git/diff"
   | "context/search"
@@ -255,6 +308,37 @@ export type WebviewMessageType =
   | "rules/reload"
   | "rules/list"
   | "tools/list"
+  | "plugins/list"
+  | "plugins/list_result"
+  | "plugins/install"
+  | "plugins/uninstall"
+  | "plugins/details"
+  | "plugins/details_result"
+  | "plugins/invoke"
+  | "plugins/activate"
+  | "plugins/deactivate"
+  | "plugins/result"
+  | "team/create"
+  | "team/start"
+  | "team/cancel"
+  | "team/retry"
+  | "team/remove"
+  | "team/list"
+  | "team/list_result"
+  | "team/details"
+  | "team/details_result"
+  | "team/started"
+  | "team/task_updated"
+  | "team/completed"
+  | "team/failed"
+  | "team/cancelled"
+  | "team/result"
+  | "metrics/get"
+  | "metrics/result"
+  | "metrics/dashboard"
+  | "metrics/dashboard_result"
+  | "metrics/export"
+  | "metrics/export_result"
   | "tools/list_result"
   | "agent/heal"
   | "healing/started"
@@ -272,7 +356,20 @@ export type WebviewMessageType =
   | "context/folderPicker"
   | "context/problems"
   | "context/selection"
-  | "context/result";
+  | "context/result"
+  | "continuity/get"
+  | "continuity/state"
+  | "continuity/reset"
+  | "continuity/result"
+  | "skills/list"
+  | "skills/list_result"
+  | "skills/get"
+  | "skills/get_result"
+  | "skills/activate"
+  | "skills/deactivate"
+  | "skills/state"
+  | "skills/result"
+  | "skills/error";
 
 /**
  * A message between the extension host and the webview.
@@ -306,6 +403,112 @@ export interface TerminalResult {
   stderr: string;
   durationMs: number;
   command: string;
+}
+
+// ============================================================================
+// Conversation continuity (M12 v5 UX)
+// ----------------------------------------------------------------------------
+// Safe-metadata view of the session-scoped turn chain. The TaskStore record
+// stays canonical; this payload carries identity + previews only — never
+// tool inputs/outputs, credentials, or full conversation text. Prompt
+// previews come from persisted task titles, which the store redacts before
+// writing to disk.
+// ============================================================================
+
+/** One chained turn as shown in the continuity UI. */
+export interface ContinuityTurnState {
+  /** Persisted task id for the turn. */
+  taskId: string;
+  /** 1-based position in the active chain (oldest = 1). */
+  turn: number;
+  /** Short prompt preview (bounded, redacted at rest). */
+  title: string;
+  /** Persisted task status at push time. */
+  status: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  /** True when the task carries compaction artifacts (context optimized). */
+  compacted: boolean;
+  /**
+   * True when an unpaired trailing tool exchange was withheld from what the
+   * next model turn receives (interrupted tool call). The UI must not claim
+   * the full exchange was supplied.
+   */
+  trimmed: boolean;
+}
+
+/** Extension → webview continuity snapshot (`continuity/state`). */
+export interface ContinuityStatePayload {
+  /** False when the chain is empty (fresh session / after reset). */
+  active: boolean;
+  /** Number of turns in the active chain. */
+  chainLength: number;
+  /** Newest chained task id (null when empty). */
+  currentTaskId: string | null;
+  /** Oldest → newest. Bounded by the host chain cap. */
+  turns: ContinuityTurnState[];
+  /** True when any chained turn carries compacted history. */
+  compacted: boolean;
+  /** True when older turns were dropped by the host chain cap. */
+  truncated: boolean;
+}
+
+/** Webview → extension reset acknowledgement (`continuity/result`). */
+export interface ContinuityResultPayload {
+  success: boolean;
+  action: "reset";
+  chainLength?: number;
+  error?: string;
+}
+
+// ============================================================================
+// Skills activation & UX (discoverable, activatable, inspectable skills)
+// ----------------------------------------------------------------------------
+// Safe-metadata views only: identity, description, source, status, bounded
+// previews. Full instructions stay host-side and enter the model prompt only
+// for explicitly ACTIVE skills through AgentContextService. Skill files are
+// untrusted repository input — they can never bypass M4, disable approval,
+// escape workspace boundaries, or execute code.
+// ============================================================================
+
+/** One discovered skill as shown in the Skills UI (safe metadata only). */
+export interface SkillViewPayload {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  version?: string;
+  enabled: boolean;
+  filePath: string;
+  tags: string[];
+  appliesTo: string[];
+  allowedTools?: string[];
+  /** Bounded instruction preview (never the full body when large). */
+  instructionPreview: string;
+  instructionChars: number;
+}
+
+/** Extension → webview authoritative skill list (`skills/list_result`, `skills/state`). */
+export interface SkillsListPayload {
+  skills: SkillViewPayload[];
+  activeSkillNames: string[];
+  skipped: Array<{ path: string; reason: string }>;
+  /** Names of skills whose instructions are in the current prompt context. */
+  activeSkillsInContext: string[];
+}
+
+/** Webview → extension activate/deactivate request. */
+export interface SkillTogglePayload {
+  name: string;
+}
+
+/** Extension → webview skill mutation acknowledgement (`skills/result`, `skills/error`). */
+export interface SkillResultPayload {
+  success: boolean;
+  action: "activate" | "deactivate" | "get" | "list";
+  skill?: SkillViewPayload;
+  activeSkillNames?: string[];
+  error?: string;
 }
 
 // ============================================================================
@@ -980,4 +1183,64 @@ export function describeValidationFailure(input: {
     ? `\nFailure:\n${detail.split("\n").slice(0, 10).join("\n").slice(0, 1000)}`
     : "";
   return `Validation failed${code}.${cmd}${excerpt}`;
+}
+
+// ============================================================================
+// Canonical secret scrubber (single shared implementation)
+// ============================================================================
+
+export { scrubSecretsText, containsSecretText } from "./secrets.js";
+
+// ============================================================================
+// M18 — Observability & Telemetry
+// ============================================================================
+
+export {
+  MetricsRegistry,
+  StructuredLogger,
+  SpanTracker,
+  createObservability,
+  redactLogText,
+  redactLogValue,
+} from "./observability.js";
+export type {
+  MetricLabels,
+  CounterSnapshot,
+  HistogramSnapshot,
+  LogRecord,
+  LogLevel,
+  LoggerOptions,
+  Span,
+  Observability,
+} from "./observability.js";
+
+// ============================================================================
+// CodePilot-owned tool permission contracts
+// ----------------------------------------------------------------------------
+// Structural parity with the permission shapes CodePilot previously
+// imported: a per-tool gate decision (`ToolPolicy`) and the approval
+// request/response exchanged between the agent loop and the M4 pipeline.
+// Defined here (instead of an agent framework) because the policy engine,
+// the runtime, and the host approval UI all share them.
+// ============================================================================
+
+/** Per-tool gate decision consumed by the agent loop before dispatch. */
+export interface ToolPolicy {
+  /** False = tool is blocked outright (deny-closed). */
+  enabled: boolean;
+  /** True = execution proceeds without an approval round-trip. */
+  autoApprove: boolean;
+}
+
+/** One tool call awaiting a permission decision. */
+export interface ToolApprovalRequest {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}
+
+/** Permission decision for a tool call. */
+export interface ToolApprovalResult {
+  approved: boolean;
+  reason?: string;
 }

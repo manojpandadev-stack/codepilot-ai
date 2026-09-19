@@ -5,7 +5,7 @@ import type { CodePilotRuntimeOptions } from "./types.js";
  * Create a new CodePilotRuntime instance.
  *
  * This is the primary factory function for creating a fully configured
- * runtime that wraps ClineCore with CodePilot-specific defaults.
+ * runtime that wires the native agent engine with CodePilot-specific defaults.
  *
  * @example
  * ```ts

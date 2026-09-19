@@ -10,7 +10,7 @@ import type {
   ToolPolicy,
   ToolApprovalRequest,
   ToolApprovalResult,
-} from "@cline/shared";
+} from "@codepilot/shared";
 import {
   type ToolPermission,
   type ToolPermissionPolicy,
@@ -24,7 +24,7 @@ import {
 // ============================================================================
 
 const TOOL_CATEGORIES: Record<string, ToolCategory> = {
-  // Read tools (CodePilot aliases + real ClineCore names)
+  // Read tools (native callable names plus UI/policy aliases)
   read_files: "read",
   read_file: "read",
   search: "read",
@@ -393,9 +393,9 @@ export class PolicyEngine {
   }
 
   /**
-   * Get tool policies in a format compatible with Cline SDK.
+   * Get tool policies in the flat shape the native dispatcher gate consumes.
    */
-  toClineToolPolicies(): Record<string, ToolPolicy> {
+  toNativeToolPolicies(): Record<string, ToolPolicy> {
     const result: Record<string, ToolPolicy> = {};
     for (const [toolName, policy] of this.policies) {
       if (

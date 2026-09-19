@@ -18,7 +18,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@cline/agents": "^0.0.75",
+    "@codepilot/changeset-engine": "workspace:*",
     "@codepilot/shared": "workspace:*"
   },
   "devDependencies": {

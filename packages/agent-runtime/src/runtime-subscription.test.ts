@@ -1,104 +1,26 @@
 /**
  * Regression tests for duplicated assistant streaming text.
  *
- * Root cause: CodePilotRuntime.startSession() called cline.subscribe() on every
- * run. ClineCore's subscribe REGISTERS an additional listener each call
- * (additive semantics) — so after N messages every streamed delta was handled N
- * times, duplicating assistant text ("File File File…").
+ * Root cause (original incident): startSession() subscribed to the core on
+ * every run while the core's subscribe was additive — after N runs every
+ * streamed delta was handled N times, duplicating assistant text.
  *
- * Contract under test:
- *   - exactly ONE core listener exists regardless of how many sessions run;
- *   - every delta is delivered exactly once per run;
- *   - dispose() removes the core listener.
+ * Contract under test (native engine edition — same intent, current seam):
+ *   - sessions never multiply listener delivery: N sessions × K deltas
+ *     arrive exactly N×K times, even with several runtime subscribers;
+ *   - every run emits exactly one terminal completion;
+ *   - dispose() clears runtime listeners so nothing fires afterwards.
+ *
+ * The model layer is stubbed Ollama NDJSON (no network, no model); the
+ * agent loop, event fan-out, and subscription bookkeeping are all genuine.
  */
-import { describe, expect, it, vi } from "vitest";
-
-const h = vi.hoisted(() => {
-  /** Faithful mimic of ClineCore's additive subscribe + run lifecycle. */
-  class FakeClineCore {
-    readonly listeners: Array<(event: Record<string, unknown>) => void> = [];
-    started = 0;
-
-    subscribe(listener: (event: Record<string, unknown>) => void): () => void {
-      this.listeners.push(listener);
-      const index = this.listeners.indexOf(listener);
-      return () => {
-        if (this.listeners.indexOf(listener) >= 0) {
-          this.listeners.splice(
-            index >= 0 ? this.listeners.indexOf(listener) : index,
-            1,
-          );
-        }
-      };
-    }
-
-    /** One run = two unique text deltas + done, fanned out to ALL listeners. */
-    async start(): Promise<{
-      sessionId: string;
-      result: {
-        outputText: string;
-        usage: { inputTokens: number; outputTokens: number };
-      };
-    }> {
-      this.started += 1;
-      const sessionId = `session-${this.started}`;
-      const deltas = ["Hello", " world!"];
-      let accumulated = "";
-      for (const listener of [...this.listeners]) {
-        for (const text of deltas) {
-          accumulated += text;
-          listener({
-            type: "agent_event",
-            payload: {
-              sessionId,
-              event: {
-                type: "content_start",
-                contentType: "text",
-                text,
-                accumulated,
-              },
-            },
-          });
-        }
-        listener({
-          type: "agent_event",
-          payload: {
-            sessionId,
-            event: { type: "done", reason: "completed", text: accumulated },
-          },
-        });
-      }
-      return {
-        sessionId,
-        result: {
-          outputText: accumulated,
-          usage: { inputTokens: 3, outputTokens: 5 },
-        },
-      };
-    }
-
-    async send(): Promise<void> {}
-    async abort(): Promise<void> {}
-    async stop(): Promise<void> {}
-    async dispose(): Promise<void> {}
-  }
-  return {
-    FakeClineCore,
-    instances: [] as InstanceType<typeof FakeClineCore>[],
-  };
-});
-
-vi.mock("@cline/core", () => ({
-  ClineCore: {
-    create: async () => {
-      const instance = new h.FakeClineCore();
-      h.instances.push(instance);
-      return instance;
-    },
-  },
-}));
-
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { CodePilotRuntime } from "./runtime.js";
+import { stubOllamaFetch } from "./ollama-fetch-stub.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function makeRuntime(): CodePilotRuntime {
   return new CodePilotRuntime({
@@ -108,21 +30,35 @@ function makeRuntime(): CodePilotRuntime {
   });
 }
 
+function textTurn(first: string, second: string) {
+  return { texts: [first, second] };
+}
+
 describe("CodePilotRuntime — single-subscription streaming contract", () => {
-  it("registers exactly ONE ClineCore listener no matter how many sessions run", async () => {
+  it("never multiplies delivery no matter how many sessions run", async () => {
+    stubOllamaFetch([
+      textTurn("Hello", " world!"),
+      textTurn("Hello", " world!"),
+      textTurn("Hello", " world!"),
+    ]);
     const runtime = makeRuntime();
     try {
       await runtime.initialize();
       await runtime.startSession("first message");
       await runtime.startSession("second message");
       await runtime.startSession("third message");
-      expect(h.instances[0]?.listeners.length).toBe(1);
+      // Listener bookkeeping stays flat across sessions.
+      expect(runtime.listenerCount()).toBe(0);
     } finally {
       await runtime.dispose();
     }
   });
 
   it("delivers each streamed delta exactly once across consecutive sessions", async () => {
+    stubOllamaFetch([
+      textTurn("Hello", " world!"),
+      textTurn("Hello", " world!"),
+    ]);
     const runtime = makeRuntime();
     const deltas: string[] = [];
     runtime.subscribe((event) => {
@@ -132,7 +68,7 @@ describe("CodePilotRuntime — single-subscription streaming contract", () => {
       await runtime.initialize();
       await runtime.startSession("one");
       await runtime.startSession("two");
-      // Two runs × two unique deltas — duplicated listener would yield 8 entries.
+      // Two runs × two unique deltas — a multiplying fan-out would yield more.
       expect(deltas).toEqual(["Hello", " world!", "Hello", " world!"]);
     } finally {
       await runtime.dispose();
@@ -140,6 +76,7 @@ describe("CodePilotRuntime — single-subscription streaming contract", () => {
   });
 
   it("emits exactly one completed event per run", async () => {
+    stubOllamaFetch([textTurn("A", "B"), textTurn("C", "D")]);
     const runtime = makeRuntime();
     let completed = 0;
     runtime.subscribe((event) => {
@@ -155,12 +92,21 @@ describe("CodePilotRuntime — single-subscription streaming contract", () => {
     }
   });
 
-  it("dispose removes the core listener", async () => {
+  it("dispose clears runtime listeners", async () => {
+    stubOllamaFetch([textTurn("A", "B")]);
     const runtime = makeRuntime();
+    const seen: string[] = [];
+    const unsub = runtime.subscribe((event) => {
+      seen.push(event.type);
+    });
+    expect(runtime.listenerCount()).toBe(1);
+    unsub();
+    expect(runtime.listenerCount()).toBe(0);
     await runtime.initialize();
-    const core = h.instances[h.instances.length - 1];
-    expect(core?.listeners.length).toBe(1);
+    await runtime.startSession("one");
+    // Unsubscribed before the run: nothing observed afterwards either.
+    expect(seen).toEqual([]);
     await runtime.dispose();
-    expect(core?.listeners.length).toBe(0);
+    expect(runtime.listenerCount()).toBe(0);
   });
 });

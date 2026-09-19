@@ -2,10 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================================
+   CodePilot AI — global styles
+   All colors come from VS Code theme variables, so the UI adapts to Dark,
+   Light and High-Contrast themes automatically.
+   ============================================================================ */
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
@@ -13,23 +24,217 @@ body {
   font-size: var(--vscode-font-size, 13px);
   color: var(--vscode-foreground, #cccccc);
   background: var(--vscode-sideBar-background, #252526);
-  height: 100vh;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100vh;
 }
 
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
   background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
   border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
   background: var(--vscode-scrollbarSlider-hoverBackground, rgba(121, 121, 121, 0.7));
+}
+
+/* ---------------------------------------------------------------------------
+   Focus visibility — keyboard navigation must always show where focus is.
+   --------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* ---------------------------------------------------------------------------
+   Animations — subtle only, disabled under prefers-reduced-motion.
+   --------------------------------------------------------------------------- */
+@keyframes cp-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes cp-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes cp-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.cp-fade-up {
+  animation: cp-fade-up 150ms ease-out;
+}
+
+.cp-pulse {
+  animation: cp-pulse-dot 1.6s ease-in-out infinite;
+}
+
+.cp-streaming-caret::after {
+  content: "▍";
+  margin-left: 1px;
+  animation: cp-pulse-dot 1s ease-in-out infinite;
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.cp-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--vscode-widget-shadow, rgba(128, 128, 128, 0.18)) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: cp-shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-fade-up,
+  .cp-pulse,
+  .cp-shimmer,
+  .cp-streaming-caret::after {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Component primitives (thin layer over Tailwind tokens; used via className)
+   --------------------------------------------------------------------------- */
+
+.cp-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground, #9d9d9d);
+}
+
+/* Markdown body inside chat messages */
+.cp-md {
+  font-size: 13px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+.cp-md p + p {
+  margin-top: 8px;
+}
+.cp-md h1,
+.cp-md h2,
+.cp-md h3,
+.cp-md h4 {
+  font-weight: 600;
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+.cp-md h1 {
+  font-size: 15px;
+}
+.cp-md h2 {
+  font-size: 14px;
+}
+.cp-md h3,
+.cp-md h4 {
+  font-size: 13px;
+}
+.cp-md ul,
+.cp-md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.cp-md ul {
+  list-style: disc;
+}
+.cp-md ol {
+  list-style: decimal;
+}
+.cp-md li {
+  margin: 2px 0;
+}
+.cp-md code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  background: var(--vscode-textCodeBlock-background, rgba(110, 118, 129, 0.2));
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.cp-md pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--vscode-editor-background, #1e1e1e);
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.cp-md pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.cp-md a {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  text-decoration: none;
+}
+.cp-md a:hover {
+  text-decoration: underline;
+}
+.cp-md blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--vscode-textBlockQuote-border, #6a6a6a);
+  background: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.1));
+  color: var(--vscode-descriptionForeground, #9d9d9d);
+}
+.cp-md hr {
+  border: none;
+  border-top: 1px solid var(--vscode-panel-border, #3c3c3c);
+  margin: 12px 0;
+}
+.cp-md table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.cp-md th,
+.cp-md td {
+  border: 1px solid var(--vscode-panel-border, #3c3c3c);
+  padding: 4px 8px;
+  text-align: left;
+}
+.cp-md th {
+  background: var(--vscode-editorWidget-background, #252526);
+  font-weight: 600;
 }

@@ -2,30 +2,50 @@
 
 **Production-Grade Agentic Software Engineering Platform for VS Code**
 
-CodePilot AI is an autonomous AI coding assistant that understands your entire repository, searches code semantically, generates implementation plans, modifies multiple files, runs tests, analyzes failures, and fixes them automatically — all while respecting your privacy and security policies.
+CodePilot — an independently implemented AI coding assistant for VS Code.
+
+CodePilot AI is an AI coding assistant for VS Code that works with your
+repository: it can read and search code, propose and stage file changes for
+your approval, run terminal commands through an approval gate, and keep a
+persistent, resumable record of each task — all while respecting your
+privacy and security policies. Agentic actions always pass explicit
+approval boundaries; nothing executes silently.
 
 ## Features
 
 ### Core Agent Capabilities
-- **Autonomous Coding**: Understand requests, plan, implement, test, and review
-- **Multi-File Editing**: Modify multiple files with syntax-aware diffs
-- **Terminal Execution**: Run build tools, tests, and shell commands
-- **Git Intelligence**: Checkpoints, diffs, branch awareness, commit generation
-- **Self-Verification**: Run tests, analyze failures, and fix automatically
+- **Assisted Coding**: Understand requests, plan, implement, test, and review
+- **Multi-File Editing**: Propose changes across files as reviewable diffs (ChangeSet approval)
+- **Terminal Execution**: Run build tools, tests, and shell commands (approval-gated)
+- **Git Intelligence**: Checkpoints, diffs, branch awareness
+- **Self-Verification**: Run tests and surface failures for approved follow-ups
 
 ### Privacy & Security
-- **Local-First**: Works 100% offline with Ollama
+- **Local-First**: Runs fully on-machine with Ollama once models are pulled
 - **Three Privacy Modes**: Local Only, Hybrid, Cloud
 - **Tool Governance**: Per-tool approval policies
 - **Command Validation**: Blocks dangerous shell commands
 - **SecretStorage**: API keys never exposed to WebView
 
 ### AI Provider Support
-- **Ollama** (local) — qwen2.5-coder, llama3.2, etc.
-- **OpenAI** — GPT-4o, o3
-- **Anthropic** — Claude Sonnet 4, Claude Opus 4
-- **Google** — Gemini 2.5 Pro/Flash
-- **AWS Bedrock**, **Mistral**, **OpenAI-compatible**
+
+Provider support is driven by a single authoritative CodePilot-owned
+catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
+`docs/PROVIDERS.md`):
+
+- **12 curated providers** appear in the provider selector: **Ollama** and
+  **LM Studio** (local), **OpenAI**, **Anthropic**, **Google Gemini**,
+  **OpenRouter**, **ZhipuAI / Z.AI**, plus generic **OpenAI-compatible**
+  and **custom** endpoints (custom base URL + API key)
+- Any other OpenAI-compatible endpoint works through the custom provider
+  (base URL + key); credentials are stored in VS Code SecretStorage
+- Local providers discover models live from the running server; cloud
+  providers offer curated catalogue models
+
+> Live-verified in this repository: Ollama (full E2E including native tool
+> calling and M4 approval). Other providers share the same native provider
+> path and are covered by stubbed-wire suites — use the provider
+> selector's Test Connection probe before relying on a new provider.
 
 ### Agent Modes
 - **Ask**: Conversational assistance without modifications
@@ -35,6 +55,7 @@ CodePilot AI is an autonomous AI coding assistant that understands your entire r
 - **Auto**: Autonomous execution under configured policies
 
 ### Developer Tools
+- **Browser Tools**: Navigate pages and extract content through policy-checked, SSRF-protected fetching
 - **Architecture Analysis**: Detect frameworks, modules, dependency graphs
 - **Code Review Dashboard**: Critical/High/Medium/Low findings with suggested fixes
 - **Test Intelligence**: Framework detection, affected test discovery
@@ -60,7 +81,7 @@ CodePilot AI is an autonomous AI coding assistant that understands your entire r
 ### Install Ollama Models
 
 ```bash
-ollama pull qwen2.5-coder:7b
+ollama pull qwen3:8b
 ```
 
 ### Setup (Extension Only)
@@ -82,7 +103,7 @@ pnpm build:extension
 1. Open VS Code
 2. Go to Extensions (Ctrl+Shift+X)
 3. Click "..." → "Install from VSIX..."
-4. Select `apps/vscode-extension/dist/codepilot-ai-*.vsix`
+4. Select `apps/vscode-extension/codepilot-ai-0.1.0.vsix`
 
 Or press F5 in the extension project to launch the Extension Development Host.
 
@@ -110,8 +131,10 @@ mvn spring-boot:run
 
 ### Select Your Provider
 
-1. In the agent panel, use the model dropdown to select your Ollama model
-2. For cloud providers, configure your API key in Settings
+1. In the agent panel, use the provider selector (search the curated
+   providers, check status badges, and configure credentials — keys go to VS Code SecretStorage)
+2. Local providers (Ollama/LM Studio) list models discovered from the running
+   server; cloud providers offer their catalogue models
 
 ### Start Coding
 
@@ -138,7 +161,7 @@ Type your request in the chat:
 ```json
 {
   "codepilot.provider": "ollama",
-  "codepilot.model": "qwen2.5-coder:7b",
+  "codepilot.model": "qwen3:8b",
   "codepilot.privacyMode": "local",
   "codepilot.agentMode": "act",
   "codepilot.localAI.ollama.baseUrl": "http://localhost:11434",
@@ -151,7 +174,8 @@ Type your request in the chat:
 
 ### Project Rules
 
-Create `.cline/rules/` in your project root:
+Create `.codepilot/rules/` in your project root (global rules live in
+`~/.codepilot/rules/`):
 
 ```markdown
 ---
@@ -179,7 +203,7 @@ codepilot-ai/
 │   └── cli/                 # Optional CLI
 ├── packages/
 │   ├── shared/              # Common types and constants
-│   ├── agent-runtime/       # ClineCore integration
+│   ├── agent-runtime/       # Native CodePilot agent runtime (sessions, tools, continuity)
 │   ├── model-gateway/       # Provider abstraction
 │   ├── tool-engine/         # Repository analysis, review, testing tools
 │   ├── policy-engine/       # Tool governance and security
@@ -226,4 +250,4 @@ Apache License 2.0
 
 ---
 
-Built with ❤️ using the [Cline SDK](https://github.com/cline/cline), React, Spring Boot, and TypeScript.
+Built with React, TypeScript, and CodePilot's native agent runtime.

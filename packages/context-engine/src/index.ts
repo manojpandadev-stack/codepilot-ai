@@ -7,6 +7,7 @@
  */
 
 import { MAX_CONTEXT_TOKENS_DEFAULT } from "@codepilot/shared";
+import { ssrfSafeFetch } from "./ssrf-guard.js";
 
 // ============================================================================
 // Token Estimation
@@ -425,22 +426,7 @@ export async function resolveFolder(
 // @url Fetch
 // ============================================================================
 
-/** SSRF protection: block private IPs and localhost */
-function isPrivateOrReserved(hostname: string): boolean {
-  if (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1"
-  )
-    return true;
-  if (hostname.startsWith("192.168.")) return true;
-  if (hostname.startsWith("10.")) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
-  if (hostname.endsWith(".local") || hostname.endsWith(".internal"))
-    return true;
-  if (hostname === "0.0.0.0") return true;
-  return false;
-}
+/** SSRF textual check now lives in ./ssrf-guard.js (strict classifier); fetchUrlContent delegates to ssrfSafeFetch. */
 
 /** Extract readable text from HTML (basic) */
 function htmlToText(html: string): string {
@@ -458,122 +444,84 @@ function htmlToText(html: string): string {
  */
 export async function fetchUrlContent(
   url: string,
-  options?: { timeoutMs?: number; maxChars?: number },
+  options?: {
+    timeoutMs?: number;
+    maxChars?: number;
+    resolveAll?: (h: string) => Promise<Array<{ address: string; family: number }>>;
+    allowedDomains?: string[];
+    deniedDomains?: string[];
+  },
 ): Promise<ContextItem[]> {
   const timeoutMs = options?.timeoutMs ?? 15_000;
   const maxChars = options?.maxChars ?? 30_000;
+
+  const okItem = (content: string, meta?: Record<string, unknown>): ContextItem[] => [
+    { source: "user_request", content, priority: 0, estimatedTokens: 10, metadata: meta },
+  ];
+  void timeoutMs;
 
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return [
-      {
-        source: "user_request",
-        content: `Error: Invalid URL: ${url}`,
-        priority: 0,
-        estimatedTokens: 10,
-      },
-    ];
+    return okItem(`Error: Invalid URL: ${url}`);
   }
-
-  // Protocol check
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return [
-      {
-        source: "user_request",
-        content: `Error: Only HTTP/HTTPS URLs are allowed`,
-        priority: 0,
-        estimatedTokens: 10,
-      },
-    ];
+    return okItem(`Error: Only HTTP/HTTPS URLs are allowed`);
   }
 
-  // SSRF protection
-  if (isPrivateOrReserved(parsed.hostname)) {
-    return [
-      {
-        source: "user_request",
-        content: `Error: Access to private/internal URLs is blocked for security`,
-        priority: 0,
-        estimatedTokens: 10,
-      },
-    ];
-  }
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "CodePilot-AI/0.1.0" },
-      redirect: "follow",
-    });
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      return [
-        {
-          source: "user_request",
-          content: `Error: HTTP ${response.status} ${response.statusText}`,
-          priority: 0,
-          estimatedTokens: 10,
-        },
-      ];
+  // Every-hop SSRF validation: protocol + textual + domain + DNS/IP for the
+  // initial URL, then again for EVERY redirect (handled inside ssrfSafeFetch
+  // with redirect:"manual" — never blindly follow).
+  const guard = await ssrfSafeFetch(url, {
+    timeoutMs,
+    maxChars: Math.max(maxChars, 1024),
+    maxRedirects: 5,
+    resolveAll: options?.resolveAll,
+    allowedDomains: options?.allowedDomains,
+    deniedDomains: options?.deniedDomains,
+  });
+  if (!guard.ok) {
+    const msg = guard.error ?? "blocked";
+    if (/private|local|loopback|link-local|multicast|reserved|metadata|unspecified|documentation|carrier-grade-nat|numeric IP|forbidden|allow-list|denied|DNS/i.test(msg)) {
+      return okItem(`Error: Access to private/internal URLs is blocked for security`);
     }
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (
-      !contentType.includes("text/html") &&
-      !contentType.includes("text/plain") &&
-      !contentType.includes("application/json") &&
-      !contentType.includes("text/markdown")
-    ) {
-      return [
-        {
-          source: "user_request",
-          content: `Error: Unsupported content type: ${contentType}`,
-          priority: 0,
-          estimatedTokens: 10,
-        },
-      ];
-    }
-
-    const rawText = await response.text();
-    const isHtml = contentType.includes("text/html");
-    const text = isHtml ? htmlToText(rawText) : rawText;
-    const truncated =
-      text.length > maxChars
-        ? text.slice(0, maxChars) + "\n... [truncated]"
-        : text;
-    const tokens = estimateTokens(truncated);
-
-    return [
-      {
-        source: "user_request",
-        content: `URL: ${url}\n\n${truncated}`,
-        priority: 75,
-        estimatedTokens: tokens,
-        metadata: {
-          type: "url_content",
-          url,
-          contentType,
-          charCount: truncated.length,
-        },
-      },
-    ];
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return [
-      {
-        source: "user_request",
-        content: `Error fetching ${url}: ${msg}`,
-        priority: 0,
-        estimatedTokens: 10,
-      },
-    ];
+    if (/protocol/i.test(msg)) return okItem(`Error: Only HTTP/HTTPS URLs are allowed`);
+    if (/redirect/i.test(msg)) return okItem(`Error: Redirect blocked for security: ${msg}`);
+    return okItem(`Error fetching ${url}: ${msg}`);
   }
+
+  const contentType = guard.contentType ?? "";
+  if (
+    !contentType.includes("text/html") &&
+    !contentType.includes("text/plain") &&
+    !contentType.includes("application/json") &&
+    !contentType.includes("text/markdown")
+  ) {
+    return okItem(`Error: Unsupported content type: ${contentType}`);
+  }
+
+  const rawText = guard.text ?? "";
+  const isHtml = contentType.includes("text/html");
+  const text = isHtml ? htmlToText(rawText) : rawText;
+  const truncated = text.length > maxChars ? text.slice(0, maxChars) + "\n... [truncated]" : text;
+  const tokens = estimateTokens(truncated);
+
+  return [
+    {
+      source: "user_request",
+      content: `URL: ${guard.finalUrl}\n\n${truncated}`,
+      priority: 75,
+      estimatedTokens: tokens,
+      metadata: {
+        type: "url_content",
+        url: guard.finalUrl,
+        contentType,
+        charCount: truncated.length,
+        rawHtml: isHtml ? rawText : undefined,
+      },
+    },
+  ];
 }
 
 // ============================================================================
@@ -793,3 +741,65 @@ export function rulesToContextItems(rules: ProjectRule[]): ContextItem[] {
       },
     }));
 }
+
+// ============================================================================
+// M6 — Workspace Index (repository intelligence)
+// ============================================================================
+
+export type {
+  FileMeta,
+  FileKind,
+  SymbolInfo,
+  ImportInfo,
+  IndexedFile,
+  RankedCandidate,
+  DiagnosticRef,
+  GitContextInfo,
+  RetrievalRequest,
+  RetrievalResult,
+  SelectedContext,
+  OmittedContext,
+  BudgetBreakdown,
+  RagHit,
+} from "./m6/types.js";
+export { WorkspaceIndex, discoverWorkspace } from "./m6/index.js";
+
+// ============================================================================
+// M13 — Browser / Web Agent
+// ============================================================================
+
+export type {
+  WebPage,
+  WebAgentOptions,
+  NavigationDecision,
+} from "./m13-web-agent.js";
+export {
+  WebAgent,
+  checkNavigationPolicy,
+  detectInjection,
+  isolateUntrustedContent,
+  extractLinks,
+  extractTitle,
+} from "./m13-web-agent.js";
+
+// ============================================================================
+// M9 — Rules & Skills
+// ============================================================================
+
+export type {
+  Rule,
+  RuleSource,
+  Skill,
+  RulesLoadResult,
+  RulesOptions,
+} from "./m9/types.js";
+export { RULE_PRECEDENCE } from "./m9/types.js";
+export {
+  RulesEngine,
+  globMatches,
+  parseSkillFrontmatter,
+  sanitizeInstructionText,
+  SKILL_VERSION_PATTERN,
+  SKILL_TOOL_PATTERN,
+} from "./m9/rules-engine.js";
+export { isSensitivePath, SENSITIVE_PATTERNS } from "./m6/security.js";

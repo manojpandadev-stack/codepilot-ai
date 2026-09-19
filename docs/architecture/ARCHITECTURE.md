@@ -1,8 +1,13 @@
 # CodePilot AI — Architecture
 
+> **Current architecture.** The runtime is CodePilot-owned end to end
+> (native agent engine + native LLM providers); earlier revisions of this
+> document described a delegated third-party runtime. What follows
+> describes the current tree.
+
 ## Overview
 
-CodePilot AI is a production-grade agentic software engineering platform built as a VS Code extension. It wraps the Cline SDK for core agent runtime capabilities while adding repository intelligence, RAG, multi-agent orchestration, and a Spring Boot control plane.
+CodePilot AI is a production-grade agentic software engineering platform built as a VS Code extension. Its CodePilot-owned native runtime handles sessions, tools, and continuity, while repository intelligence, RAG, multi-agent orchestration, and an optional Spring Boot control plane build on top.
 
 ## System Architecture
 
@@ -21,9 +26,9 @@ CodePilot AI is a production-grade agentic software engineering platform built a
 ┌───────────────────────────┼─────────────────────────────────────┐
 │                    Agent Runtime Layer                           │
 │  ┌────────────────────────┴──────────────────────────────────┐  │
-│  │               ClineCore / AgentRuntime                     │  │
+│  │            CodePilotRuntime (native engine)            │  │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │  │
-│  │  │ Sessions │  │   Tools  │  │  Hooks   │  │  Plugins │  │  │
+│  │  │ Sessions │  │   Tools  │  │   Gates  │  │  Skills  │  │  │
 │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                 │
@@ -41,7 +46,7 @@ CodePilot AI is a production-grade agentic software engineering platform built a
 ┌───────────────────────────┼─────────────────────────────────────┐
 │                   Model Gateway Layer                            │
 │  ┌────────────────────────┴──────────────────────────────────┐  │
-│  │           DefaultGateway (Cline LLMs)                      │  │
+│  │        Native LLM registry (CodePilot providers)          │  │
 │  │  ┌────────┐ ┌────────┐ ┌──────────┐ ┌────────┐           │  │
 │  │  │ Ollama │ │ OpenAI │ │Anthropic │ │ Google │ ...        │  │
 │  │  └────────┘ └────────┘ └──────────┘ └────────┘           │  │
@@ -63,15 +68,18 @@ CodePilot AI is a production-grade agentic software engineering platform built a
 
 ## Key Design Decisions
 
-### 1. Cline SDK as Agent Foundation
+### 1. CodePilot-owned native runtime
 
-Rather than building an agent loop from scratch, CodePilot leverages the Cline SDK v0.0.75:
-- **ClineCore**: Session lifecycle, persistence, checkpoints, MCP, hooks, teams
-- **AgentRuntime**: Core agent loop with tools, tool policies, streaming events
-- **DefaultGateway**: Multi-provider model routing (Ollama, OpenAI, Anthropic, etc.)
-- **Built-in tools**: read_files, search, apply_patch, shell, web_fetch
+Rather than delegating to a third-party runtime, CodePilot implements its
+own agent loop natively in TypeScript:
+
+- **CodePilotRuntime**: Session lifecycle, persistence, checkpoints, MCP, skills, teams
+- **Native agent engine**: Core agent loop with tools, M4 dispatcher gate, streaming events
+- **Native LLM registry**: Multi-provider model routing (Ollama, OpenAI, Anthropic, etc.)
+- **Built-in tools**: read_files, search_codebase, editor, apply_patch, bash, run_commands, web tools
 
 CodePilot adds value on top via:
+
 - Repository intelligence engine
 - Context budgeting and management
 - Multi-agent task DAG orchestration
@@ -82,12 +90,14 @@ CodePilot adds value on top via:
 ### 2. Local-First Architecture
 
 The extension is fully functional without the backend:
+
 - All inference via Ollama (local)
-- SQLite for session persistence (Cline default)
+- TaskStore JSON persistence + crash-safe writes
 - File-based memory
 - No telemetry unless opted in
 
 The Spring Boot control plane is optional for:
+
 - Multi-user deployments
 - PostgreSQL-backed RAG with pgvector
 - Centralized metadata and analytics
@@ -96,7 +106,7 @@ The Spring Boot control plane is optional for:
 ### 3. Privacy by Design
 
 - LOCAL ONLY mode: zero network requests for inference
-- Explicit per-task cloud routing in HYBRID mode
+- HYBRID mode: remote providers permitted where configured
 - No source code sent to cloud providers unless explicitly configured
 - API keys stored in VS Code SecretStorage
 - CSP-enforced WebView isolation
@@ -106,7 +116,7 @@ The Spring Boot control plane is optional for:
 ```
 @codepilot/shared           (types, constants)
     ↑
-@codepilot/agent-runtime    (ClineCore wrapper)
+@codepilot/agent-runtime    (native runtime: sessions, tools, continuity)
 @codepilot/model-gateway    (provider abstraction)
 @codepilot/policy-engine    (tool governance)
 @codepilot/context-engine   (context management)
@@ -130,8 +140,8 @@ com.codepilot.control-plane (Spring Boot backend)
 1. React UI → `chat/send` message → Extension Host
 2. Extension Host → `CodePilotRuntime.startSession(prompt)`
 3. Runtime → builds system prompt (with context engine, memory)
-4. Runtime → `ClineCore.start({ config, prompt })`
-5. ClineCore → creates Agent, wires tools, hooks, policies
+4. Runtime → native session start (agent loop + provider request)
+5. Native engine → wires tools, M4 gate, policies; streams model events
 6. Agent loop → model request → streaming response
 7. Tool calls → Policy Engine → approval check → execute → result
 8. Events → EventBus → forwarded to Webview
@@ -155,17 +165,17 @@ Result → Agent → continue or finish
 
 ## Technology Stack
 
-| Layer | Technology |
-|-------|-----------|
-| VS Code Extension | TypeScript, VS Code API |
-| React UI | React, Tailwind CSS |
-| Agent Runtime | @cline/sdk v0.0.75 (ClineCore, AgentRuntime) |
-| Model Gateway | @cline/llms (DefaultGateway) |
-| Ollama | Ollama API (localhost:11434) |
-| Control Plane | Java 21, Spring Boot 3.5, Spring Security |
-| Database | PostgreSQL 16, pgvector |
-| Cache | Redis 7 |
-| Events | Kafka 3.8 (optional) |
-| Containerization | Docker, Docker Compose |
-| Build | pnpm workspaces, esbuild, Maven |
-| Testing | Vitest, JUnit 5, Mockito, Testcontainers |
+| Layer             | Technology                                   |
+| ----------------- | -------------------------------------------- |
+| VS Code Extension | TypeScript, VS Code API                      |
+| React UI          | React, Tailwind CSS                          |
+| Agent Runtime     | CodePilot native engine (TypeScript)              |
+| Model Gateway     | @codepilot/llm catalogue + native providers       |
+| Ollama            | Ollama API (localhost:11434)                 |
+| Control Plane     | Java 21, Spring Boot 3.5, Spring Security    |
+| Database          | PostgreSQL 16, pgvector                      |
+| Cache             | Redis 7                                      |
+| Events            | Kafka 3.8 (optional)                         |
+| Containerization  | Docker, Docker Compose                       |
+| Build             | pnpm workspaces, esbuild, Maven              |
+| Testing           | Vitest, JUnit 5, Mockito, Testcontainers     |
