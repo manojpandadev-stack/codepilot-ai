@@ -59,7 +59,7 @@ function ipv4ToInt(ip: string): number | null {
   const b = p[1] ?? 0;
   const c = p[2] ?? 0;
   const d = p[3] ?? 0;
-  return (((a << 24) | (b << 16) | (c << 8) | d) >>> 0);
+  return ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
 }
 
 export function classifyIPv4(ip: string): IPClass | null {
@@ -70,8 +70,8 @@ export function classifyIPv4(ip: string): IPClass | null {
   // otherwise any range >= 0x80000000 (192.168/16, 172.16/12, 169.254/16,
   // multicast, reserved, documentation) misclassifies as global. That was a
   // live SSRF bypass; the `m` helper below closes it.
-  const m = (mask: number): number => ((v & mask) >>> 0);
-  if ((v >>> 24) === 127) return "loopback";
+  const m = (mask: number): number => (v & mask) >>> 0;
+  if (v >>> 24 === 127) return "loopback";
   if (v === 0x00000000) return "unspecified";
   if (v === 0x00000001) return "reserved";
   // Cloud metadata endpoints are link-local (169.254/16) but classified as
@@ -102,9 +102,13 @@ export function parseIPv6Groups(addr: string): number[] | null {
   // the standard pure-hex parser. Slicing at the last ":" loses the "::"
   // compression marker (e.g. "::127.0.0.1" left a lone ":"), so substitution
   // before parsing is the only correct approach.
-  const tailMatch = /(\d+\.\d+\.\d+\.\d+)$/.exec(a) ?? /([0-9a-fA-FxX.]+\.[0-9a-fA-FxX.]+)$/.exec(a);
+  const tailMatch =
+    /(\d+\.\d+\.\d+\.\d+)$/.exec(a) ??
+    /([0-9a-fA-FxX.]+\.[0-9a-fA-FxX.]+)$/.exec(a);
   if (tailMatch?.[1]) {
-    const nv = normalizeIPv4(tailMatch[1]) ?? (net.isIPv4(tailMatch[1]) ? tailMatch[1] : null);
+    const nv =
+      normalizeIPv4(tailMatch[1]) ??
+      (net.isIPv4(tailMatch[1]) ? tailMatch[1] : null);
     if (nv) {
       const oct = nv.split(".").map((x) => parseInt(x, 10));
       const o0 = oct[0] ?? 0;
@@ -148,16 +152,42 @@ export function classifyIPv6(addr: string): IPClass | null {
   const h6 = g[6] ?? 0;
   const h7 = g[7] ?? 0;
   if (g.every((x) => x === 0)) return "unspecified";
-  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0 && h6 === 0 && h7 === 1) return "loopback";
+  if (
+    a === 0 &&
+    b === 0 &&
+    c === 0 &&
+    d === 0 &&
+    e === 0 &&
+    f === 0 &&
+    h6 === 0 &&
+    h7 === 1
+  )
+    return "loopback";
   if ((a & 0xff00) === 0xff00) return "multicast";
   if ((a & 0xfe00) === 0xfc00) return "private";
   if ((a & 0xffc0) === 0xfe80) return "link-local";
   if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) {
-    return classifyIPv4(`${(h6 >> 8) & 0xff}.${h6 & 0xff}.${(h7 >> 8) & 0xff}.${h7 & 0xff}`) ?? "reserved";
+    return (
+      classifyIPv4(
+        `${(h6 >> 8) & 0xff}.${h6 & 0xff}.${(h7 >> 8) & 0xff}.${h7 & 0xff}`,
+      ) ?? "reserved"
+    );
   }
   if (a === 0x0064 && b === 0xff9b) return "reserved";
-  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0 && (h6 !== 0 || h7 > 1)) {
-    return classifyIPv4(`${(h6 >> 8) & 0xff}.${h6 & 0xff}.${(h7 >> 8) & 0xff}.${h7 & 0xff}`) ?? "reserved";
+  if (
+    a === 0 &&
+    b === 0 &&
+    c === 0 &&
+    d === 0 &&
+    e === 0 &&
+    f === 0 &&
+    (h6 !== 0 || h7 > 1)
+  ) {
+    return (
+      classifyIPv4(
+        `${(h6 >> 8) & 0xff}.${h6 & 0xff}.${(h7 >> 8) & 0xff}.${h7 & 0xff}`,
+      ) ?? "reserved"
+    );
   }
   if (a === 0x2001 && b === 0x0db8) return "documentation";
   return "global";
@@ -178,33 +208,49 @@ export function normalizeDialAddress(host: string): string {
   if (v4) return v4;
   return h;
 }
-export function isForbiddenIPLiteral(host: string): { forbidden: boolean; reason: string } {
+export function isForbiddenIPLiteral(host: string): {
+  forbidden: boolean;
+  reason: string;
+} {
   const h = stripIpDecorations(host);
   const v4 = normalizeIPv4(h) ?? (net.isIPv4(h) ? h : null);
   if (v4) {
-    if (v4 === "169.254.169.254" || v4 === "169.254.169.253") return { forbidden: true, reason: "cloud metadata endpoint blocked" };
+    if (v4 === "169.254.169.254" || v4 === "169.254.169.253")
+      return { forbidden: true, reason: "cloud metadata endpoint blocked" };
     const cls = classifyIPv4(v4);
-    if (cls !== "global") return { forbidden: true, reason: `IPv4 ${v4} is ${cls}` };
+    if (cls !== "global")
+      return { forbidden: true, reason: `IPv4 ${v4} is ${cls}` };
     return { forbidden: false, reason: "ok" };
   }
   if (host.includes(":") || h.includes(":")) {
     const cls = classifyIPv6(h);
-    if (cls === null) return { forbidden: true, reason: "malformed IPv6 blocked" };
+    if (cls === null)
+      return { forbidden: true, reason: "malformed IPv6 blocked" };
     if (cls !== "global") return { forbidden: true, reason: `IPv6 is ${cls}` };
     return { forbidden: false, reason: "ok" };
   }
   return { forbidden: false, reason: "not an IP literal" };
 }
 
-export function checkHostnameTextual(host: string): { ok: boolean; reason: string } {
+export function checkHostnameTextual(host: string): {
+  ok: boolean;
+  reason: string;
+} {
   const h = host.toLowerCase().trim();
   if (h.length === 0) return { ok: false, reason: "empty hostname" };
   if (!h.includes(".") && !h.includes(":")) {
     return { ok: false, reason: "single-label hostnames are blocked" };
   }
   if (h === "localhost") return { ok: false, reason: "localhost blocked" };
-  if (h.endsWith(".localhost")) return { ok: false, reason: "localhost subdomain blocked" };
-  if (h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".invalid") || h.endsWith(".test")) return { ok: false, reason: "special-use TLD blocked" };
+  if (h.endsWith(".localhost"))
+    return { ok: false, reason: "localhost subdomain blocked" };
+  if (
+    h.endsWith(".local") ||
+    h.endsWith(".internal") ||
+    h.endsWith(".invalid") ||
+    h.endsWith(".test")
+  )
+    return { ok: false, reason: "special-use TLD blocked" };
   const lit = isForbiddenIPLiteral(h);
   if (lit.forbidden) return { ok: false, reason: lit.reason };
   const digits = h.replace(/\./g, "");
@@ -216,13 +262,19 @@ export function checkHostnameTextual(host: string): { ok: boolean; reason: strin
     if (n !== null && Number.isInteger(n) && n >= 0 && n <= 0xffffffff) {
       const dotted = `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
       const cls = classifyIPv4(dotted);
-      if (cls && cls !== "global") return { ok: false, reason: `numeric IP ${dotted} is ${cls}` };
+      if (cls && cls !== "global")
+        return { ok: false, reason: `numeric IP ${dotted} is ${cls}` };
     }
   }
   return { ok: true, reason: "ok" };
 }
 
-export async function validateResolvedAddresses(hostname: string, resolveAll: (h: string) => Promise<Array<{ address: string; family: number }>>): Promise<{ ok: boolean; reason: string; addresses: string[] }> {
+export async function validateResolvedAddresses(
+  hostname: string,
+  resolveAll: (
+    h: string,
+  ) => Promise<Array<{ address: string; family: number }>>,
+): Promise<{ ok: boolean; reason: string; addresses: string[] }> {
   const t = checkHostnameTextual(hostname);
   if (!t.ok) return { ok: false, reason: t.reason, addresses: [] };
   // IP literals (incl. bracketed/zone-id/obfuscated forms): classify strictly
@@ -251,11 +303,17 @@ export async function validateResolvedAddresses(hostname: string, resolveAll: (h
   } catch {
     return { ok: false, reason: "DNS resolution failed", addresses: [] };
   }
-  if (recs.length === 0) return { ok: false, reason: "no DNS records", addresses: [] };
+  if (recs.length === 0)
+    return { ok: false, reason: "no DNS records", addresses: [] };
   const addrs = recs.map((r) => r.address);
   for (const a of addrs) {
     const lit = isForbiddenIPLiteral(a);
-    if (lit.forbidden) return { ok: false, reason: `resolves to forbidden (${lit.reason})`, addresses: addrs };
+    if (lit.forbidden)
+      return {
+        ok: false,
+        reason: `resolves to forbidden (${lit.reason})`,
+        addresses: addrs,
+      };
   }
   return { ok: true, reason: "ok", addresses: addrs };
 }
@@ -264,14 +322,20 @@ export interface GuardFetchOptions {
   timeoutMs?: number;
   maxChars?: number;
   maxRedirects?: number;
-  resolveAll?: (h: string) => Promise<Array<{ address: string; family: number }>>;
+  resolveAll?: (
+    h: string,
+  ) => Promise<Array<{ address: string; family: number }>>;
   /** Test seam: inject raw HTTP exchange without touching the network. */
   request?: (
     target: URL,
     ip: string | undefined,
     host: string,
     timeoutMs: number,
-  ) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
+  ) => Promise<{
+    status: number;
+    headers: Record<string, string>;
+    body: string;
+  }>;
   allowedDomains?: string[];
   deniedDomains?: string[];
   pinIp?: boolean;
@@ -289,20 +353,28 @@ export interface GuardFetchResult {
   usedIp?: string;
 }
 
-function domainPolicy(host: string, o: GuardFetchOptions): { ok: boolean; reason: string } {
+function domainPolicy(
+  host: string,
+  o: GuardFetchOptions,
+): { ok: boolean; reason: string } {
   const h = host.toLowerCase();
   for (const d of o.deniedDomains ?? []) {
-    if (h === d.toLowerCase() || h.endsWith(`.${d.toLowerCase()}`)) return { ok: false, reason: `domain ${d} denied` };
+    if (h === d.toLowerCase() || h.endsWith(`.${d.toLowerCase()}`))
+      return { ok: false, reason: `domain ${d} denied` };
   }
   const al = o.allowedDomains ?? [];
   if (al.length > 0) {
-    const ok = al.some((a) => h === a.toLowerCase() || h.endsWith(`.${a.toLowerCase()}`));
+    const ok = al.some(
+      (a) => h === a.toLowerCase() || h.endsWith(`.${a.toLowerCase()}`),
+    );
     if (!ok) return { ok: false, reason: `domain ${h} not allow-listed` };
   }
   return { ok: true, reason: "ok" };
 }
 
-async function dnsResolveAll(h: string): Promise<Array<{ address: string; family: number }>> {
+async function dnsResolveAll(
+  h: string,
+): Promise<Array<{ address: string; family: number }>> {
   const { lookup } = await import("node:dns/promises");
   return lookup(h, { all: true });
 }
@@ -314,30 +386,41 @@ function rawRequest(
   timeoutMs: number,
 ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
   return new Promise((resolve, reject) => {
-    const start = (
-      mod: {
-        request: (
-          u: URL,
-          o: Record<string, unknown>,
-          cb: (res: {
-            statusCode?: number;
-            headers: Record<string, string | string[] | undefined>;
-            on: (e: string, f: (...a: never[]) => void) => void;
-          }) => void,
-        ) => { on: (e: string, f: (x: unknown) => void) => void; setTimeout: (n: number, f: () => void) => void; end: () => void; destroy: (e?: Error) => void };
-      },
-    ): void => {
+    const start = (mod: {
+      request: (
+        u: URL,
+        o: Record<string, unknown>,
+        cb: (res: {
+          statusCode?: number;
+          headers: Record<string, string | string[] | undefined>;
+          on: (e: string, f: (...a: never[]) => void) => void;
+        }) => void,
+      ) => {
+        on: (e: string, f: (x: unknown) => void) => void;
+        setTimeout: (n: number, f: () => void) => void;
+        end: () => void;
+        destroy: (e?: Error) => void;
+      };
+    }): void => {
       const headers: Record<string, string> = {};
       const lookup =
         pinIp !== undefined
-          ? (_h: string, _o: unknown, cb: (e: unknown, a: string, f: number) => void): void => {
+          ? (
+              _h: string,
+              _o: unknown,
+              cb: (e: unknown, a: string, f: number) => void,
+            ): void => {
               const dial = normalizeDialAddress(pinIp);
               cb(null, dial, net.isIP(dial));
             }
           : undefined;
       const req = mod.request(
         target,
-        { method: "GET", headers: { "User-Agent": "CodePilot-AI/0.1.0", Host: sniHost }, lookup },
+        {
+          method: "GET",
+          headers: { "User-Agent": "CodePilot-AI/0.1.0", Host: sniHost },
+          lookup,
+        },
         (res) => {
           for (const [k, v] of Object.entries(res.headers)) {
             if (typeof v === "string") headers[k.toLowerCase()] = v;
@@ -352,7 +435,11 @@ function rawRequest(
             if (bytes <= cap) chunks.push(b);
           });
           res.on("end", () =>
-            resolve({ status: res.statusCode ?? 0, headers, body: Buffer.concat(chunks).toString("utf8") }),
+            resolve({
+              status: res.statusCode ?? 0,
+              headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
           );
           res.on("error", reject as (...a: never[]) => void);
         },
@@ -369,7 +456,10 @@ function rawRequest(
   });
 }
 
-export async function ssrfSafeFetch(url: string, opts: GuardFetchOptions = {}): Promise<GuardFetchResult> {
+export async function ssrfSafeFetch(
+  url: string,
+  opts: GuardFetchOptions = {},
+): Promise<GuardFetchResult> {
   const timeoutMs = opts.timeoutMs ?? 15000;
   const maxRedirects = opts.maxRedirects ?? 5;
   const resolveAll = opts.resolveAll ?? dnsResolveAll;
@@ -384,44 +474,101 @@ export async function ssrfSafeFetch(url: string, opts: GuardFetchOptions = {}): 
       return { ok: false, finalUrl: current, error: "invalid URL", hops };
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { ok: false, finalUrl: current, error: `protocol ${parsed.protocol} blocked`, hops };
+      return {
+        ok: false,
+        finalUrl: current,
+        error: `protocol ${parsed.protocol} blocked`,
+        hops,
+      };
     }
     const textual = checkHostnameTextual(parsed.hostname);
-    if (!textual.ok) return { ok: false, finalUrl: current, error: textual.reason, hops };
+    if (!textual.ok)
+      return { ok: false, finalUrl: current, error: textual.reason, hops };
     const dom = domainPolicy(parsed.hostname, opts);
-    if (!dom.ok) return { ok: false, finalUrl: current, error: dom.reason, hops };
-    const dnsCheck = await validateResolvedAddresses(parsed.hostname, resolveAll);
-    if (!dnsCheck.ok) return { ok: false, finalUrl: current, error: dnsCheck.reason, hops };
+    if (!dom.ok)
+      return { ok: false, finalUrl: current, error: dom.reason, hops };
+    const dnsCheck = await validateResolvedAddresses(
+      parsed.hostname,
+      resolveAll,
+    );
+    if (!dnsCheck.ok)
+      return { ok: false, finalUrl: current, error: dnsCheck.reason, hops };
     // Pin the validated destination: normalize (strip brackets/zone, expand
     // obfuscated IPv4) so the custom lookup below dials EXACTLY the address
     // that was validated — no re-resolution, no rebinding window.
     const rawPin = doPin ? dnsCheck.addresses[0] : undefined;
-    const pinIp = rawPin !== undefined ? normalizeDialAddress(rawPin) : undefined;
+    const pinIp =
+      rawPin !== undefined ? normalizeDialAddress(rawPin) : undefined;
     const doRequest = opts.request ?? rawRequest;
     try {
-      const out = await doRequest(parsed, pinIp, stripIpDecorations(parsed.hostname), timeoutMs);
+      const out = await doRequest(
+        parsed,
+        pinIp,
+        stripIpDecorations(parsed.hostname),
+        timeoutMs,
+      );
       if (out.status >= 300 && out.status < 400) {
         const loc = out.headers["location"] ?? "";
-        if (!loc) return { ok: false, finalUrl: current, error: `redirect without location (HTTP ${out.status})`, hops, usedIp: pinIp };
+        if (!loc)
+          return {
+            ok: false,
+            finalUrl: current,
+            error: `redirect without location (HTTP ${out.status})`,
+            hops,
+            usedIp: pinIp,
+          };
         hops += 1;
-        if (hops > maxRedirects) return { ok: false, finalUrl: current, error: "too many redirects", hops, usedIp: pinIp };
+        if (hops > maxRedirects)
+          return {
+            ok: false,
+            finalUrl: current,
+            error: "too many redirects",
+            hops,
+            usedIp: pinIp,
+          };
         try {
           current = new URL(loc, current).toString();
         } catch {
-          return { ok: false, finalUrl: current, error: "invalid redirect target", hops, usedIp: pinIp };
+          return {
+            ok: false,
+            finalUrl: current,
+            error: "invalid redirect target",
+            hops,
+            usedIp: pinIp,
+          };
         }
         continue;
       }
       if (out.status < 200 || out.status >= 300) {
-        return { ok: false, finalUrl: current, error: `HTTP ${out.status}`, hops, usedIp: pinIp };
+        return {
+          ok: false,
+          finalUrl: current,
+          error: `HTTP ${out.status}`,
+          hops,
+          usedIp: pinIp,
+        };
       }
       const ct = out.headers["content-type"] ?? "";
       const mc = opts.maxChars ?? 30000;
       const text = out.body.length > mc ? out.body.slice(0, mc) : out.body;
-      return { ok: true, finalUrl: current, status: out.status, contentType: ct, text, rawHtml: ct.includes("text/html") ? out.body : undefined, hops, usedIp: pinIp };
+      return {
+        ok: true,
+        finalUrl: current,
+        status: out.status,
+        contentType: ct,
+        text,
+        rawHtml: ct.includes("text/html") ? out.body : undefined,
+        hops,
+        usedIp: pinIp,
+      };
     } catch (err) {
-      return { ok: false, finalUrl: current, error: err instanceof Error ? err.message : String(err), hops, usedIp: pinIp };
+      return {
+        ok: false,
+        finalUrl: current,
+        error: err instanceof Error ? err.message : String(err),
+        hops,
+        usedIp: pinIp,
+      };
     }
   }
 }
-

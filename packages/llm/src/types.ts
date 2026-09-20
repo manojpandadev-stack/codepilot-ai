@@ -19,6 +19,15 @@ export interface LlmTextBlock {
   text: string;
 }
 
+/** Image block (validated, metadata-stripped bytes as base64). */
+export interface LlmImageBlock {
+  type: "image";
+  mime: string;
+  dataBase64: string;
+  name?: string;
+  sizeBytes?: number;
+}
+
 export interface LlmToolUseBlock {
   type: "tool_use";
   id: string;
@@ -36,9 +45,7 @@ export interface LlmToolResultBlock {
 }
 
 export type LlmContentBlock =
-  | LlmTextBlock
-  | LlmToolUseBlock
-  | LlmToolResultBlock;
+  LlmTextBlock | LlmToolUseBlock | LlmToolResultBlock | LlmImageBlock;
 
 export interface LlmMessage {
   role: "user" | "assistant";
@@ -113,7 +120,9 @@ export interface LlmProvider {
    * (network, auth, timeout, abort) reject the iterable. */
   completeStream(request: LlmRequest): AsyncIterable<LlmChunk>;
   listModels?(signal?: AbortSignal): Promise<LlmListedModel[]>;
-  checkHealth?(signal?: AbortSignal): Promise<{ ok: boolean; latencyMs?: number }>;
+  checkHealth?(
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; latencyMs?: number }>;
   close?(): Promise<void>;
 }
 

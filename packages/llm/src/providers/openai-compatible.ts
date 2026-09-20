@@ -52,6 +52,10 @@ function toWireContent(content: LlmMessage["content"]): string {
       parts.push(
         `[tool_result ${block.name ?? block.tool_use_id}${block.is_error ? " ERROR" : ""}] ${block.content.slice(0, 6000)}`,
       );
+    } else if (block.type === "image") {
+      // Simplified text path: mark the image explicitly so it is never
+      // silently dropped (native providers carry the real bytes).
+      parts.push(`[image ${block.mime}]`);
     }
   }
   return parts.join("\n");
@@ -103,9 +107,12 @@ export class OpenAICompatibleProvider implements LlmProvider {
   }
 
   /** Hook for subclasses (Anthropic-style errors, Gemini envelopes, …). */
-  protected interpretDone(
-    _finishReason: string | null,
-  ): { type: "done"; success: boolean; error?: string; stopReason?: string } {
+  protected interpretDone(_finishReason: string | null): {
+    type: "done";
+    success: boolean;
+    error?: string;
+    stopReason?: string;
+  } {
     return { type: "done", success: true, stopReason: "completed" };
   }
 
@@ -242,7 +249,11 @@ export class OpenAICompatibleProvider implements LlmProvider {
       let input: Record<string, unknown> = {};
       try {
         const parsedArgs = JSON.parse(acc.args || "{}") as unknown;
-        if (parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)) {
+        if (
+          parsedArgs &&
+          typeof parsedArgs === "object" &&
+          !Array.isArray(parsedArgs)
+        ) {
           input = parsedArgs as Record<string, unknown>;
         }
       } catch {

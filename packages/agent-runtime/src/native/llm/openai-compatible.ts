@@ -17,7 +17,7 @@
  *   to usage. `data: [DONE]` terminates the SSE stream.
  */
 
-import type { AgentMessage } from "../types.js";
+import type { AgentMessage, ImageBlock } from "../types.js";
 import {
   LlmError,
   type LlmProvider,
@@ -63,7 +63,9 @@ interface WireChunk {
   error?: { message?: string } | string;
 }
 
-export function toOpenAiMessages(messages: AgentMessage[]): Array<Record<string, unknown>> {
+export function toOpenAiMessages(
+  messages: AgentMessage[],
+): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const msg of messages) {
     if (typeof msg.content === "string") {
@@ -71,12 +73,24 @@ export function toOpenAiMessages(messages: AgentMessage[]): Array<Record<string,
       continue;
     }
     if (msg.role === "assistant") {
+      if (msg.content.some((b) => b.type === "image")) {
+        throw new Error("image blocks are only supported in user messages");
+      }
       const text = msg.content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")
         .map((b) => b.text)
         .join("");
       const toolCalls = msg.content
-        .filter((b): b is { type: "tool_use"; id: string; name: string; input: Record<string, unknown> } => b.type === "tool_use")
+        .filter(
+          (
+            b,
+          ): b is {
+            type: "tool_use";
+            id: string;
+            name: string;
+            input: Record<string, unknown>;
+          } => b.type === "tool_use",
+        )
         .map((b) => ({
           id: b.id,
           type: "function",
@@ -89,12 +103,41 @@ export function toOpenAiMessages(messages: AgentMessage[]): Array<Record<string,
       });
       continue;
     }
-    // user message: text first, then tool results as role:"tool"
-    const text = msg.content
+    // user message: text + images as a content-part array, then tool
+    // results as role:"tool". Text is always emitted before images
+    // (deterministic ordering). Image parts use data URLs; fileRef-only
+    // blocks are rejected loudly instead of being silently dropped.
+    const textParts = msg.content
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
-    if (text.length > 0) out.push({ role: "user", content: text });
+      .map((b) => b.text);
+    const text = textParts.join("\n");
+    const imageParts = msg.content
+      .filter((b): b is ImageBlock => b.type === "image")
+      .map((b) => {
+        if (typeof b.dataBase64 !== "string" || b.dataBase64.length === 0) {
+          throw new Error(
+            "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+          );
+        }
+        return {
+          type: "image_url",
+          image_url: {
+            url: `data:${b.mime ?? "image/png"};base64,${b.dataBase64}`,
+          },
+        };
+      });
+    if (text.length > 0 || imageParts.length > 0) {
+      out.push({
+        role: "user",
+        content:
+          imageParts.length > 0
+            ? [
+                ...(text.length > 0 ? [{ type: "text", text }] : []),
+                ...imageParts,
+              ]
+            : text,
+      });
+    }
     for (const block of msg.content) {
       if (block.type === "tool_result") {
         out.push({
@@ -148,8 +191,12 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
             })),
           }
         : {}),
-      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-      ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
+      ...(request.temperature !== undefined
+        ? { temperature: request.temperature }
+        : {}),
+      ...(request.maxTokens !== undefined
+        ? { max_tokens: request.maxTokens }
+        : {}),
     };
 
     const controller = new AbortController();
@@ -176,7 +223,10 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
         yield { type: "finish", reason: "aborted" };
         return;
       }
-      throw new LlmError(this.id, `request failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new LlmError(
+        this.id,
+        `request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     if (!response.ok || !response.body) {
@@ -190,7 +240,10 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     }
 
     // Incremental tool-call assembly (OpenAI fragments by index).
-    const pendingCalls = new Map<number, { id: string; name: string; args: string }>();
+    const pendingCalls = new Map<
+      number,
+      { id: string; name: string; args: string }
+    >();
     let finished = false;
     let abortRequested = false;
 
@@ -227,7 +280,9 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
           }
           if (chunk.error) {
             const message =
-              typeof chunk.error === "string" ? chunk.error : chunk.error.message ?? "provider error";
+              typeof chunk.error === "string"
+                ? chunk.error
+                : (chunk.error.message ?? "provider error");
             throw new LlmError(this.id, message);
           }
           const choice = chunk.choices?.[0];
@@ -253,14 +308,18 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
                 pendingCalls.set(idx, pending);
               }
               if (fragment.id) pending.id = fragment.id;
-              if (fragment.function?.name) pending.name += fragment.function.name;
-              if (fragment.function?.arguments) pending.args += fragment.function.arguments;
+              if (fragment.function?.name)
+                pending.name += fragment.function.name;
+              if (fragment.function?.arguments)
+                pending.args += fragment.function.arguments;
             }
           }
           if (chunk.usage) usage = chunk.usage;
           if (choice?.finish_reason) {
             // Flush completed tool calls in index order.
-            const ordered = [...pendingCalls.entries()].sort((a, b) => a[0] - b[0]);
+            const ordered = [...pendingCalls.entries()].sort(
+              (a, b) => a[0] - b[0],
+            );
             for (const [, call] of ordered) {
               const toolCall: LlmToolCall = {
                 toolCallId: call.id,

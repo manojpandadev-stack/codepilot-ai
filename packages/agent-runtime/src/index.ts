@@ -156,7 +156,10 @@ export {
   buildSummaryPrompt,
   assertSummarizerPrivacyAllowed,
 } from "./compaction-summarizer.js";
-export type { SummarizerConfig, SummarizeResult } from "./compaction-summarizer.js";
+export type {
+  SummarizerConfig,
+  SummarizeResult,
+} from "./compaction-summarizer.js";
 export {
   estimateConversationTokens,
   estimateEntryTokens,
@@ -167,8 +170,14 @@ export {
   FALLBACK_CONTEXT_WINDOW_TOKENS,
 } from "./compaction-tokens.js";
 export type { ContextPressure, CompactionZone } from "./compaction-tokens.js";
-export { validateConversationProtocol, safeCompactionBoundary } from "./compaction-protocol.js";
-export type { ProtocolIssue, ProtocolValidationResult } from "./compaction-protocol.js";
+export {
+  validateConversationProtocol,
+  safeCompactionBoundary,
+} from "./compaction-protocol.js";
+export type {
+  ProtocolIssue,
+  ProtocolValidationResult,
+} from "./compaction-protocol.js";
 export type {
   CompactionSummary,
   CompactionArtifact,

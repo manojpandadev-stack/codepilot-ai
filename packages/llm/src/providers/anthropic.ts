@@ -33,6 +33,16 @@ function toWireContent(
   if (typeof content === "string") return content;
   return content.map((block) => {
     if (block.type === "text") return { type: "text", text: block.text };
+    if (block.type === "image") {
+      return {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: block.mime,
+          data: block.dataBase64,
+        },
+      };
+    }
     if (block.type === "tool_use") {
       return {
         type: "tool_use",
@@ -71,7 +81,9 @@ export class AnthropicProvider implements LlmProvider {
       .trim()
       .replace(/\/+$/, "");
     if (!/^https?:\/\//i.test(base)) {
-      throw new Error(`provider "${options.providerId}" requires an http(s) baseUrl`);
+      throw new Error(
+        `provider "${options.providerId}" requires an http(s) baseUrl`,
+      );
     }
     this.baseUrl = base;
     this.apiKey = options.apiKey;
@@ -129,7 +141,9 @@ export class AnthropicProvider implements LlmProvider {
     const flushReady = function* (
       uptoIndex?: number,
     ): Generator<LlmChunk, void, void> {
-      for (const [index, acc] of [...tools.entries()].sort((a, b) => a[0] - b[0])) {
+      for (const [index, acc] of [...tools.entries()].sort(
+        (a, b) => a[0] - b[0],
+      )) {
         if (uptoIndex !== undefined && index > uptoIndex) continue;
         if (acc.emitted || !acc.name) continue;
         acc.emitted = true;
@@ -165,8 +179,7 @@ export class AnthropicProvider implements LlmProvider {
         switch (currentEvent) {
           case "message_start": {
             const msg = parsed.message as
-              | { usage?: { input_tokens?: unknown } }
-              | undefined;
+              { usage?: { input_tokens?: unknown } } | undefined;
             if (typeof msg?.usage?.input_tokens === "number") {
               inputTokens = msg.usage.input_tokens;
             }
@@ -182,7 +195,8 @@ export class AnthropicProvider implements LlmProvider {
             };
             if (block.type === "tool_use") {
               tools.set(index, {
-                id: typeof block.id === "string" ? block.id : `call-${index + 1}`,
+                id:
+                  typeof block.id === "string" ? block.id : `call-${index + 1}`,
                 name: typeof block.name === "string" ? block.name : "",
                 args: "",
                 emitted: false,
@@ -191,8 +205,7 @@ export class AnthropicProvider implements LlmProvider {
             break;
           }
           case "content_block_delta": {
-            const index =
-              typeof parsed.index === "number" ? parsed.index : 0;
+            const index = typeof parsed.index === "number" ? parsed.index : 0;
             const delta = (parsed.delta ?? {}) as {
               type?: unknown;
               text?: unknown;
@@ -210,8 +223,7 @@ export class AnthropicProvider implements LlmProvider {
             break;
           }
           case "content_block_stop": {
-            const index =
-              typeof parsed.index === "number" ? parsed.index : 0;
+            const index = typeof parsed.index === "number" ? parsed.index : 0;
             yield* flushReady(index);
             break;
           }

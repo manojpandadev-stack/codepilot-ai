@@ -50,7 +50,10 @@ export class TaskPersistenceQueue {
    * Never throws — failures surface in the outcome, and a failed op never
    * blocks subsequent ops for the same task.
    */
-  run<T>(taskId: string, op: () => Promise<T>): Promise<TaskPersistenceOutcome<T>> {
+  run<T>(
+    taskId: string,
+    op: () => Promise<T>,
+  ): Promise<TaskPersistenceOutcome<T>> {
     let state = this.tasks.get(taskId);
     if (!state) {
       state = { chain: Promise.resolve(), epoch: 0, pending: 0 };
@@ -60,26 +63,32 @@ export class TaskPersistenceQueue {
     const myEpoch = captured.epoch;
     captured.pending += 1;
 
-    const outcome: Promise<TaskPersistenceOutcome<T>> = captured.chain.then(() => {
-      // Cancelled between enqueue and execution (epoch moved on) — skip.
-      if (this.tasks.get(taskId) !== captured || captured.epoch !== myEpoch) {
-        return { ok: false, cancelled: true } as TaskPersistenceOutcome<T>;
-      }
-      return op().then(
-        (value) => ({ ok: true, value }) as TaskPersistenceOutcome<T>,
-        (error: unknown) => ({
-          ok: false,
-          error: errorToMessage(error),
-        }) as TaskPersistenceOutcome<T>,
-      );
-    });
+    const outcome: Promise<TaskPersistenceOutcome<T>> = captured.chain.then(
+      () => {
+        // Cancelled between enqueue and execution (epoch moved on) — skip.
+        if (this.tasks.get(taskId) !== captured || captured.epoch !== myEpoch) {
+          return { ok: false, cancelled: true } as TaskPersistenceOutcome<T>;
+        }
+        return op().then(
+          (value) => ({ ok: true, value }) as TaskPersistenceOutcome<T>,
+          (error: unknown) =>
+            ({
+              ok: false,
+              error: errorToMessage(error),
+            }) as TaskPersistenceOutcome<T>,
+        );
+      },
+    );
 
     captured.chain = outcome.then(
       () => undefined,
       () => undefined,
     );
     void outcome
-      .then(() => undefined, () => undefined)
+      .then(
+        () => undefined,
+        () => undefined,
+      )
       .then(() => {
         captured.pending -= 1;
         this.maybeCleanup(taskId, captured);
@@ -143,7 +152,9 @@ export class TaskPersistenceQueue {
   async drainAll(): Promise<void> {
     // Snapshot keys: drain(taskId) re-checks liveness every lap, so tasks
     // that clean up mid-drain simply resolve.
-    await Promise.all([...this.tasks.keys()].map((taskId) => this.drain(taskId)));
+    await Promise.all(
+      [...this.tasks.keys()].map((taskId) => this.drain(taskId)),
+    );
   }
 
   /** Cancel every tracked task and drop all queue state. */

@@ -110,6 +110,17 @@ describe("M12 v2 — verbatim resume runtime behavior", () => {
       const wire = JSON.stringify(first!.body);
       expect(wire).toContain("Inspect the project");
       expect(wire).toContain("Reading files.");
+      // Seeded history is sent EXACTLY once (session creation is
+      // idempotent — the retry path must not duplicate the transcript).
+      const body = first!.body as {
+        messages: Array<{ content?: unknown }>;
+      };
+      const occurrences = body.messages.filter(
+        (m) =>
+          typeof m.content === "string" &&
+          m.content.includes("Inspect the project"),
+      ).length;
+      expect(occurrences).toBe(1);
     } finally {
       await rt.dispose();
     }
@@ -119,8 +130,7 @@ describe("M12 v2 — verbatim resume runtime behavior", () => {
     const rt = await makeStartedRuntime({ privacyMode: "local" });
     try {
       // Simulate an in-flight run: mark running and un-settled.
-      (rt as unknown as { state: { status: string } }).state.status =
-        "running";
+      (rt as unknown as { state: { status: string } }).state.status = "running";
       (rt as unknown as { runSettled: boolean }).runSettled = false;
       await expect(rt.startSession("second run")).rejects.toThrow(
         /already running/i,
@@ -370,9 +380,7 @@ describe("G: privacy guard — cloud provider + local privacy mode", () => {
       await expect(rt.startSession("hi")).resolves.toBeTruthy();
       const chats = chatCompletionRequests(stub);
       expect(chats.length).toBeGreaterThan(0);
-      expect(chats[0]!.url).toBe(
-        "https://api.openai.com/v1/chat/completions",
-      );
+      expect(chats[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
     } finally {
       await rt.dispose();
     }

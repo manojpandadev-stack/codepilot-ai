@@ -27,9 +27,7 @@ function sseStream(lines: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-async function collect(
-  stream: AsyncIterable<LlmChunk>,
-): Promise<LlmChunk[]> {
+async function collect(stream: AsyncIterable<LlmChunk>): Promise<LlmChunk[]> {
   const out: LlmChunk[] = [];
   for await (const chunk of stream) out.push(chunk);
   return out;
@@ -56,7 +54,11 @@ describe("splitThinking", () => {
           tool_calls: [
             {
               id: "call_n7b2adlg",
-              function: { index: 0, name: "get_time", arguments: { city: "Tokyo" } },
+              function: {
+                index: 0,
+                name: "get_time",
+                arguments: { city: "Tokyo" },
+              },
             },
           ],
         },
@@ -69,7 +71,11 @@ describe("splitThinking", () => {
           tool_calls: [
             {
               id: "call_afdwnfa5",
-              function: { index: 1, name: "get_time", arguments: { city: "Paris" } },
+              function: {
+                index: 1,
+                name: "get_time",
+                arguments: { city: "Paris" },
+              },
             },
           ],
         },
@@ -91,12 +97,23 @@ describe("splitThinking", () => {
       }),
     );
     const calls = chunks
-      .filter((c): c is Extract<LlmChunk, { type: "toolcall" }> => c.type === "toolcall")
+      .filter(
+        (c): c is Extract<LlmChunk, { type: "toolcall" }> =>
+          c.type === "toolcall",
+      )
       .map((c) => c.toolCall);
     expect(calls).toHaveLength(2);
     // Order preserved by function.index; ids are the server's verbatim.
-    expect(calls[0]).toMatchObject({ id: "call_n7b2adlg", name: "get_time", input: { city: "Tokyo" } });
-    expect(calls[1]).toMatchObject({ id: "call_afdwnfa5", name: "get_time", input: { city: "Paris" } });
+    expect(calls[0]).toMatchObject({
+      id: "call_n7b2adlg",
+      name: "get_time",
+      input: { city: "Tokyo" },
+    });
+    expect(calls[1]).toMatchObject({
+      id: "call_afdwnfa5",
+      name: "get_time",
+      input: { city: "Paris" },
+    });
   });
 
   it("passes plain text through untouched", () => {
@@ -208,20 +225,28 @@ describe("OpenAICompatibleProvider", () => {
         choices: [
           {
             delta: {
-              tool_calls: [{ index: 0, id: "call-1", function: { name: "bash" } }],
+              tool_calls: [
+                { index: 0, id: "call-1", function: { name: "bash" } },
+              ],
             },
           },
         ],
       })}`,
       `data: ${JSON.stringify({
         choices: [
-          { delta: { tool_calls: [{ index: 0, function: { arguments: '{"comma' } }] } },
+          {
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: '{"comma' } }],
+            },
+          },
         ],
       })}`,
       `data: ${JSON.stringify({
         choices: [
           {
-            delta: { tool_calls: [{ index: 0, function: { arguments: 'nd":"ls"}' } }] },
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: 'nd":"ls"}' } }],
+            },
             finish_reason: "tool_calls",
           },
         ],
@@ -260,8 +285,7 @@ describe("OpenAICompatibleProvider", () => {
 
   it("requires a base url", () => {
     expect(
-      () =>
-        new OpenAICompatibleProvider({ providerId: "x", modelId: "m" }),
+      () => new OpenAICompatibleProvider({ providerId: "x", modelId: "m" }),
     ).toThrow(/baseUrl/);
   });
 });

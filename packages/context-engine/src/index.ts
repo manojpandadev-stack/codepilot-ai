@@ -447,7 +447,9 @@ export async function fetchUrlContent(
   options?: {
     timeoutMs?: number;
     maxChars?: number;
-    resolveAll?: (h: string) => Promise<Array<{ address: string; family: number }>>;
+    resolveAll?: (
+      h: string,
+    ) => Promise<Array<{ address: string; family: number }>>;
     allowedDomains?: string[];
     deniedDomains?: string[];
   },
@@ -455,8 +457,17 @@ export async function fetchUrlContent(
   const timeoutMs = options?.timeoutMs ?? 15_000;
   const maxChars = options?.maxChars ?? 30_000;
 
-  const okItem = (content: string, meta?: Record<string, unknown>): ContextItem[] => [
-    { source: "user_request", content, priority: 0, estimatedTokens: 10, metadata: meta },
+  const okItem = (
+    content: string,
+    meta?: Record<string, unknown>,
+  ): ContextItem[] => [
+    {
+      source: "user_request",
+      content,
+      priority: 0,
+      estimatedTokens: 10,
+      metadata: meta,
+    },
   ];
   void timeoutMs;
 
@@ -483,11 +494,19 @@ export async function fetchUrlContent(
   });
   if (!guard.ok) {
     const msg = guard.error ?? "blocked";
-    if (/private|local|loopback|link-local|multicast|reserved|metadata|unspecified|documentation|carrier-grade-nat|numeric IP|forbidden|allow-list|denied|DNS/i.test(msg)) {
-      return okItem(`Error: Access to private/internal URLs is blocked for security`);
+    if (
+      /private|local|loopback|link-local|multicast|reserved|metadata|unspecified|documentation|carrier-grade-nat|numeric IP|forbidden|allow-list|denied|DNS/i.test(
+        msg,
+      )
+    ) {
+      return okItem(
+        `Error: Access to private/internal URLs is blocked for security`,
+      );
     }
-    if (/protocol/i.test(msg)) return okItem(`Error: Only HTTP/HTTPS URLs are allowed`);
-    if (/redirect/i.test(msg)) return okItem(`Error: Redirect blocked for security: ${msg}`);
+    if (/protocol/i.test(msg))
+      return okItem(`Error: Only HTTP/HTTPS URLs are allowed`);
+    if (/redirect/i.test(msg))
+      return okItem(`Error: Redirect blocked for security: ${msg}`);
     return okItem(`Error fetching ${url}: ${msg}`);
   }
 
@@ -504,7 +523,10 @@ export async function fetchUrlContent(
   const rawText = guard.text ?? "";
   const isHtml = contentType.includes("text/html");
   const text = isHtml ? htmlToText(rawText) : rawText;
-  const truncated = text.length > maxChars ? text.slice(0, maxChars) + "\n... [truncated]" : text;
+  const truncated =
+    text.length > maxChars
+      ? text.slice(0, maxChars) + "\n... [truncated]"
+      : text;
   const tokens = estimateTokens(truncated);
 
   return [

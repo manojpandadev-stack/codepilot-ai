@@ -65,7 +65,10 @@ function normalizeHeaders(
 export function ollamaTurnBody(turn: StubTurn): string {
   let out = "";
   for (const text of turn.texts ?? []) {
-    out += ndjsonLine({ message: { role: "assistant", content: text }, done: false });
+    out += ndjsonLine({
+      message: { role: "assistant", content: text },
+      done: false,
+    });
   }
   if (turn.toolCalls && turn.toolCalls.length > 0) {
     out += ndjsonLine({
@@ -106,7 +109,9 @@ export function stubOllamaFetch(script: StubTurn[] = []): OllamaStub {
     let body: unknown = null;
     try {
       body =
-        typeof init?.body === "string" ? JSON.parse(init.body) : init?.body ?? null;
+        typeof init?.body === "string"
+          ? JSON.parse(init.body)
+          : (init?.body ?? null);
     } catch {
       body = init?.body ?? null;
     }
@@ -157,7 +162,11 @@ export function stubOllamaFetch(script: StubTurn[] = []): OllamaStub {
       );
       return new Response(lines.join("\n"), { status: 200 });
     }
-    if (url.includes("/api/tags") || url.includes("/v1/models") || url.includes("/models")) {
+    if (
+      url.includes("/api/tags") ||
+      url.includes("/v1/models") ||
+      url.includes("/models")
+    ) {
       return new Response(JSON.stringify({ models: [], data: [] }), {
         status: 200,
       });

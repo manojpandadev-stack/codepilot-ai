@@ -25,9 +25,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext } from "@codepilot/llm";
-import {
-  CommandExecutionService,
-} from "@codepilot/tool-engine";
+import { CommandExecutionService } from "@codepilot/tool-engine";
 import { fetchUrlContent } from "@codepilot/context-engine";
 import {
   applyEditorOperation,
@@ -103,7 +101,9 @@ interface ReadRequest {
   endLine?: number;
 }
 
-function normalizeReadRequests(input: unknown): ReadRequest[] | { error: string } {
+function normalizeReadRequests(
+  input: unknown,
+): ReadRequest[] | { error: string } {
   const rec = asRecord(input);
   const rawList = Array.isArray(rec.files)
     ? (rec.files as unknown[])
@@ -116,8 +116,7 @@ function normalizeReadRequests(input: unknown): ReadRequest[] | { error: string 
   const out: ReadRequest[] = [];
   for (const raw of rawList.slice(0, 10)) {
     const r = asRecord(raw);
-    const p =
-      asString(r.path) ?? asString(r.filePath) ?? asString(r.file_path);
+    const p = asString(r.path) ?? asString(r.filePath) ?? asString(r.file_path);
     if (!p) return { error: "read_files entry is missing its file path" };
     const start =
       typeof r.start_line === "number"
@@ -156,11 +155,23 @@ function sliceLines(
 
 export interface BuiltinToolOverrides {
   /** Host executor for `editor` (ChangeSet staging in VS Code). */
-  editor?: (input: unknown, cwd: string, context: Record<string, unknown>) => Promise<string>;
+  editor?: (
+    input: unknown,
+    cwd: string,
+    context: Record<string, unknown>,
+  ) => Promise<string>;
   /** Host executor for `apply_patch` (ChangeSet staging in VS Code). */
-  applyPatch?: (input: unknown, cwd: string, context: Record<string, unknown>) => Promise<string>;
+  applyPatch?: (
+    input: unknown,
+    cwd: string,
+    context: Record<string, unknown>,
+  ) => Promise<string>;
   /** Host executor for `bash` (streaming terminal in VS Code). */
-  bash?: (input: unknown, cwd: string, context: Record<string, unknown>) => Promise<string>;
+  bash?: (
+    input: unknown,
+    cwd: string,
+    context: Record<string, unknown>,
+  ) => Promise<string>;
 }
 
 export interface BuiltinToolOptions {
@@ -208,9 +219,18 @@ function readFilesTool(cwd: string): AgentTool {
           items: {
             type: "object",
             properties: {
-              path: { type: "string", description: "Workspace-relative file path." },
-              start_line: { type: "number", description: "1-based first line (optional)." },
-              end_line: { type: "number", description: "1-based last line, inclusive (optional)." },
+              path: {
+                type: "string",
+                description: "Workspace-relative file path.",
+              },
+              start_line: {
+                type: "number",
+                description: "1-based first line (optional).",
+              },
+              end_line: {
+                type: "number",
+                description: "1-based last line, inclusive (optional).",
+              },
             },
             required: ["path"],
           },
@@ -279,14 +299,18 @@ function searchCodebaseTool(cwd: string): AgentTool {
           ? [rec.query]
           : [];
       if (queries.length === 0) {
-        throw new Error("search_codebase requires { query } or { queries: [...] }");
+        throw new Error(
+          "search_codebase requires { query } or { queries: [...] }",
+        );
       }
       const compiled: RegExp[] = [];
       for (const q of queries.slice(0, 10)) {
         try {
           compiled.push(new RegExp(q));
         } catch {
-          throw new Error(`search_codebase: invalid regex ${JSON.stringify(q.slice(0, 120))}`);
+          throw new Error(
+            `search_codebase: invalid regex ${JSON.stringify(q.slice(0, 120))}`,
+          );
         }
       }
       const files: string[] = [];
@@ -319,7 +343,8 @@ function searchCodebaseTool(cwd: string): AgentTool {
           } catch {
             continue;
           }
-          if (!stat.isFile() || stat.size > BUILTIN_SEARCH_MAX_FILE_BYTES) continue;
+          if (!stat.isFile() || stat.size > BUILTIN_SEARCH_MAX_FILE_BYTES)
+            continue;
           let content: string;
           try {
             const buffer = fs.readFileSync(file);
@@ -480,7 +505,9 @@ function askQuestionTool(): AgentTool {
       const question = asString(rec.question);
       if (!question) throw new Error("ask_question requires { question }");
       const options = Array.isArray(rec.options)
-        ? (rec.options as unknown[]).filter((o): o is string => typeof o === "string").slice(0, 5)
+        ? (rec.options as unknown[])
+            .filter((o): o is string => typeof o === "string")
+            .slice(0, 5)
         : [];
       return JSON.stringify({
         acknowledged: true,
@@ -517,10 +544,7 @@ function skillsTool(): AgentTool {
   };
 }
 
-function editorTool(
-  cwd: string,
-  overrides: BuiltinToolOverrides,
-): AgentTool {
+function editorTool(cwd: string, overrides: BuiltinToolOverrides): AgentTool {
   return {
     name: "editor",
     description:
@@ -531,13 +555,23 @@ function editorTool(
     inputSchema: {
       type: "object",
       properties: {
-        file_path: { type: "string", description: "Workspace-relative file path." },
+        file_path: {
+          type: "string",
+          description: "Workspace-relative file path.",
+        },
         op: {
           type: "string",
-          description: "Operation: str_replace, insert, replace_all, delete, create.",
+          description:
+            "Operation: str_replace, insert, replace_all, delete, create.",
         },
-        old_string: { type: "string", description: "Text to match (not needed for create)." },
-        new_string: { type: "string", description: "Replacement/inserted text." },
+        old_string: {
+          type: "string",
+          description: "Text to match (not needed for create).",
+        },
+        new_string: {
+          type: "string",
+          description: "Replacement/inserted text.",
+        },
         operations: {
           type: "array",
           description: "Multiple operations against the same file.",
@@ -548,10 +582,14 @@ function editorTool(
     },
     execute: async (input: unknown, ctx?: AgentToolContext) => {
       if (overrides.editor) {
-        return overrides.editor(input, cwd, toolContext(
-          typeof ctx?.toolCallId === "string" ? ctx.toolCallId : "editor",
-          typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
-        ));
+        return overrides.editor(
+          input,
+          cwd,
+          toolContext(
+            typeof ctx?.toolCallId === "string" ? ctx.toolCallId : "editor",
+            typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
+          ),
+        );
       }
       // Legacy/headless default: apply directly (M4 still gates via beforeTool).
       const rec = asRecord(input);
@@ -560,7 +598,8 @@ function editorTool(
       if (!resolved.ok) throw new Error(resolved.error);
       const original = readFileSafe(resolved.absolutePath);
       const rawOps =
-        Array.isArray(rec.operations) && (rec.operations as unknown[]).length > 0
+        Array.isArray(rec.operations) &&
+        (rec.operations as unknown[]).length > 0
           ? (rec.operations as Record<string, unknown>[])
           : [rec];
       let content = original;
@@ -571,7 +610,8 @@ function editorTool(
         content = res.content;
         summaries.push(res.summary);
       }
-      if (content === undefined) throw new Error("editor produced no file content");
+      if (content === undefined)
+        throw new Error("editor produced no file content");
       fs.mkdirSync(path.dirname(resolved.absolutePath), { recursive: true });
       fs.writeFileSync(resolved.absolutePath, content, "utf8");
       return `Edited ${resolved.relativePath}: ${summaries.join("; ")}`;
@@ -598,10 +638,16 @@ function applyPatchTool(
     },
     execute: async (input: unknown, ctx?: AgentToolContext) => {
       if (overrides.applyPatch) {
-        return overrides.applyPatch(input, cwd, toolContext(
-          typeof ctx?.toolCallId === "string" ? ctx.toolCallId : "apply_patch",
-          typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
-        ));
+        return overrides.applyPatch(
+          input,
+          cwd,
+          toolContext(
+            typeof ctx?.toolCallId === "string"
+              ? ctx.toolCallId
+              : "apply_patch",
+            typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
+          ),
+        );
       }
       const parsed = await parseApplyPatchInput(asRecord(input), cwd);
       if (!parsed.ok) throw new Error(parsed.error);
@@ -619,7 +665,11 @@ function applyPatchTool(
           continue;
         }
         fs.mkdirSync(path.dirname(resolved.absolutePath), { recursive: true });
-        fs.writeFileSync(resolved.absolutePath, proposal.proposedContent, "utf8");
+        fs.writeFileSync(
+          resolved.absolutePath,
+          proposal.proposedContent,
+          "utf8",
+        );
       }
       return `Applied patch to ${parsed.proposals.length} file(s): ${parsed.proposals
         .map((p) => p.relativePath)
@@ -631,7 +681,9 @@ function applyPatchTool(
 function runCommandsTool(
   cwd: string,
   service: CommandExecutionService,
-  options?: { streamingCommandRunner?: BuiltinToolOptions["streamingCommandRunner"] },
+  options?: {
+    streamingCommandRunner?: BuiltinToolOptions["streamingCommandRunner"];
+  },
 ): AgentTool {
   return {
     name: "run_commands",
@@ -662,7 +714,9 @@ function runCommandsTool(
           ? [rec.command]
           : [];
       if (commands.length === 0) {
-        throw new Error("run_commands requires { command } or { commands: [...] }");
+        throw new Error(
+          "run_commands requires { command } or { commands: [...] }",
+        );
       }
       const signal =
         ctx?.signal instanceof AbortSignal ? ctx.signal : undefined;
@@ -731,10 +785,14 @@ function bashTool(
     },
     execute: async (input: unknown, ctx?: AgentToolContext) => {
       if (overrides.bash) {
-        return overrides.bash(input, cwd, toolContext(
-          typeof ctx?.toolCallId === "string" ? ctx.toolCallId : "bash",
-          typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
-        ));
+        return overrides.bash(
+          input,
+          cwd,
+          toolContext(
+            typeof ctx?.toolCallId === "string" ? ctx.toolCallId : "bash",
+            typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
+          ),
+        );
       }
       const command = asString(asRecord(input).command);
       if (!command) throw new Error("bash requires { command }");

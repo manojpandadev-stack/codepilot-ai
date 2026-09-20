@@ -130,7 +130,9 @@ export class SecurityValidator {
     // Verify it's within workspace
     // Normalize to forward slashes so sensitive-path patterns (which use
     // forward slashes) match on Windows where path.relative uses backslashes.
-    const rel = path.relative(this.workspaceRoot, canonical).replace(/\\/g, "/");
+    const rel = path
+      .relative(this.workspaceRoot, canonical)
+      .replace(/\\/g, "/");
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       return {
         allowed: false,

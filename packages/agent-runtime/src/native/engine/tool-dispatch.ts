@@ -9,6 +9,7 @@
  */
 
 import type { AgentTool } from "../types.js";
+import { NATIVE_AGENT_ID } from "../types.js";
 import type { LlmToolCall } from "../llm/types.js";
 
 /** The host-side M4 gate. Same contract as CodePilotRuntime.requestApproval. */
@@ -35,7 +36,9 @@ export interface DispatchContext {
 }
 
 /** Parse model tool-call arguments; non-JSON input becomes an error result. */
-export function parseToolArguments(call: LlmToolCall): Record<string, unknown> | { parseError: string } {
+export function parseToolArguments(
+  call: LlmToolCall,
+): Record<string, unknown> | { parseError: string } {
   const text = call.argumentsText.trim();
   if (text.length === 0) return {};
   try {
@@ -45,7 +48,9 @@ export function parseToolArguments(call: LlmToolCall): Record<string, unknown> |
     }
     return { parseError: "tool arguments must be a JSON object" };
   } catch (err) {
-    return { parseError: `invalid JSON tool arguments: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      parseError: `invalid JSON tool arguments: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 }
 
@@ -73,7 +78,9 @@ export async function dispatchToolCall(
   });
 
   if (!tool) {
-    return deny(`Unknown tool '${call.toolName}'. Use one of the provided tools.`);
+    return deny(
+      `Unknown tool '${call.toolName}'. Use one of the provided tools.`,
+    );
   }
   const args = parseToolArguments(call);
   if ("parseError" in args) {
@@ -82,7 +89,9 @@ export async function dispatchToolCall(
 
   // ---- M4 gate (deny-closed) ----
   if (!gate) {
-    return deny("Permission pipeline unavailable — tool execution blocked for safety.");
+    return deny(
+      "Permission pipeline unavailable — tool execution blocked for safety.",
+    );
   }
   let decision: { approved: boolean; reason?: string };
   try {
@@ -109,7 +118,7 @@ export async function dispatchToolCall(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const output = await tool.execute(args, {
-      agentId: "codepilot-agent",
+      agentId: NATIVE_AGENT_ID,
       sessionId: context.sessionId,
       iteration: context.iteration,
       toolCallId: call.toolCallId,
@@ -129,11 +138,21 @@ export async function dispatchToolCall(
       const tail = maxResultChars - head - 40;
       content = `${content.slice(0, head)}\n…[output truncated, ${content.length - maxResultChars} chars elided]…\n${tail > 0 ? content.slice(-tail) : ""}`;
     }
-    return { content, isError: false, durationMs: Date.now() - started, denied: false };
+    return {
+      content,
+      isError: false,
+      durationMs: Date.now() - started,
+      denied: false,
+    };
   } catch (err) {
     if (context.signal?.aborted) throw err; // abort must propagate to the loop
     const message = err instanceof Error ? err.message : String(err);
-    return { content: `Tool '${call.toolName}' failed: ${message}`, isError: true, durationMs: Date.now() - started, denied: false };
+    return {
+      content: `Tool '${call.toolName}' failed: ${message}`,
+      isError: true,
+      durationMs: Date.now() - started,
+      denied: false,
+    };
   } finally {
     clearTimeout(timer);
     context.signal?.removeEventListener("abort", onOuterAbort);

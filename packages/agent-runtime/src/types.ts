@@ -102,6 +102,13 @@ export interface EventCorrelation {
   sessionId?: string;
   /** CodePilot task identifier (stable across retries). */
   taskId?: string;
+  /**
+   * Run identifier for tracing (equals the task id: one task per run in
+   * the native engine; exposed explicitly so dashboards need no aliasing).
+   */
+  runId?: string;
+  /** Stable agent identity (single agent per runtime: "codepilot-agent"). */
+  agentId?: string;
   /** Unix timestamp (ms) when the event was emitted. */
   timestamp?: number;
   /** Agent state at the moment the event was emitted. */
@@ -323,6 +330,8 @@ export type AgentEvent =
       result: string;
       usage: AgentUsage;
       durationMs: number;
+      /** Time to first model output token, when any output streamed. */
+      timeToFirstTokenMs?: number;
     } & WithCorrelation)
   | ({
       type: "agent.failed";
@@ -416,14 +425,31 @@ export interface AgentRuntimeState {
 export interface RunMetrics {
   taskId: string;
   sessionId: string | null;
+  /** Stable run identifier for tracing (equals taskId). */
+  runId?: string;
+  /** Stable agent identity. */
+  agentId?: string;
+  providerId?: string;
+  modelId?: string;
+  agentMode?: string;
   startedAt: number;
   completedAt: number;
   durationMs: number;
+  /** First model output (text or reasoning delta), when any streamed. */
+  firstTokenAt?: number;
+  /** Elapsed ms from run start to first model output. */
+  timeToFirstTokenMs?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Provider-reported cost, when supplied. */
+  totalCost?: number;
   toolCallCount: number;
+  /** Tool calls that failed (executor error or gate denial). */
+  toolFailures?: number;
+  /** Highest loop iteration reached. */
+  iterations?: number;
   filesChanged: number;
   retriesConsumed: number;
   cancelled: boolean;

@@ -89,9 +89,21 @@ describe("persistence concurrency — per-task serialization", () => {
     recordCaptureToolUse(capture, "call-B", "read_file", { path: "b.ts" });
 
     // Both completions arrive "at once": neither awaits the other.
-    recordCaptureToolResult(capture, "call-A", "read_file", "contents-a", false);
+    recordCaptureToolResult(
+      capture,
+      "call-A",
+      "read_file",
+      "contents-a",
+      false,
+    );
     const flushA = flushThroughQueue(queue, store, task.id, capture);
-    recordCaptureToolResult(capture, "call-B", "read_file", "contents-b", false);
+    recordCaptureToolResult(
+      capture,
+      "call-B",
+      "read_file",
+      "contents-b",
+      false,
+    );
     const flushB = flushThroughQueue(queue, store, task.id, capture);
     const [outA, outB] = await Promise.all([flushA, flushB]);
     expect(outA.ok).toBe(true);
@@ -99,12 +111,13 @@ describe("persistence concurrency — per-task serialization", () => {
 
     const loaded = await store.get(task.id);
     const entry = loaded?.conversation?.find((e) => e.key === capture.key);
-    const results = (entry?.blocks ?? []).filter((b) => b.type === "tool_result");
+    const results = (entry?.blocks ?? []).filter(
+      (b) => b.type === "tool_result",
+    );
     expect(results).toHaveLength(2);
-    expect(results.map((b) => b.type === "tool_result" && b.tool_use_id).sort()).toEqual([
-      "call-A",
-      "call-B",
-    ]);
+    expect(
+      results.map((b) => b.type === "tool_result" && b.tool_use_id).sort(),
+    ).toEqual(["call-A", "call-B"]);
   });
 
   it("2. reverse completion ordering keeps both results paired", async () => {
@@ -144,11 +157,19 @@ describe("persistence concurrency — per-task serialization", () => {
     const task = await store.create("ten tools");
     const capture = createRunCapture();
     for (let i = 0; i < 10; i += 1) {
-      recordCaptureToolUse(capture, `call-${i}`, "read_file", { path: `f${i}.ts` });
+      recordCaptureToolUse(capture, `call-${i}`, "read_file", {
+        path: `f${i}.ts`,
+      });
     }
     const flushes = [];
     for (let i = 0; i < 10; i += 1) {
-      recordCaptureToolResult(capture, `call-${i}`, "read_file", `out-${i}`, false);
+      recordCaptureToolResult(
+        capture,
+        `call-${i}`,
+        "read_file",
+        `out-${i}`,
+        false,
+      );
       flushes.push(flushThroughQueue(queue, store, task.id, capture));
     }
     const outcomes = await Promise.all(flushes);
@@ -169,7 +190,11 @@ describe("persistence concurrency — per-task serialization", () => {
     recordCaptureToolUse(capture, "call-A", "read_file", { path: "a.ts" });
     recordCaptureToolResult(capture, "call-A", "read_file", "aaa", false);
     const toolFlush = flushThroughQueue(queue, store, task.id, capture);
-    appendCaptureText(capture, "Let me read both files. Done.", "Let me read both files. Done.");
+    appendCaptureText(
+      capture,
+      "Let me read both files. Done.",
+      "Let me read both files. Done.",
+    );
     const textFlush2 = flushThroughQueue(queue, store, task.id, capture);
     await Promise.all([textFlush, toolFlush, textFlush2]);
 
@@ -181,7 +206,9 @@ describe("persistence concurrency — per-task serialization", () => {
     expect(blocks.filter((b) => b.type === "tool_use")).toHaveLength(1);
     expect(blocks.filter((b) => b.type === "tool_result")).toHaveLength(1);
     const text = blocks.find((b) => b.type === "text");
-    expect(text?.type === "text" && text.text).toBe("Let me read both files. Done.");
+    expect(text?.type === "text" && text.text).toBe(
+      "Let me read both files. Done.",
+    );
   });
 
   it("5. status transition during persistence stays deterministic", async () => {
@@ -213,7 +240,9 @@ describe("persistence concurrency — per-task serialization", () => {
     expect(loaded?.status).toBe("completed");
     expect(loaded?.messages.at(-1)?.content).toBe("done");
     const entry = loaded?.conversation?.find((e) => e.key === capture.key);
-    expect(entry?.blocks?.filter((b) => b.type === "tool_result")).toHaveLength(1);
+    expect(entry?.blocks?.filter((b) => b.type === "tool_result")).toHaveLength(
+      1,
+    );
     expect(queue.isIdle(task.id)).toBe(true);
   });
 
@@ -319,12 +348,14 @@ describe("persistence concurrency — per-task serialization", () => {
       t?.conversation
         ?.find((e) => e.key === key)
         ?.blocks?.find((b) => b.type === "text");
-    expect(textOf(loadedA, capA.key)?.type === "text" && (textOf(loadedA, capA.key) as { text: string }).text).toBe(
-      "text-A",
-    );
-    expect(textOf(loadedB, capB.key)?.type === "text" && (textOf(loadedB, capB.key) as { text: string }).text).toBe(
-      "text-B",
-    );
+    expect(
+      textOf(loadedA, capA.key)?.type === "text" &&
+        (textOf(loadedA, capA.key) as { text: string }).text,
+    ).toBe("text-A");
+    expect(
+      textOf(loadedB, capB.key)?.type === "text" &&
+        (textOf(loadedB, capB.key) as { text: string }).text,
+    ).toBe("text-B");
   });
 
   it("9. resume after concurrent tool events stays protocol-correct", async () => {
@@ -335,9 +366,21 @@ describe("persistence concurrency — per-task serialization", () => {
     // interleaving the milestone calls out — persisted concurrently.
     recordCaptureToolUse(capture, "call-A", "read_file", { path: "a.ts" });
     recordCaptureToolUse(capture, "call-B", "read_file", { path: "b.ts" });
-    recordCaptureToolResult(capture, "call-A", "read_file", "contents-a", false);
+    recordCaptureToolResult(
+      capture,
+      "call-A",
+      "read_file",
+      "contents-a",
+      false,
+    );
     const f1 = flushThroughQueue(queue, store, task.id, capture);
-    recordCaptureToolResult(capture, "call-B", "read_file", "contents-b", false);
+    recordCaptureToolResult(
+      capture,
+      "call-B",
+      "read_file",
+      "contents-b",
+      false,
+    );
     const f2 = flushThroughQueue(queue, store, task.id, capture);
     await Promise.all([f1, f2]);
     await store.update(task.id, { status: "interrupted" });

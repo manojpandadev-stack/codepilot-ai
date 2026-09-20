@@ -6,11 +6,7 @@
  * vendor protocol into them.
  */
 
-import type {
-  AgentMessage,
-  AgentTool,
-  AgentUsage,
-} from "../types.js";
+import type { AgentMessage, AgentTool, AgentUsage } from "../types.js";
 
 /** One streaming request to a provider. */
 export interface LlmRequest {
@@ -37,7 +33,11 @@ export type LlmStreamEvent =
   | { type: "reasoning-delta"; text: string }
   | { type: "tool-call"; call: LlmToolCall }
   | { type: "usage"; usage: AgentUsage }
-  | { type: "finish"; reason: "complete" | "aborted" | "error"; error?: string };
+  | {
+      type: "finish";
+      reason: "complete" | "aborted" | "error";
+      error?: string;
+    };
 
 export interface LlmProvider {
   readonly id: string;
@@ -49,7 +49,11 @@ export class LlmError extends Error {
   readonly status?: number;
   readonly providerId: string;
   readonly transient: boolean;
-  constructor(providerId: string, message: string, opts?: { status?: number; transient?: boolean }) {
+  constructor(
+    providerId: string,
+    message: string,
+    opts?: { status?: number; transient?: boolean },
+  ) {
     super(`[${providerId}] ${message}`);
     this.name = "LlmError";
     this.providerId = providerId;
@@ -57,7 +61,9 @@ export class LlmError extends Error {
     this.transient =
       opts?.transient ??
       (opts?.status === 429 ||
-        (opts?.status !== undefined && opts.status >= 500 && opts.status < 600) ||
+        (opts?.status !== undefined &&
+          opts.status >= 500 &&
+          opts.status < 600) ||
         opts?.status === undefined);
   }
 }

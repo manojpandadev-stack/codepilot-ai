@@ -63,6 +63,9 @@ import {
   scrubSecretsText,
   toDiagnosticItems,
   toRelativeWorkspacePath,
+  validateImageAttachment,
+  describeImage,
+  MAX_IMAGES_PER_TURN,
 } from "@codepilot/shared";
 import { isSensitivePath } from "@codepilot/context-engine";
 import { WebAgent } from "@codepilot/context-engine";
@@ -376,15 +379,12 @@ function getTerminalSessions(): TerminalSessionManager {
             // route chunks to the right session card; sessionId is explicit.
             toolCallId: tracked.sessionId,
             toolName: "terminal",
-            stream:
-              tracked.type === "terminal.stdout" ? "stdout" : "stderr",
+            stream: tracked.type === "terminal.stdout" ? "stdout" : "stderr",
             data: tracked.data ?? "",
             seq: tracked.seq,
             executionId: tracked.executionId,
             sessionId: tracked.sessionId,
-            ...(tracked.taskId !== undefined
-              ? { taskId: tracked.taskId }
-              : {}),
+            ...(tracked.taskId !== undefined ? { taskId: tracked.taskId } : {}),
             requestId: undefined,
           },
           timestamp: Date.now(),
@@ -1982,7 +1982,8 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
     // other command. Deny decisions are NOT staged; exec re-evaluates.
     if (
       decision.approved &&
-      (toolName === "terminal_session_exec" || toolName === "terminal_session_start") &&
+      (toolName === "terminal_session_exec" ||
+        toolName === "terminal_session_start") &&
       typeof (input as { command?: unknown })?.command === "string"
     ) {
       getTerminalSessions().stageDecisionToken({
@@ -2107,6 +2108,7 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
 async function sendPromptToAgent(
   prompt: string,
   mode: CodePilotAgentMode,
+  attachments?: { images?: unknown },
 ): Promise<void> {
   try {
     const rt = await ensureRuntime();
@@ -2271,6 +2273,18 @@ async function sendPromptToAgent(
     // the seed contains turns 1..N-1 and never the current prompt.
     // First turn in a session has an empty chain → history-less, as before.
     const seedIds = turnChain.slice();
+    // Image attachments (validated host-side, never trusted from the
+    // WebView). Invalid batches reject the turn with a user-facing error —
+    // attached images are never silently dropped.
+    const rawTurnImages = Array.isArray(attachments?.images)
+      ? (attachments.images as unknown[])
+      : [];
+    if (rawTurnImages.length > MAX_IMAGES_PER_TURN) {
+      throw new Error(
+        `too many images attached (max ${MAX_IMAGES_PER_TURN} per turn)`,
+      );
+    }
+    let turnImages: StagedTurnImage[] = [];
     try {
       const cfg = vscode.workspace.getConfiguration("codepilot");
       const store = getTaskStore();
@@ -2283,9 +2297,41 @@ async function sendPromptToAgent(
       trackTurnChain(task.id);
       // The chain grew: tell the UI which turns the next seed will carry.
       void pushContinuityState();
-      await store.appendMessage(task.id, "user", prompt);
-    } catch {
+      if (rawTurnImages.length > 0) {
+        const staged = await stageTurnImages(store, task.id, rawTurnImages);
+        if ("error" in staged) {
+          // Staging failed after task creation: remove the empty task so a
+          // failed turn leaves no phantom record, then surface the error.
+          await store.delete(task.id).catch(() => undefined);
+          throw new Error(staged.error);
+        }
+        turnImages = staged.images;
+      }
+      const imageMarkers = turnImages.map((img) => img.marker);
+      const persistedPrompt =
+        imageMarkers.length > 0
+          ? `${prompt}\n${imageMarkers.join("\n")}`
+          : prompt;
+      await store.appendMessage(task.id, "user", persistedPrompt, {
+        ...(turnImages.length > 0
+          ? {
+              blocks: [
+                ...turnImages.map((img) => img.stored),
+                { type: "text" as const, text: persistedPrompt },
+              ],
+            }
+          : {}),
+      });
+    } catch (err) {
       // Persistence is best-effort — a failed write must never block the task.
+      // Image validation/staging errors are rethrown: they carry a
+      // user-facing message handled below.
+      if (err instanceof Error && err.message.startsWith("image rejected:")) {
+        throw err;
+      }
+      if (err instanceof Error && err.message.startsWith("too many images")) {
+        throw err;
+      }
     }
 
     // History seeding is best-effort too: an empty seed runs the turn exactly
@@ -2301,9 +2347,24 @@ async function sendPromptToAgent(
       );
     }
 
+    // The current turn's images travel as a leading user message in
+    // initialMessages (image blocks first for deterministic provider
+    // ordering); the text prompt is still appended by the loop, so the
+    // model sees images, then the question — each exactly once.
+    const turnImageMessage =
+      turnImages.length > 0
+        ? [
+            {
+              role: "user" as const,
+              content: turnImages.map((img) => img.live),
+            },
+          ]
+        : [];
     await rt.startSession(finalPrompt, {
       agentMode: mode,
-      ...(historySeed.length > 0 ? { initialMessages: historySeed } : {}),
+      ...(historySeed.length + turnImageMessage.length > 0
+        ? { initialMessages: [...historySeed, ...turnImageMessage] }
+        : {}),
     });
 
     // M12 — correlate the runtime sessionId with the persisted task so the
@@ -2323,7 +2384,9 @@ async function sendPromptToAgent(
     const stack =
       error instanceof Error && error.stack ? `\n${error.stack}` : "";
     logChat("AGENT_ERROR", { recoverable: false });
-    outputChannel.appendLine(`Agent error: ${message}${stack}`);
+    outputChannel.appendLine(
+      `Agent error: ${scrubSecretsText(message)}${scrubSecretsText(stack)}`,
+    );
     sendToWebview({
       type: "error",
       id: genId(),
@@ -2332,7 +2395,7 @@ async function sendPromptToAgent(
           "AGENT RUNTIME FAILED",
           `Provider: ${activeProviderLabel()}`,
           `Model: ${activeModelLabel()}`,
-          `Error: ${message}`,
+          `Error: ${scrubSecretsText(message)}`,
         ].join("\n"),
         recoverable: false,
         requestId: activeRequestId,
@@ -2378,7 +2441,7 @@ async function resumePersistedTask(
     return {
       ok: false,
       error: `task was created in a different workspace (${persisted.workspaceRoot}); open that workspace to resume it.`,
-    }; 
+    };
   }
 
   // Fidelity classification — logged, never overclaimed.
@@ -2390,17 +2453,19 @@ async function resumePersistedTask(
   // ---- Provider/model restoration (credential re-resolved at start time) ----
   const config = vscode.workspace.getConfiguration("codepilot");
   const currentProvider = config.get<string>("provider", "ollama");
-  const plan = planProviderRestore(
-    persisted,
-    currentProvider,
-    (id) => getProviderService().listProviders().some((p) => p.id === id),
+  const plan = planProviderRestore(persisted, currentProvider, (id) =>
+    getProviderService()
+      .listProviders()
+      .some((p) => p.id === id),
   );
   for (const note of plan.notes) outputChannel.appendLine(`[M12] ${note}`);
   if (plan.source === "task") {
     const patch = await buildProviderSwitchPatch(plan.providerId);
     const modelStillValid =
       plan.modelId &&
-      (await modelsForProvider(plan.providerId)).some((m) => m.id === plan.modelId);
+      (await modelsForProvider(plan.providerId)).some(
+        (m) => m.id === plan.modelId,
+      );
     runtime.updateConfig({
       providerId: plan.providerId,
       modelId: modelStillValid ? plan.modelId : undefined,
@@ -2419,10 +2484,17 @@ async function resumePersistedTask(
   // summary + recent faithful messages (bounded context) instead of the
   // full conversation. Falls back to the plain build when compaction did
   // not run or produced no protocol-safe composition.
-  let initialMessages = buildInitialMessages(persisted);
+  // Image fileRefs are hydrated to bytes up front (bounded, markers on
+  // failure) so every downstream builder sees the same live-ready shape.
+  const hydratedPersisted = hydrateTaskConversation(store, persisted);
+  let initialMessages = buildInitialMessages(hydratedPersisted);
   try {
-    const compacted = getCompactionEngine().composeFromTask(persisted);
-    if (compacted && compacted.length > 0 && compacted.length < initialMessages.length) {
+    const compacted = getCompactionEngine().composeFromTask(hydratedPersisted);
+    if (
+      compacted &&
+      compacted.length > 0 &&
+      compacted.length < initialMessages.length
+    ) {
       outputChannel.appendLine(
         `[M12] Resume uses compacted context: ${compacted.length} wire messages (full history would be ${initialMessages.length}).`,
       );
@@ -2430,7 +2502,9 @@ async function resumePersistedTask(
     }
   } catch (err) {
     if (err instanceof PrivacyViolationError) {
-      outputChannel.appendLine(`[M12] Resume compaction check blocked by privacy mode: ${err.message}`);
+      outputChannel.appendLine(
+        `[M12] Resume compaction check blocked by privacy mode: ${err.message}`,
+      );
     }
     // Non-privacy failures fall back to the full build — never worse than before.
   }
@@ -2474,7 +2548,9 @@ async function resumePersistedTask(
     // startSession failed (e.g. concurrent-start guard) — restore the task's
     // persisted status so a later resume attempt is not blocked by a phantom
     // running record.
-    await store.update(persisted.id, { status: "interrupted" }).catch(() => undefined);
+    await store
+      .update(persisted.id, { status: "interrupted" })
+      .catch(() => undefined);
     throw err;
   }
   outputChannel.appendLine(
@@ -2666,7 +2742,7 @@ async function recordTaskRunCounters(
         inputTokens: state.usage.inputTokens,
         outputTokens: state.usage.outputTokens,
         ...(extra?.lastError
-          ? { lastError: extra.lastError.slice(0, 500) }
+          ? { lastError: scrubSecretsText(extra.lastError).slice(0, 500) }
           : {}),
       },
     });
@@ -2865,7 +2941,9 @@ async function pushContinuityState(): Promise<void> {
       let trimmed = false;
       try {
         const full = selectContinuationMessages(task);
-        const cut = selectContinuationMessages(task, { trimIncompleteTail: true });
+        const cut = selectContinuationMessages(task, {
+          trimIncompleteTail: true,
+        });
         // Compare content, not length: the trim preserves trailing text and
         // withholds only unpairable tool calls (same length, less content).
         trimmed = JSON.stringify(cut) !== JSON.stringify(full);
@@ -2902,6 +2980,156 @@ async function pushContinuityState(): Promise<void> {
   }
 }
 
+/** Max total hydrated image bytes per seed/resume operation (fail-safe). */
+const MAX_HYDRATED_IMAGE_BYTES = 6_000_000;
+
+interface StagedTurnImage {
+  /** Inline-bytes block for the live provider request. */
+  live: {
+    type: "image";
+    mime: string;
+    dataBase64: string;
+    name?: string;
+    sizeBytes?: number;
+  };
+  /** FileRef block for persistence (never inline bytes). */
+  stored: {
+    type: "image";
+    mime: string;
+    fileRef: string;
+    name?: string;
+    sizeBytes?: number;
+  };
+  /** Human marker for logs and prompt-adjacent text. */
+  marker: string;
+}
+
+/**
+ * Validate + strip + stage one turn's image attachments.
+ *
+ * Pure validation first (magic bytes, allowlist, size): ANY invalid entry
+ * rejects the whole batch with a user-facing error — images are never
+ * silently dropped. Valid entries are metadata-stripped and staged under
+ * the task directory. Returns parallel live (inline bytes) / stored
+ * (fileRef) blocks plus display markers.
+ */
+async function stageTurnImages(
+  store: TaskStore,
+  taskId: string,
+  rawImages: unknown,
+): Promise<{ images: StagedTurnImage[] } | { error: string }> {
+  if (!Array.isArray(rawImages) || rawImages.length === 0) {
+    return { images: [] };
+  }
+  if (rawImages.length > MAX_IMAGES_PER_TURN) {
+    return {
+      error: `too many images (max ${MAX_IMAGES_PER_TURN} per turn)`,
+    };
+  }
+  const validated: Array<{
+    mime: string;
+    bytes: Uint8Array;
+    name: string;
+  }> = [];
+  for (const raw of rawImages) {
+    const rec =
+      typeof raw === "object" && raw !== null
+        ? (raw as Record<string, unknown>)
+        : {};
+    const checked = validateImageAttachment({
+      name: rec["name"],
+      mime: rec["mime"],
+      base64: rec["data"],
+    });
+    if ("error" in checked) {
+      return { error: `image rejected: ${checked.error}` };
+    }
+    validated.push({
+      mime: checked.mime,
+      bytes: checked.bytes,
+      name: checked.name,
+    });
+  }
+  const images: StagedTurnImage[] = [];
+  for (const v of validated) {
+    const staged = await store.stageImage(taskId, {
+      mime: v.mime,
+      name: v.name,
+      sizeBytes: v.bytes.length,
+      bytes: v.bytes,
+    });
+    if ("error" in staged) {
+      return { error: `image rejected: ${staged.error}` };
+    }
+    images.push({
+      live: {
+        type: "image",
+        mime: v.mime,
+        dataBase64: Buffer.from(v.bytes).toString("base64"),
+        name: v.name,
+        sizeBytes: v.bytes.length,
+      },
+      stored: {
+        type: "image",
+        mime: v.mime,
+        fileRef: staged.fileRef,
+        name: v.name,
+        sizeBytes: v.bytes.length,
+      },
+      marker: describeImage(v.mime, v.bytes.length),
+    });
+  }
+  return { images };
+}
+
+/**
+ * Hydrate one task's persisted image fileRefs into inline bytes for a live
+ * provider request. Returns a COPY — the store record is never mutated.
+ * Missing/unreadable/over-budget images degrade to honest text markers
+ * (never silent drops, never absolute paths).
+ */
+function hydrateTaskConversation(
+  store: TaskStore,
+  task: PersistedTask,
+): PersistedTask {
+  if (!task.conversation) return task;
+  let hydratedBytes = 0;
+  const conversation = task.conversation.map((entry) => {
+    if (!entry.blocks) return entry;
+    let touched = false;
+    const blocks = entry.blocks.map((b) => {
+      if (b.type !== "image" || !b.fileRef) return b;
+      const bytes = store.readStagedImage(task.id, b.fileRef);
+      if (!bytes) {
+        touched = true;
+        return {
+          type: "text" as const,
+          text: `[image unavailable: ${b.name ?? "attached image"}]`,
+        };
+      }
+      if (hydratedBytes + bytes.length > MAX_HYDRATED_IMAGE_BYTES) {
+        touched = true;
+        return {
+          type: "text" as const,
+          text: `[image omitted (context budget): ${b.name ?? "attached image"}]`,
+        };
+      }
+      hydratedBytes += bytes.length;
+      touched = true;
+      return {
+        type: "image" as const,
+        mime: b.mime,
+        fileRef: b.fileRef,
+        dataBase64: Buffer.from(bytes).toString("base64"),
+        ...(b.name ? { name: b.name } : {}),
+        sizeBytes: bytes.length,
+      };
+    });
+    return touched ? { ...entry, blocks } : entry;
+  });
+  return { ...task, conversation };
+}
+
 /**
  * Build validated history for a new turn from the chained previous tasks'
  * canonical records. Returns [] when there is nothing usable (first turn,
@@ -2925,15 +3153,18 @@ async function buildTurnHistorySeed(
       }
     }
     if (tasks.length === 0) return [];
-    const messages = selectContinuationChain(tasks, {
-      composeCompacted: (task) => {
-        try {
-          return engine.composeFromTask(task);
-        } catch {
-          return null;
-        }
+    const messages = selectContinuationChain(
+      tasks.map((t) => hydrateTaskConversation(store, t)),
+      {
+        composeCompacted: (task) => {
+          try {
+            return engine.composeFromTask(task);
+          } catch {
+            return null;
+          }
+        },
       },
-    });
+    );
     if (messages.length === 0) return [];
     const validation = validateConversationProtocol(messages);
     if (!validation.valid) {
@@ -2997,8 +3228,10 @@ function getCompactionEngine(): CompactionEngine {
           const p = getProviderService()
             .listProviders()
             .find((c) => c.id === providerId);
-          return p?.models.find((m) => m.id === modelId)?.contextWindow ??
-            p?.contextWindow;
+          return (
+            p?.models.find((m) => m.id === modelId)?.contextWindow ??
+            p?.contextWindow
+          );
         } catch {
           return undefined;
         }
@@ -3021,7 +3254,10 @@ function getCompactionEngine(): CompactionEngine {
  * Record compaction cost SEPARATELY from normal agent usage (reason:
  * "compaction") so summary tokens are never counted as agent output.
  */
-function recordCompactionCost(outcome: CompactionOutcome, taskId: string): void {
+function recordCompactionCost(
+  outcome: CompactionOutcome,
+  taskId: string,
+): void {
   if (!outcome.summaryCost) return;
   try {
     const cfg = vscode.workspace.getConfiguration("codepilot");
@@ -3187,7 +3423,7 @@ function persistTaskEvent(event: AgentEvent): void {
             await store.appendMessage(
               taskId,
               "system",
-              `Error: ${message.slice(0, 500)}`,
+              `Error: ${scrubSecretsText(message).slice(0, 500)}`,
             );
             // Only transition running → failed: a cancellation that raced
             // ahead (interrupted) or a completion must win. A failed run must
@@ -3288,6 +3524,23 @@ function recordAgentEventMetrics(event: AgentEvent): void {
             event.usage.outputTokens,
           );
         }
+        break;
+      case "agent.completed":
+        observability.metrics.observeMs(
+          "codepilot_run_duration_ms",
+          event.durationMs,
+        );
+        if (typeof event.timeToFirstTokenMs === "number") {
+          observability.metrics.observeMs(
+            "codepilot_run_time_to_first_token_ms",
+            event.timeToFirstTokenMs,
+          );
+        }
+        break;
+      case "agent.retry":
+        observability.metrics.increment("codepilot_run_retries_total", {
+          attempt: String(event.attempt),
+        });
         break;
       case "error":
         observability.metrics.increment("codepilot_agent_errors_total", {
@@ -4082,7 +4335,7 @@ function logChat(stage: string, detail?: Record<string, unknown>): void {
     for (const [key, value] of Object.entries(detail)) {
       if (value !== undefined)
         parts.push(
-          `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
+          `${key}=${scrubSecretsText(typeof value === "object" ? JSON.stringify(value) : String(value))}`,
         );
     }
   }
@@ -4115,7 +4368,8 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             (context?.folders?.length ?? 0) +
             (context?.urls?.length ?? 0) +
             (context?.diagnostics ? 1 : 0) +
-            (context?.selection ? 1 : 0),
+            (context?.selection ? 1 : 0) +
+            (context?.images?.length ?? 0),
         });
         // Reset recovery state for new task
         recoveryManager?.reset();
@@ -4131,7 +4385,9 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           );
           break;
         }
-        await sendPromptToAgent(prompt, mode ?? "act");
+        await sendPromptToAgent(prompt, mode ?? "act", {
+          images: context?.images,
+        });
         break;
       }
       case "context/filePicker": {
@@ -4938,7 +5194,9 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         } catch {
           // best-effort
         }
-        outputChannel.appendLine("[M12] Continuity chain reset by user request.");
+        outputChannel.appendLine(
+          "[M12] Continuity chain reset by user request.",
+        );
         await pushContinuityState();
         pushSkillsState();
         sendToWebview({
@@ -5523,9 +5781,7 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       }
       case "terminal/stop": {
         const { sessionId: stopId } = (payload ?? {}) as { sessionId?: string };
-        const stopped = stopId
-          ? (getTerminalSessions().stop(stopId))
-          : false;
+        const stopped = stopId ? getTerminalSessions().stop(stopId) : false;
         outputChannel.appendLine(
           `[M7] Stop ${stopId}: ${stopped ? "sent" : "unknown session"}`,
         );
@@ -5542,9 +5798,7 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       }
       case "terminal/kill": {
         const { sessionId: killId } = (payload ?? {}) as { sessionId?: string };
-        const killed = killId
-          ? (getTerminalSessions().kill(killId))
-          : false;
+        const killed = killId ? getTerminalSessions().kill(killId) : false;
         outputChannel.appendLine(
           `[M7] Kill ${killId}: ${killed ? "sent" : "unknown session"}`,
         );
@@ -6666,7 +6920,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       case "skills/activate": {
         const p = (payload as { name?: unknown } | undefined) ?? {};
         if (!isValidSkillName(p.name)) {
-          auditSkillToggle("skills/activate", String(p.name ?? ""), false, "invalid name");
+          auditSkillToggle(
+            "skills/activate",
+            String(p.name ?? ""),
+            false,
+            "invalid name",
+          );
           sendToWebview({
             type: "skills/error",
             id,
@@ -6681,7 +6940,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         }
         const service = ensureSkillsContextService();
         const ok = service.activateSkill(p.name);
-        auditSkillToggle("skills/activate", p.name, ok, ok ? undefined : "unknown skill");
+        auditSkillToggle(
+          "skills/activate",
+          p.name,
+          ok,
+          ok ? undefined : "unknown skill",
+        );
         outputChannel.appendLine(
           `[Skills] activate '${scrubSecretsText(p.name).slice(0, 128)}' → ${ok ? "ok (context-only, M4 still gates tools)" : "unknown skill"}`,
         );
@@ -6717,7 +6981,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       case "skills/deactivate": {
         const p = (payload as { name?: unknown } | undefined) ?? {};
         if (!isValidSkillName(p.name)) {
-          auditSkillToggle("skills/deactivate", String(p.name ?? ""), false, "invalid name");
+          auditSkillToggle(
+            "skills/deactivate",
+            String(p.name ?? ""),
+            false,
+            "invalid name",
+          );
           sendToWebview({
             type: "skills/error",
             id,
@@ -6732,7 +7001,12 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         }
         const service = ensureSkillsContextService();
         const ok = service.deactivateSkill(p.name);
-        auditSkillToggle("skills/deactivate", p.name, ok, ok ? undefined : "unknown skill");
+        auditSkillToggle(
+          "skills/deactivate",
+          p.name,
+          ok,
+          ok ? undefined : "unknown skill",
+        );
         outputChannel.appendLine(
           `[Skills] deactivate '${scrubSecretsText(p.name).slice(0, 128)}' → ${ok ? "ok" : "unknown skill"}`,
         );

@@ -22,7 +22,9 @@ import {
 import { checkNavigationPolicy } from "./m13-web-agent.js";
 
 type Rec = { address: string; family: number };
-const pubOk = async (): Promise<Rec[]> => [{ address: "93.184.216.34", family: 4 }];
+const pubOk = async (): Promise<Rec[]> => [
+  { address: "93.184.216.34", family: 4 },
+];
 const okBody = (extra = {}) => ({
   status: 200,
   headers: { "content-type": "text/plain" },
@@ -55,12 +57,20 @@ describe("SSRF IPv6 hardening", () => {
   });
 
   it("blocks IPv6 unique-local fc00::/7 (fc + fd)", () => {
-    for (const ip of ["fc00::1", "fc12:3456::1", "fd00::1", "fdff:ffff::1", "FD00::99"]) {
+    for (const ip of [
+      "fc00::1",
+      "fc12:3456::1",
+      "fd00::1",
+      "fdff:ffff::1",
+      "FD00::99",
+    ]) {
       expect(classifyIPv6(ip)).toBe("private");
       expect(isForbiddenIPLiteral(ip).forbidden).toBe(true);
     }
     expect(checkNavigationPolicy("http://[fd00::1]/").allowed).toBe(false);
-    expect(checkNavigationPolicy("http://[fc00::1]:8080/x").allowed).toBe(false);
+    expect(checkNavigationPolicy("http://[fc00::1]:8080/x").allowed).toBe(
+      false,
+    );
   });
 
   it("classifies IPv4-mapped ::ffff:0:0/96 by embedded IPv4", () => {
@@ -75,7 +85,9 @@ describe("SSRF IPv6 hardening", () => {
     expect(isForbiddenIPLiteral("::ffff:127.0.0.1").forbidden).toBe(true);
     expect(isForbiddenIPLiteral("[::ffff:10.0.0.1]").forbidden).toBe(true);
     expect(isForbiddenIPLiteral("::ffff:8.8.8.8").forbidden).toBe(false);
-    expect(checkNavigationPolicy("http://[::ffff:127.0.0.1]/").allowed).toBe(false);
+    expect(checkNavigationPolicy("http://[::ffff:127.0.0.1]/").allowed).toBe(
+      false,
+    );
   });
 
   it("blocks IPv4-compatible representations that bypass IPv4 checks", () => {
@@ -95,7 +107,13 @@ describe("SSRF IPv6 hardening", () => {
   });
 
   it("blocks malformed IPv6 (fail closed, no string-prefix bypass)", () => {
-    for (const bad of ["fe80:::1", "gggg::1", "12345::", ":::1", "fe80::1::2"]) {
+    for (const bad of [
+      "fe80:::1",
+      "gggg::1",
+      "12345::",
+      ":::1",
+      "fe80::1::2",
+    ]) {
       expect(isForbiddenIPLiteral(bad).forbidden).toBe(true);
     }
     expect(checkHostnameTextual("fe80:::1").ok).toBe(false);
@@ -103,16 +121,19 @@ describe("SSRF IPv6 hardening", () => {
 
   it("allows a genuine global IPv6 literal", () => {
     expect(classifyIPv6("2606:2800:220:1:248:1893:25c8:1946")).toBe("global");
-    expect(isForbiddenIPLiteral("2606:2800:220:1:248:1893:25c8:1946").forbidden).toBe(false);
+    expect(
+      isForbiddenIPLiteral("2606:2800:220:1:248:1893:25c8:1946").forbidden,
+    ).toBe(false);
   });
 });
 
 // ------------------------------------------------------- DNS rebinding ---
 describe("SSRF DNS-rebinding hardening", () => {
   it("rejects public hostname resolving to private IP", async () => {
-    const r = await validateResolvedAddresses("public.example.com", async () => [
-      { address: "10.0.0.5", family: 4 },
-    ]);
+    const r = await validateResolvedAddresses(
+      "public.example.com",
+      async () => [{ address: "10.0.0.5", family: 4 }],
+    );
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/forbidden/i);
   });
@@ -134,10 +155,17 @@ describe("SSRF DNS-rebinding hardening", () => {
   });
 
   it("rejects hostname resolving to metadata / loopback / link-local", async () => {
-    for (const addr of ["169.254.169.254", "127.0.0.1", "::1", "fe80::1", "::ffff:10.0.0.1"]) {
-      const r = await validateResolvedAddresses("evil.example.com", async () => [
-        { address: addr, family: addr.includes(":") ? 6 : 4 },
-      ]);
+    for (const addr of [
+      "169.254.169.254",
+      "127.0.0.1",
+      "::1",
+      "fe80::1",
+      "::ffff:10.0.0.1",
+    ]) {
+      const r = await validateResolvedAddresses(
+        "evil.example.com",
+        async () => [{ address: addr, family: addr.includes(":") ? 6 : 4 }],
+      );
       expect(r.ok).toBe(false);
     }
   });
@@ -153,7 +181,10 @@ describe("SSRF DNS-rebinding hardening", () => {
         ? [{ address: "93.184.216.34", family: 4 }]
         : [{ address: "10.0.0.9", family: 4 }];
     };
-    const first = await validateResolvedAddresses("rebind.example.com", flipping);
+    const first = await validateResolvedAddresses(
+      "rebind.example.com",
+      flipping,
+    );
     expect(first.ok).toBe(true);
     const second = await ssrfSafeFetch("http://rebind.example.com/", {
       resolveAll: flipping,
@@ -209,17 +240,26 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
 
   async function fetchWithRedirects(
     startHost: string,
-    script: (host: string) => Promise<{ status: number; headers: Record<string, string>; body: string }>,
+    script: (host: string) => Promise<{
+      status: number;
+      headers: Record<string, string>;
+      body: string;
+    }>,
     opts?: Partial<GuardFetchOptions>,
   ) {
     const resolveAll = async (host: string): Promise<Rec[]> => {
       if (host === startHost) return [{ address: "93.184.216.34", family: 4 }];
-      if (host === "127.0.0.1" || host === "localhost") return [{ address: "127.0.0.1", family: 4 }];
+      if (host === "127.0.0.1" || host === "localhost")
+        return [{ address: "127.0.0.1", family: 4 }];
       if (host === "10.1.2.3") return [{ address: "10.1.2.3", family: 4 }];
-      if (host === "169.254.169.254") return [{ address: "169.254.169.254", family: 4 }];
-      if (host === "[::1]" || host === "::1") return [{ address: "::1", family: 6 }];
-      if (host === "[fd00::1]" || host === "fd00::1") return [{ address: "fd00::1", family: 6 }];
-      if (host === "public.example.com") return [{ address: "93.184.216.34", family: 4 }];
+      if (host === "169.254.169.254")
+        return [{ address: "169.254.169.254", family: 4 }];
+      if (host === "[::1]" || host === "::1")
+        return [{ address: "::1", family: 6 }];
+      if (host === "[fd00::1]" || host === "fd00::1")
+        return [{ address: "fd00::1", family: 6 }];
+      if (host === "public.example.com")
+        return [{ address: "93.184.216.34", family: 4 }];
       return [{ address: "93.184.216.34", family: 4 }];
     };
     return ssrfSafeFetch(`http://${startHost}/start`, {
@@ -232,7 +272,11 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
   it("blocks public → localhost redirect", async () => {
     const r = await fetchWithRedirects("public.example.com", async (h) =>
       h === "public.example.com"
-        ? { status: 302, headers: { location: "http://localhost/admin" }, body: "" }
+        ? {
+            status: 302,
+            headers: { location: "http://localhost/admin" },
+            body: "",
+          }
         : okBody(),
     );
     expect(r.ok).toBe(false);
@@ -241,7 +285,11 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
   it("blocks public → 127.0.0.1 redirect", async () => {
     const r = await fetchWithRedirects("public.example.com", async (h) =>
       h === "public.example.com"
-        ? { status: 302, headers: { location: "http://127.0.0.1:8080/admin" }, body: "" }
+        ? {
+            status: 302,
+            headers: { location: "http://127.0.0.1:8080/admin" },
+            body: "",
+          }
         : okBody(),
     );
     expect(r.ok).toBe(false);
@@ -250,7 +298,11 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
   it("blocks public → private IPv4 redirect", async () => {
     const r = await fetchWithRedirects("public.example.com", async (h) =>
       h === "public.example.com"
-        ? { status: 302, headers: { location: "http://10.1.2.3/internal" }, body: "" }
+        ? {
+            status: 302,
+            headers: { location: "http://10.1.2.3/internal" },
+            body: "",
+          }
         : okBody(),
     );
     expect(r.ok).toBe(false);
@@ -268,14 +320,22 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
   it("blocks public → cloud metadata redirect", async () => {
     const r = await fetchWithRedirects("public.example.com", async (h) =>
       h === "public.example.com"
-        ? { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" }, body: "" }
+        ? {
+            status: 302,
+            headers: { location: "http://169.254.169.254/latest/meta-data/" },
+            body: "",
+          }
         : okBody(),
     );
     expect(r.ok).toBe(false);
   });
 
   it("blocks https → file/ftp/gopher redirect targets", async () => {
-    for (const target of ["file:///etc/passwd", "ftp://public.example.com/x", "gopher://public.example.com/1"]) {
+    for (const target of [
+      "file:///etc/passwd",
+      "ftp://public.example.com/x",
+      "gopher://public.example.com/1",
+    ]) {
       const r = await fetchWithRedirects("public.example.com", async (h) =>
         h === "public.example.com"
           ? { status: 302, headers: { location: target }, body: "" }
@@ -293,7 +353,11 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
       request: async (target) => {
         const m = /\/(\d+)$/.exec(target.pathname);
         const n = m ? Number(m[1]) : 0;
-        return { status: 302, headers: { location: `http://public.example.com/${n + 1}` }, body: "" };
+        return {
+          status: 302,
+          headers: { location: `http://public.example.com/${n + 1}` },
+          body: "",
+        };
       },
     });
     expect(r.ok).toBe(false);
@@ -305,7 +369,11 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
       resolveAll: async () => [{ address: "93.184.216.34", family: 4 }],
       request: async (target) =>
         target.pathname === "/a"
-          ? { status: 302, headers: { location: "http://public.example.com/b" }, body: "" }
+          ? {
+              status: 302,
+              headers: { location: "http://public.example.com/b" },
+              body: "",
+            }
           : okBody(),
     });
     expect(r.ok).toBe(true);
@@ -318,7 +386,11 @@ describe("SSRF redirect hardening (every hop re-validated)", () => {
       allowedDomains: ["public.example.com"],
       request: async (target) =>
         target.hostname === "public.example.com"
-          ? { status: 302, headers: { location: "http://evil.example.com/x" }, body: "" }
+          ? {
+              status: 302,
+              headers: { location: "http://evil.example.com/x" },
+              body: "",
+            }
           : okBody(),
     });
     expect(r.ok).toBe(false);

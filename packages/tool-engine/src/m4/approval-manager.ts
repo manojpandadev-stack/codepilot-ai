@@ -78,7 +78,7 @@ export class ApprovalManager {
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
     this.onApprovalRequested = options.onApprovalRequested;
     this.onApprovalResolved = options.onApprovalResolved;
-    
+
     // F-12: Bounded retention to prevent unbounded growth
     this.maxResolvedEntries = options.maxResolvedEntries ?? 1000;
     this.cleanupIntervalMs = 60_000; // Cleanup every 60 seconds
@@ -106,7 +106,7 @@ export class ApprovalManager {
     if (this.resolved.size <= this.maxResolvedEntries) {
       return;
     }
-    
+
     // Remove oldest entries (FIFO based on insertion order)
     const entriesToRemove = this.resolved.size - this.maxResolvedEntries;
     const keys = Array.from(this.resolved.keys());
@@ -172,10 +172,10 @@ export class ApprovalManager {
     if (!pending) {
       return this.resolved.get(approvalId) ?? null;
     }
-    
+
     // F-12: Start cleanup timer on first approval
     this.startCleanupIfNeeded();
-    
+
     return this.resolvePending(approvalId, {
       approvalId,
       status: "approved",

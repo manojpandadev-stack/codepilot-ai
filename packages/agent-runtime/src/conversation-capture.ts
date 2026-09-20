@@ -122,7 +122,9 @@ export function recordCaptureToolResult(
     capture.toolNames.set(toolCallId, toolName);
   }
   const content =
-    typeof output === "string" ? output.slice(0, maxChars) : boundedSerialize(output, maxChars);
+    typeof output === "string"
+      ? output.slice(0, maxChars)
+      : boundedSerialize(output, maxChars);
   capture.toolResults.set(toolCallId, { content, isError });
   capture.dirty = true;
 }
@@ -200,7 +202,10 @@ export function composeRunBlocks(
  * terminal queue op.
  */
 export class CaptureFlushScheduler {
-  private pending = new Map<string, { taskId: string; capture: RunCaptureState }>();
+  private pending = new Map<
+    string,
+    { taskId: string; capture: RunCaptureState }
+  >();
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -213,20 +218,23 @@ export class CaptureFlushScheduler {
     capture.dirty = true;
     this.pending.set(capture.key, { taskId, capture });
     if (this.timer !== null) return;
-    const timer = setTimeout(() => {
-      this.timer = null;
-      const due = [...this.pending.values()];
-      this.pending.clear();
-      for (const { taskId: id, capture: cap } of due) {
-        if (!cap.dirty) continue;
-        cap.dirty = false;
-        try {
-          this.flush(id, cap);
-        } catch {
-          // A throwing flush must never break the scheduling of others.
+    const timer = setTimeout(
+      () => {
+        this.timer = null;
+        const due = [...this.pending.values()];
+        this.pending.clear();
+        for (const { taskId: id, capture: cap } of due) {
+          if (!cap.dirty) continue;
+          cap.dirty = false;
+          try {
+            this.flush(id, cap);
+          } catch {
+            // A throwing flush must never break the scheduling of others.
+          }
         }
-      }
-    }, Math.max(0, this.debounceMs));
+      },
+      Math.max(0, this.debounceMs),
+    );
     // An audit/persistence timer must never keep the host alive.
     (timer as { unref?: () => void }).unref?.();
     this.timer = timer;

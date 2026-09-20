@@ -22,7 +22,7 @@
     "test": "pnpm -r test",
     "test:live": "vitest run --config vitest.live.config.ts",
     "clean": "pnpm -r clean",
-    "format": "prettier --write 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts'"
+    "format": "prettier --write 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts' 'apps/webview/src/**/*.{ts,tsx}'"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

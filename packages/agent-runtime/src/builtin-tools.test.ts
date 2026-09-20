@@ -14,7 +14,9 @@ import { CommandExecutionService } from "@codepilot/tool-engine";
 
 describe("run_commands streaming integration", () => {
   it("routes commands through the injected streaming runner with toolCallId and signal", async () => {
-    const runner = vi.fn(async (input: { command: string }) => `out:${input.command}`);
+    const runner = vi.fn(
+      async (input: { command: string }) => `out:${input.command}`,
+    );
     const tools = createCodePilotBuiltinTools({
       cwd: process.cwd(),
       enableBash: false,
@@ -56,7 +58,9 @@ describe("run_commands streaming integration", () => {
     expect(seen).toEqual(["cmd-one", "cmd-two"]);
     const text = String(result);
     expect(text.indexOf("result-for-cmd-one")).toBeGreaterThan(-1);
-    expect(text.indexOf("result-for-cmd-two")).toBeGreaterThan(text.indexOf("result-for-cmd-one"));
+    expect(text.indexOf("result-for-cmd-two")).toBeGreaterThan(
+      text.indexOf("result-for-cmd-one"),
+    );
   });
 
   it("propagates runner failures so dispatch maps them to tool errors", async () => {
@@ -73,25 +77,32 @@ describe("run_commands streaming integration", () => {
     ).rejects.toThrow(/exited with code 3/);
   });
 
-  it("falls back to completion-oriented collection when no runner is injected (headless)", { timeout: 20_000 }, async () => {
-    // Real CommandExecutionService — proves the headless path still executes
-    // a real process through service.run with unchanged (raw-spawn)
-    // semantics: the whole string is the executable, args empty. `hostname`
-    // is a single token that exits immediately on Windows and POSIX.
+  it(
+    "falls back to completion-oriented collection when no runner is injected (headless)",
+    { timeout: 20_000 },
+    async () => {
+      // Real CommandExecutionService — proves the headless path still executes
+      // a real process through service.run with unchanged (raw-spawn)
+      // semantics: the whole string is the executable, args empty. `hostname`
+      // is a single token that exits immediately on Windows and POSIX.
+      const tools = createCodePilotBuiltinTools({
+        cwd: process.cwd(),
+        enableBash: false,
+      });
+      const tool = tools.find((t) => t.name === "run_commands")!;
+      const result = await tool.execute({ command: "hostname" }, {});
+      const text = String(result);
+      expect(text).toContain("$ hostname");
+      expect(text).not.toContain("timed out");
+      expect(text).not.toContain("Command cancelled");
+    },
+  );
+
+  it("the runtime-facing factory keeps bash/run_commands in the model tool names", () => {
     const tools = createCodePilotBuiltinTools({
       cwd: process.cwd(),
       enableBash: false,
     });
-    const tool = tools.find((t) => t.name === "run_commands")!;
-    const result = await tool.execute({ command: "hostname" }, {});
-    const text = String(result);
-    expect(text).toContain("$ hostname");
-    expect(text).not.toContain("timed out");
-    expect(text).not.toContain("Command cancelled");
-  });
-
-  it("the runtime-facing factory keeps bash/run_commands in the model tool names", () => {
-    const tools = createCodePilotBuiltinTools({ cwd: process.cwd(), enableBash: false });
     const names = tools.map((t) => t.name);
     expect(names).toContain("run_commands");
     expect(CommandExecutionService).toBeDefined();

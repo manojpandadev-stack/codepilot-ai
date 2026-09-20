@@ -72,7 +72,12 @@ function makeHarness(store: TaskStore, debounceMs = 5) {
     scheduler,
     failures,
     upsertCount: () => upserts,
-    async textDelta(taskId: string, capture: RunCaptureState, text: string, accumulated?: string) {
+    async textDelta(
+      taskId: string,
+      capture: RunCaptureState,
+      text: string,
+      accumulated?: string,
+    ) {
       appendCaptureText(capture, text, accumulated);
       scheduler.schedule(taskId, capture);
     },
@@ -94,7 +99,8 @@ function makeHarness(store: TaskStore, debounceMs = 5) {
           timestampMs: Date.now(),
         });
       });
-      if (!outcome.ok && !outcome.cancelled) failures.push(outcome.error ?? "unknown");
+      if (!outcome.ok && !outcome.cancelled)
+        failures.push(outcome.error ?? "unknown");
     },
     async terminal(
       taskId: string,
@@ -128,7 +134,8 @@ function makeHarness(store: TaskStore, debounceMs = 5) {
           });
         }
       });
-      if (!outcome.ok && !outcome.cancelled) failures.push(outcome.error ?? "unknown");
+      if (!outcome.ok && !outcome.cancelled)
+        failures.push(outcome.error ?? "unknown");
       return outcome;
     },
   };
@@ -176,7 +183,9 @@ describe("streaming persistence", () => {
     await tick(30);
     const blocks = await entryBlocks(store, task.id, capture.key);
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]?.type === "text" && blocks[0].text).toBe("The quick brown fox");
+    expect(blocks[0]?.type === "text" && blocks[0].text).toBe(
+      "The quick brown fox",
+    );
     // Debounced: far fewer writes than deltas.
     expect(h.upsertCount()).toBeLessThanOrEqual(2);
   });
@@ -222,7 +231,10 @@ describe("streaming persistence", () => {
     const capture = createRunCapture();
     await h.textDelta(task.id, capture, "On it.", "On it.");
     recordCaptureToolUse(capture, "call-1", "list_files", { path: "." });
-    await h.toolDone(task.id, capture, "call-1", "list_files", ["a.ts", "b.ts"]);
+    await h.toolDone(task.id, capture, "call-1", "list_files", [
+      "a.ts",
+      "b.ts",
+    ]);
     await h.terminal(task.id, capture, "completed", "Listed 2 files.");
 
     const loaded = await store.get(task.id);
@@ -275,7 +287,12 @@ describe("streaming persistence", () => {
     await h.textDelta(task.id, capture, "Done reading.", "Done reading.");
     recordCaptureToolUse(capture, "call-1", "read_file", { path: "x.ts" });
     await h.toolDone(task.id, capture, "call-1", "read_file", "xxx");
-    const outcome = await h.terminal(task.id, capture, "completed", "All done.");
+    const outcome = await h.terminal(
+      task.id,
+      capture,
+      "completed",
+      "All done.",
+    );
     expect(outcome.ok).toBe(true);
 
     const loaded = await store.get(task.id);
@@ -289,7 +306,9 @@ describe("streaming persistence", () => {
     expect(blocks.filter((b) => b.type === "text")).toHaveLength(1);
     expect(blocks.filter((b) => b.type === "tool_use")).toHaveLength(1);
     expect(blocks.filter((b) => b.type === "tool_result")).toHaveLength(1);
-    expect(validateConversationProtocol(buildInitialMessages(loaded!)).valid).toBe(true);
+    expect(
+      validateConversationProtocol(buildInitialMessages(loaded!)).valid,
+    ).toBe(true);
   });
 
   it("persistence failure is observable and the run can still complete", async () => {
@@ -393,8 +412,8 @@ describe("streaming persistence", () => {
     await h.terminal(task.id, capture, "completed", acc);
     // Exactly one assistant conversation entry (same key, upsert semantics).
     const loaded = await store.get(task.id);
-    const entries = (loaded?.conversation ?? []).filter(
-      (e) => (e.blocks ?? []).some((b) => b.type === "text"),
+    const entries = (loaded?.conversation ?? []).filter((e) =>
+      (e.blocks ?? []).some((b) => b.type === "text"),
     );
     expect(entries).toHaveLength(1);
     const block = entries[0]!.blocks!.find((b) => b.type === "text");

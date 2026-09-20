@@ -128,7 +128,12 @@ export interface DashboardView {
   rangeNote: string;
   overview: MetricValue[];
   performance: {
-    taskDurations: { count: number; avgMs: number | null; minMs: number | null; maxMs: number | null };
+    taskDurations: {
+      count: number;
+      avgMs: number | null;
+      minMs: number | null;
+      maxMs: number | null;
+    };
     toolLatency: ToolMetricsRow[];
     modelLatency: MetricValue;
     contextLatency: MetricValue;
@@ -168,19 +173,29 @@ const MAX_LIMIT = 200;
 
 export function validateDashboardFilter(
   filter: DashboardFilter,
-): { ok: true; value: ValidatedDashboardFilter } | { ok: false; errors: string[] } {
+):
+  | { ok: true; value: ValidatedDashboardFilter }
+  | { ok: false; errors: string[] } {
   const errors: string[] = [];
   let fromMs: number | undefined;
   let toMs: number | undefined;
   if (filter.fromMs !== undefined) {
-    if (typeof filter.fromMs !== "number" || !Number.isFinite(filter.fromMs) || filter.fromMs < 0) {
+    if (
+      typeof filter.fromMs !== "number" ||
+      !Number.isFinite(filter.fromMs) ||
+      filter.fromMs < 0
+    ) {
       errors.push("fromMs must be a non-negative timestamp");
     } else {
       fromMs = Math.floor(filter.fromMs);
     }
   }
   if (filter.toMs !== undefined) {
-    if (typeof filter.toMs !== "number" || !Number.isFinite(filter.toMs) || filter.toMs < 0) {
+    if (
+      typeof filter.toMs !== "number" ||
+      !Number.isFinite(filter.toMs) ||
+      filter.toMs < 0
+    ) {
       errors.push("toMs must be a non-negative timestamp");
     } else {
       toMs = Math.floor(filter.toMs);
@@ -191,7 +206,10 @@ export function validateDashboardFilter(
   }
   let status: string | undefined;
   if (filter.status !== undefined) {
-    if (typeof filter.status !== "string" || !KNOWN_STATUSES.has(filter.status)) {
+    if (
+      typeof filter.status !== "string" ||
+      !KNOWN_STATUSES.has(filter.status)
+    ) {
       errors.push(`status must be one of ${[...KNOWN_STATUSES].join(" | ")}`);
     } else {
       status = filter.status;
@@ -210,7 +228,12 @@ export function validateDashboardFilter(
   const mode = str64(filter.mode, "mode");
   let limit = MAX_LIMIT;
   if (filter.limit !== undefined) {
-    if (typeof filter.limit !== "number" || !Number.isInteger(filter.limit) || filter.limit < 1 || filter.limit > MAX_LIMIT) {
+    if (
+      typeof filter.limit !== "number" ||
+      !Number.isInteger(filter.limit) ||
+      filter.limit < 1 ||
+      filter.limit > MAX_LIMIT
+    ) {
       errors.push(`limit must be an integer 1-${MAX_LIMIT}`);
     } else {
       limit = filter.limit;
@@ -236,20 +259,21 @@ export function validateDashboardFilter(
 // ============================================================================
 
 export type ErrorCategory =
-  | "timeout"
-  | "permission"
-  | "validation"
-  | "network"
-  | "provider"
-  | "unknown";
+  "timeout" | "permission" | "validation" | "network" | "provider" | "unknown";
 
 export function categorizeError(summary: string): ErrorCategory {
   const text = summary.toLowerCase();
   if (/\btimeout\b|\btimed out\b|deadline/.test(text)) return "timeout";
-  if (/permission|denied|forbidden|not allowed|approval/.test(text)) return "permission";
-  if (/invalid|malformed|validation|schema|unexpected/.test(text)) return "validation";
-  if (/network|econn|enotfound|socket|fetch failed|offline/.test(text)) return "network";
-  if (/provider|model|ollama|unauthorized|rate limit|quota|overloaded/.test(text)) return "provider";
+  if (/permission|denied|forbidden|not allowed|approval/.test(text))
+    return "permission";
+  if (/invalid|malformed|validation|schema|unexpected/.test(text))
+    return "validation";
+  if (/network|econn|enotfound|socket|fetch failed|offline/.test(text))
+    return "network";
+  if (
+    /provider|model|ollama|unauthorized|rate limit|quota|overloaded/.test(text)
+  )
+    return "provider";
   return "unknown";
 }
 
@@ -260,10 +284,20 @@ export function categorizeError(summary: string): ErrorCategory {
 export function toolCategory(name: string): string {
   const n = name.toLowerCase();
   if (n.startsWith("mcp__")) return "MCP";
-  if (n.includes("terminal") || n === "bash" || n === "run_commands" || n.startsWith("terminal.")) {
+  if (
+    n.includes("terminal") ||
+    n === "bash" ||
+    n === "run_commands" ||
+    n.startsWith("terminal.")
+  ) {
     return "terminal";
   }
-  if (n.startsWith("web_") || n.includes("fetch") || n.includes("search") || n === "browser") {
+  if (
+    n.startsWith("web_") ||
+    n.includes("fetch") ||
+    n.includes("search") ||
+    n === "browser"
+  ) {
     return "browser";
   }
   if (
@@ -279,7 +313,12 @@ export function toolCategory(name: string): string {
   ) {
     return "filesystem";
   }
-  if (n.includes("agent") || n.includes("orchestrat") || n.includes("team") || n.includes("checkpoint")) {
+  if (
+    n.includes("agent") ||
+    n.includes("orchestrat") ||
+    n.includes("team") ||
+    n.includes("checkpoint")
+  ) {
     return "orchestration";
   }
   if (n.includes("plugin") || n.includes("mcp")) return "plugins";
@@ -298,7 +337,9 @@ export interface ObservabilityServiceDeps {
   /** Scheduler backend (null when never initialized). */
   scheduler: () => ScheduleService | null;
   /** Running teams only (bounded by the implementation). */
-  runningTeams: () => Promise<Array<Pick<TeamView, "teamId" | "objective" | "status">>>;
+  runningTeams: () => Promise<
+    Array<Pick<TeamView, "teamId" | "objective" | "status">>
+  >;
   /** Terminal snapshots (output stripped by this module). */
   terminals: () => TerminalSessionSnapshot[];
   /** Live runtime task (null when idle). */
@@ -318,7 +359,9 @@ export class ObservabilityService {
 
   async dashboard(
     filter: DashboardFilter = {},
-  ): Promise<{ ok: true; dashboard: DashboardView } | { ok: false; errors: string[] }> {
+  ): Promise<
+    { ok: true; dashboard: DashboardView } | { ok: false; errors: string[] }
+  > {
     const validated = validateDashboardFilter(filter);
     if (!validated.ok) return validated;
     const f = validated.value;
@@ -332,7 +375,10 @@ export class ObservabilityService {
       limit: f.limit,
     });
     const snap = this.deps.metrics.snapshot();
-    const counter = (name: string, labels?: Record<string, string>): number | null => {
+    const counter = (
+      name: string,
+      labels?: Record<string, string>,
+    ): number | null => {
       let total = 0;
       let found = false;
       for (const c of snap.counters) {
@@ -354,43 +400,91 @@ export class ObservabilityService {
     };
     const orZero = (v: number | null): number => v ?? 0;
 
-    const byStatus = (status: string): number => tasks.filter((t) => t.status === status).length;
+    const byStatus = (status: string): number =>
+      tasks.filter((t) => t.status === status).length;
     const durations = tasks
       .map((t) => t.durationMs)
       .filter((d): d is number => typeof d === "number");
     const avg = (xs: number[]): number | null =>
       xs.length === 0 ? null : xs.reduce((a, b) => a + b, 0) / xs.length;
+    // Session p50 of a duration histogram (null when never observed).
+    const histogramP50 = (name: string): number | null => {
+      for (const h of snap.histograms) {
+        if (h.name !== name) continue;
+        return h.count > 0 && h.p50Ms !== null ? Math.round(h.p50Ms) : null;
+      }
+      return null;
+    };
 
     const toolCalls = tasks.reduce((n, t) => n + t.toolCallCount, 0);
     const retries = tasks.reduce((n, t) => n + t.retryCount, 0);
     const filesChanged = tasks.reduce((n, t) => n + t.filesChangedCount, 0);
     const checkpoints = tasks.reduce((n, t) => n + t.checkpointCount, 0);
     const approvals = orZero(counter("codepilot_approvals_total"));
-    const tasksTotal = (status: string): number | null => counter("codepilot_tasks_total", { status });
+    const tasksTotal = (status: string): number | null =>
+      counter("codepilot_tasks_total", { status });
 
     const overview: MetricValue[] = [
-      { key: "tasks", label: "Tasks (in range)", value: tasks.length, scope: "range" },
-      { key: "completed", label: "Completed", value: byStatus("completed"), scope: "range" },
-      { key: "failed", label: "Failed", value: byStatus("failed"), scope: "range" },
-      { key: "cancelled", label: "Cancelled", value: byStatus("cancelled"), scope: "range" },
-      { key: "interrupted", label: "Interrupted", value: byStatus("interrupted"), scope: "range" },
+      {
+        key: "tasks",
+        label: "Tasks (in range)",
+        value: tasks.length,
+        scope: "range",
+      },
+      {
+        key: "completed",
+        label: "Completed",
+        value: byStatus("completed"),
+        scope: "range",
+      },
+      {
+        key: "failed",
+        label: "Failed",
+        value: byStatus("failed"),
+        scope: "range",
+      },
+      {
+        key: "cancelled",
+        label: "Cancelled",
+        value: byStatus("cancelled"),
+        scope: "range",
+      },
+      {
+        key: "interrupted",
+        label: "Interrupted",
+        value: byStatus("interrupted"),
+        scope: "range",
+      },
       {
         key: "totalRuntime",
         label: "Total runtime",
-        value: durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0)) : null,
+        value:
+          durations.length > 0
+            ? Math.round(durations.reduce((a, b) => a + b, 0))
+            : null,
         unit: "ms",
-        ...(durations.length > 0 ? {} : { unavailableReason: "no completed durations in range" }),
+        ...(durations.length > 0
+          ? {}
+          : { unavailableReason: "no completed durations in range" }),
         scope: "range",
       },
       {
         key: "avgRuntime",
         label: "Average runtime",
-        value: avg(durations) === null ? null : Math.round(avg(durations) as number),
+        value:
+          avg(durations) === null ? null : Math.round(avg(durations) as number),
         unit: "ms",
-        ...(durations.length > 0 ? {} : { unavailableReason: "no completed durations in range" }),
+        ...(durations.length > 0
+          ? {}
+          : { unavailableReason: "no completed durations in range" }),
         scope: "range",
       },
-      { key: "toolCalls", label: "Tool calls", value: toolCalls, scope: "range" },
+      {
+        key: "toolCalls",
+        label: "Tool calls",
+        value: toolCalls,
+        scope: "range",
+      },
       {
         key: "toolFailures",
         label: "Tool failures",
@@ -398,41 +492,102 @@ export class ObservabilityService {
         scope: "session",
       },
       { key: "retries", label: "Retries", value: retries, scope: "range" },
-      { key: "approvals", label: "Approvals", value: approvals, scope: "session" },
-      { key: "filesChanged", label: "Files changed", value: filesChanged, scope: "range" },
+      {
+        key: "approvals",
+        label: "Approvals",
+        value: approvals,
+        scope: "session",
+      },
+      {
+        key: "filesChanged",
+        label: "Files changed",
+        value: filesChanged,
+        scope: "range",
+      },
       // Checkpoint counts come from per-task history (range scope). The
       // session counter only records creations this session and would
       // double-count, so it is intentionally not mixed in.
-      { key: "checkpoints", label: "Checkpoints", value: checkpoints, scope: "range" },
-      { key: "terminalExecutions", label: "Terminal executions", value: orZero(counter("codepilot_terminal_sessions_total")), scope: "session" },
-      { key: "mcpExecutions", label: "MCP executions", value: orZero(counter("codepilot_mcp_executions_total")), scope: "session" },
-      { key: "pluginExecutions", label: "Plugin executions", value: orZero(counter("codepilot_plugin_executions_total")), scope: "session" },
-      { key: "teamRuns", label: "Multi-agent runs", value: orZero(counter("codepilot_team_runs_total")), scope: "session" },
-      { key: "scheduledRuns", label: "Scheduled executions", value: orZero(counter("codepilot_scheduled_runs_total")), scope: "session" },
+      {
+        key: "checkpoints",
+        label: "Checkpoints",
+        value: checkpoints,
+        scope: "range",
+      },
+      {
+        key: "terminalExecutions",
+        label: "Terminal executions",
+        value: orZero(counter("codepilot_terminal_sessions_total")),
+        scope: "session",
+      },
+      {
+        key: "mcpExecutions",
+        label: "MCP executions",
+        value: orZero(counter("codepilot_mcp_executions_total")),
+        scope: "session",
+      },
+      {
+        key: "pluginExecutions",
+        label: "Plugin executions",
+        value: orZero(counter("codepilot_plugin_executions_total")),
+        scope: "session",
+      },
+      {
+        key: "teamRuns",
+        label: "Multi-agent runs",
+        value: orZero(counter("codepilot_team_runs_total")),
+        scope: "session",
+      },
+      {
+        key: "scheduledRuns",
+        label: "Scheduled executions",
+        value: orZero(counter("codepilot_scheduled_runs_total")),
+        scope: "session",
+      },
       {
         key: "tasksCompletedCounter",
         label: "Tasks completed (session counter)",
         value: tasksTotal("completed"),
-        ...(tasksTotal("completed") === null ? { unavailableReason: "no task completions recorded this session" } : {}),
+        ...(tasksTotal("completed") === null
+          ? { unavailableReason: "no task completions recorded this session" }
+          : {}),
         scope: "session",
       },
     ];
 
     const tools = this.buildToolRows(snap);
     const providers = this.buildProviderRows(tasks);
+    // Weighted average duration across tool rows of one category (null
+    // when the category never executed this session).
+    const categoryAvgMs = (category: string): number | null => {
+      let weighted = 0;
+      let samples = 0;
+      for (const row of tools) {
+        if (row.category !== category || row.avgMs === null) continue;
+        weighted += row.avgMs * row.samples;
+        samples += row.samples;
+      }
+      return samples > 0 ? Math.round(weighted / samples) : null;
+    };
+    const terminalAvgMs = categoryAvgMs("terminal");
+    const mcpAvgMs = categoryAvgMs("MCP");
+    const ttftP50Ms = histogramP50("codepilot_run_time_to_first_token_ms");
     const tokens = {
       input: {
         key: "inputTokens",
         label: "Input tokens",
         value: counter("codepilot_model_input_tokens"),
-        ...((counter("codepilot_model_input_tokens") === null) ? { unavailableReason: "no token usage recorded this session" } : {}),
+        ...(counter("codepilot_model_input_tokens") === null
+          ? { unavailableReason: "no token usage recorded this session" }
+          : {}),
         scope: "session" as const,
       },
       output: {
         key: "outputTokens",
         label: "Output tokens",
         value: counter("codepilot_model_output_tokens"),
-        ...((counter("codepilot_model_output_tokens") === null) ? { unavailableReason: "no token usage recorded this session" } : {}),
+        ...(counter("codepilot_model_output_tokens") === null
+          ? { unavailableReason: "no token usage recorded this session" }
+          : {}),
         scope: "session" as const,
       },
     };
@@ -442,31 +597,45 @@ export class ObservabilityService {
     const performance = {
       taskDurations: {
         count: taskDurationList.length,
-        avgMs: avg(taskDurationList) === null ? null : Math.round(avg(taskDurationList) as number),
-        minMs: taskDurationList.length > 0 ? Math.min(...taskDurationList) : null,
-        maxMs: taskDurationList.length > 0 ? Math.max(...taskDurationList) : null,
+        avgMs:
+          avg(taskDurationList) === null
+            ? null
+            : Math.round(avg(taskDurationList) as number),
+        minMs:
+          taskDurationList.length > 0 ? Math.min(...taskDurationList) : null,
+        maxMs:
+          taskDurationList.length > 0 ? Math.max(...taskDurationList) : null,
       },
       toolLatency: tools.slice(0, MAX_TOOL_ROWS),
       modelLatency: {
         key: "modelLatency",
         label: "Model latency",
-        value: null,
-        unavailableReason: "model latency is not instrumented",
+        value: ttftP50Ms,
+        unit: "ms",
+        ...(ttftP50Ms === null
+          ? { unavailableReason: "no completed runs with streamed output yet" }
+          : {}),
         scope: "session" as const,
       },
       contextLatency: this.spanLatency("context.retrieve"),
       terminalDuration: {
         key: "terminalDuration",
         label: "Terminal execution duration",
-        value: null,
-        unavailableReason: "terminal durations are not instrumented",
+        value: terminalAvgMs,
+        unit: "ms",
+        ...(terminalAvgMs === null
+          ? { unavailableReason: "no terminal tool executions yet" }
+          : {}),
         scope: "session" as const,
       },
       mcpDuration: {
         key: "mcpDuration",
         label: "MCP execution duration",
-        value: null,
-        unavailableReason: "MCP durations are not instrumented",
+        value: mcpAvgMs,
+        unit: "ms",
+        ...(mcpAvgMs === null
+          ? { unavailableReason: "no MCP tool executions yet" }
+          : {}),
         scope: "session" as const,
       },
     };
@@ -476,7 +645,12 @@ export class ObservabilityService {
       dashboard: {
         generatedAtMs: Date.now(),
         rangeNote:
-          f.fromMs !== undefined || f.toMs !== undefined || f.status || f.provider || f.model || f.mode
+          f.fromMs !== undefined ||
+          f.toMs !== undefined ||
+          f.status ||
+          f.provider ||
+          f.model ||
+          f.mode
             ? "Task-derived metrics honor the filter; session counters are session totals."
             : "Task-derived metrics cover all available tasks; session counters are session totals.",
         overview,
@@ -524,13 +698,29 @@ export class ObservabilityService {
 
   // ---- Private --------------------------------------------------------------------------
 
-  private buildToolRows(snap: ReturnType<MetricsRegistry["snapshot"]>): ToolMetricsRow[] {
+  private buildToolRows(
+    snap: ReturnType<MetricsRegistry["snapshot"]>,
+  ): ToolMetricsRow[] {
     const byTool = new Map<
       string,
-      { calls: number; failures: number; durations: { count: number; sum: number; p50: number | null; p95: number | null; max: number } | null }
+      {
+        calls: number;
+        failures: number;
+        durations: {
+          count: number;
+          sum: number;
+          p50: number | null;
+          p95: number | null;
+          max: number;
+        } | null;
+      }
     >();
     for (const c of snap.counters) {
-      if (c.name !== "codepilot_tool_calls_total" && c.name !== "codepilot_tool_failures_total") continue;
+      if (
+        c.name !== "codepilot_tool_calls_total" &&
+        c.name !== "codepilot_tool_failures_total"
+      )
+        continue;
       const tool = String(c.labels.tool ?? "unknown").slice(0, 64);
       const entry = byTool.get(tool) ?? {
         calls: 0,
@@ -544,8 +734,18 @@ export class ObservabilityService {
     for (const h of snap.histograms) {
       if (h.name !== "codepilot_tool_duration_ms") continue;
       const tool = String(h.labels.tool ?? "unknown").slice(0, 64);
-      const entry = byTool.get(tool) ?? { calls: 0, failures: 0, durations: null };
-      entry.durations = { count: h.count, sum: h.sumMs, p50: h.p50Ms, p95: h.p95Ms, max: h.maxMs };
+      const entry = byTool.get(tool) ?? {
+        calls: 0,
+        failures: 0,
+        durations: null,
+      };
+      entry.durations = {
+        count: h.count,
+        sum: h.sumMs,
+        p50: h.p50Ms,
+        p95: h.p95Ms,
+        max: h.maxMs,
+      };
       byTool.set(tool, entry);
     }
     const rows: ToolMetricsRow[] = [];
@@ -565,7 +765,9 @@ export class ObservabilityService {
         samples: d?.count ?? 0,
       });
     }
-    return rows.sort((a, b) => b.invocations - a.invocations).slice(0, MAX_TOOL_ROWS);
+    return rows
+      .sort((a, b) => b.invocations - a.invocations)
+      .slice(0, MAX_TOOL_ROWS);
   }
 
   private buildProviderRows(tasks: TaskSummary[]): ProviderRow[] {
@@ -586,7 +788,10 @@ export class ObservabilityService {
         provider: provider.slice(0, 64),
         tasks: [...models.values()].reduce((a, b) => a + b, 0),
         models: [...models.entries()]
-          .map(([model, count]) => ({ model: model.slice(0, 64), tasks: count }))
+          .map(([model, count]) => ({
+            model: model.slice(0, 64),
+            tasks: count,
+          }))
           .sort((a, b) => b.tasks - a.tasks)
           .slice(0, 20),
       });
@@ -598,9 +803,20 @@ export class ObservabilityService {
     categories: ErrorCategoryRow[];
     recent: RecentError[];
   } {
-    const byCategory = new Map<ErrorCategory, { count: number; tasks: Set<string>; recentAtMs: number }>();
-    const bump = (category: ErrorCategory, taskId: string | undefined, atMs: number): void => {
-      const entry = byCategory.get(category) ?? { count: 0, tasks: new Set(), recentAtMs: 0 };
+    const byCategory = new Map<
+      ErrorCategory,
+      { count: number; tasks: Set<string>; recentAtMs: number }
+    >();
+    const bump = (
+      category: ErrorCategory,
+      taskId: string | undefined,
+      atMs: number,
+    ): void => {
+      const entry = byCategory.get(category) ?? {
+        count: 0,
+        tasks: new Set(),
+        recentAtMs: 0,
+      };
       entry.count += 1;
       if (taskId) entry.tasks.add(taskId);
       entry.recentAtMs = Math.max(entry.recentAtMs, atMs);
@@ -625,12 +841,14 @@ export class ObservabilityService {
     } catch {
       // logger unavailable — categories from tasks still stand
     }
-    const categories: ErrorCategoryRow[] = [...byCategory.entries()].map(([category, entry]) => ({
-      category,
-      count: entry.count,
-      taskCount: entry.tasks.size,
-      ...(entry.recentAtMs > 0 ? { recentAtMs: entry.recentAtMs } : {}),
-    }));
+    const categories: ErrorCategoryRow[] = [...byCategory.entries()].map(
+      ([category, entry]) => ({
+        category,
+        count: entry.count,
+        taskCount: entry.tasks.size,
+        ...(entry.recentAtMs > 0 ? { recentAtMs: entry.recentAtMs } : {}),
+      }),
+    );
     categories.sort((a, b) => b.count - a.count);
     return { categories: categories.slice(0, 20), recent };
   }

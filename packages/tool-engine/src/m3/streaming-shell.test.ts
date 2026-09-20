@@ -8,9 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  CommandExecutionService,
-} from "./command-execution.js";
+import { CommandExecutionService } from "./command-execution.js";
 import {
   createStreamingShellExecutor,
   combineShellOutput,
@@ -92,7 +90,10 @@ describe("streaming shell executor — live process streaming", () => {
     const out = await execute(
       {
         command: NODE,
-        args: ["-e", "console.log('OUT-1'); console.error('ERR-1'); console.log('OUT-2');"],
+        args: [
+          "-e",
+          "console.log('OUT-1'); console.error('ERR-1'); console.log('OUT-2');",
+        ],
       },
       process.cwd(),
       ctx,
@@ -115,7 +116,10 @@ describe("streaming shell executor — live process streaming", () => {
       ctx,
     );
     expect(out).toBe("");
-    expect(events.map((e) => e.type)).toEqual(["terminal.started", "terminal.exit"]);
+    expect(events.map((e) => e.type)).toEqual([
+      "terminal.started",
+      "terminal.exit",
+    ]);
   });
 
   it("captures many small chunks in order (100 rapid prints)", async () => {
@@ -153,16 +157,25 @@ describe("streaming shell executor — live process streaming", () => {
   it("bounds large output with an explicit marker, process completes", async () => {
     const { events, execute } = collector();
     const script = `let s=""; for (let i = 0; i < 20000; i++) s += "0123456789abcdef"; console.log(s);`;
-    const out = await execute({ command: NODE, args: ["-e", script] }, process.cwd(), ctx);
+    const out = await execute(
+      { command: NODE, args: ["-e", script] },
+      process.cwd(),
+      ctx,
+    );
     expect(out).toContain("output truncated");
-    expect(out.length).toBeLessThanOrEqual(STREAMING_SHELL_MAX_OUTPUT_CHARS + 500);
+    expect(out.length).toBeLessThanOrEqual(
+      STREAMING_SHELL_MAX_OUTPUT_CHARS + 500,
+    );
     expect(events.at(-1)?.type).toBe("terminal.exit");
   });
 
   it("preserves unicode output", async () => {
     const { execute } = collector();
     const out = await execute(
-      { command: NODE, args: ["-e", "console.log('héllo wörld \\u{1F680} \\u4e2d\\u6587')"] },
+      {
+        command: NODE,
+        args: ["-e", "console.log('héllo wörld \\u{1F680} \\u4e2d\\u6587')"],
+      },
       process.cwd(),
       ctx,
     );
@@ -173,7 +186,10 @@ describe("streaming shell executor — live process streaming", () => {
   it("passes argv with spaces without shell interpolation", async () => {
     const { execute } = collector();
     const out = await execute(
-      { command: NODE, args: ["-e", "console.log(process.argv[1])", "hello world; rm -rf /"] },
+      {
+        command: NODE,
+        args: ["-e", "console.log(process.argv[1])", "hello world; rm -rf /"],
+      },
       process.cwd(),
       ctx,
     );
@@ -184,7 +200,14 @@ describe("streaming shell executor — live process streaming", () => {
   it("throws CommandExitError-shaped error on non-zero exit", async () => {
     const { events, execute } = collector();
     await expect(
-      execute({ command: NODE, args: ["-e", "console.log('before-fail'); process.exit(3);"] }, process.cwd(), ctx),
+      execute(
+        {
+          command: NODE,
+          args: ["-e", "console.log('before-fail'); process.exit(3);"],
+        },
+        process.cwd(),
+        ctx,
+      ),
     ).rejects.toThrow("[Command exited with code 3]");
     // Partial output still streamed before the failure.
     expect(dataOf(events, "stdout")).toContain("before-fail");
@@ -206,9 +229,13 @@ describe("streaming shell executor — live process streaming", () => {
   it("recovers normally after failures (no poisoned state)", async () => {
     const { service, execute } = collector();
     await expect(
-      execute({ command: NODE, args: ["-e", "process.exit(9);"] }, process.cwd(), {
-        toolCallId: "fail-then-ok-1",
-      }),
+      execute(
+        { command: NODE, args: ["-e", "process.exit(9);"] },
+        process.cwd(),
+        {
+          toolCallId: "fail-then-ok-1",
+        },
+      ),
     ).rejects.toThrow("[Command exited with code 9]");
     await expect(
       execute(
@@ -238,7 +265,10 @@ describe("streaming shell executor — live process streaming", () => {
       },
     });
     const running = inner(
-      { command: NODE, args: ["-e", "setInterval(()=>console.log('tick'),100);"] },
+      {
+        command: NODE,
+        args: ["-e", "setInterval(()=>console.log('tick'),100);"],
+      },
       process.cwd(),
       { toolCallId: "call-cancel-1", signal: controller.signal },
     );
@@ -265,7 +295,9 @@ describe("streaming shell executor — live process streaming", () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const path = await import("node:path");
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codepilot dir with spaces-"));
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "codepilot dir with spaces-"),
+    );
     try {
       const out = await execute(
         { command: NODE, args: ["-e", "console.log(process.cwd())"] },
@@ -293,7 +325,11 @@ describe("streaming shell executor — live process streaming", () => {
 
   it.runIf(WIN)("streams via powershell string commands", async () => {
     const { events, execute } = collector();
-    const out = await execute("Write-Output 'CP-PS-1 with spaces'", process.cwd(), ctx);
+    const out = await execute(
+      "Write-Output 'CP-PS-1 with spaces'",
+      process.cwd(),
+      ctx,
+    );
     expect(out).toContain("CP-PS-1 with spaces");
     expect(dataOf(events, "stdout")).toContain("CP-PS-1 with spaces");
     assertMonotonic(events);
@@ -312,7 +348,11 @@ describe("streaming shell executor — live process streaming", () => {
   it.runIf(WIN)("reports cmd.exe non-zero exits", async () => {
     const { execute } = collector();
     await expect(
-      execute({ command: "cmd.exe", args: ["/d", "/s", "/c", "exit 7"] }, process.cwd(), ctx),
+      execute(
+        { command: "cmd.exe", args: ["/d", "/s", "/c", "exit 7"] },
+        process.cwd(),
+        ctx,
+      ),
     ).rejects.toThrow("[Command exited with code 7]");
   });
 });

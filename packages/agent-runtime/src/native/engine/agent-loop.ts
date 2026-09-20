@@ -22,17 +22,33 @@
  *     error the caller can surface.
  */
 
-import type { AgentMessage, AgentTool, AgentUsage, ToolUseBlock } from "../types.js";
+import type {
+  AgentMessage,
+  AgentTool,
+  AgentUsage,
+  ToolUseBlock,
+} from "../types.js";
 import type { LlmStreamEvent, LlmToolCall } from "../llm/types.js";
 import type { LlmProvider } from "../llm/types.js";
-import { dispatchToolCall, parseToolArguments, type ToolGate } from "./tool-dispatch.js";
+import {
+  dispatchToolCall,
+  parseToolArguments,
+  type ToolGate,
+} from "./tool-dispatch.js";
 
 export type AgentLoopEvent =
   | { type: "iteration_start"; iteration: number }
   | { type: "text_delta"; text: string; accumulated: string }
   | { type: "reasoning_delta"; text: string; accumulated: string }
   | { type: "tool_started"; call: LlmToolCall; toolName: string }
-  | { type: "tool_completed"; call: LlmToolCall; toolName: string; output: string; isError: boolean; durationMs: number }
+  | {
+      type: "tool_completed";
+      call: LlmToolCall;
+      toolName: string;
+      output: string;
+      isError: boolean;
+      durationMs: number;
+    }
   | { type: "tool_denied"; call: LlmToolCall; toolName: string; reason: string }
   | { type: "usage"; usage: AgentUsage }
   | {
@@ -109,7 +125,8 @@ export async function runAgentLoop(
     options.onEvent({ type: "iteration_start", iteration: iterations });
 
     // ---- One model turn ----
-    const toolCalls: Array<LlmToolCall & { args: Record<string, unknown> }> = [];
+    const toolCalls: Array<LlmToolCall & { args: Record<string, unknown> }> =
+      [];
     let turnError: string | undefined;
     let aborted = false;
 
@@ -153,13 +170,15 @@ export async function runAgentLoop(
             usage.cacheReadTokens += streamEvt.usage.cacheReadTokens;
             usage.cacheWriteTokens += streamEvt.usage.cacheWriteTokens;
             if (streamEvt.usage.totalCost !== undefined) {
-              usage.totalCost = (usage.totalCost ?? 0) + streamEvt.usage.totalCost;
+              usage.totalCost =
+                (usage.totalCost ?? 0) + streamEvt.usage.totalCost;
             }
             options.onEvent({ type: "usage", usage: { ...usage } });
             break;
           case "finish":
             if (streamEvt.reason === "aborted") aborted = true;
-            if (streamEvt.reason === "error") turnError = streamEvt.error ?? "provider stream failed";
+            if (streamEvt.reason === "error")
+              turnError = streamEvt.error ?? "provider stream failed";
             break;
         }
         if (aborted) break;
@@ -237,7 +256,12 @@ export async function runAgentLoop(
         { maxResultChars: options.maxResultChars },
       );
       if (outcome.denied) {
-        options.onEvent({ type: "tool_denied", call, toolName: call.toolName, reason: outcome.denialReason ?? "denied" });
+        options.onEvent({
+          type: "tool_denied",
+          call,
+          toolName: call.toolName,
+          reason: outcome.denialReason ?? "denied",
+        });
       } else {
         options.onEvent({
           type: "tool_completed",

@@ -131,11 +131,48 @@ describe("ObservabilityService dashboard metrics", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.dashboard.performance.modelLatency.value).toBeNull();
-    expect(result.dashboard.performance.modelLatency.unavailableReason).toContain("not instrumented");
+    expect(
+      result.dashboard.performance.modelLatency.unavailableReason,
+    ).toBeTruthy();
     expect(result.dashboard.performance.contextLatency.value).toBeNull();
     expect(result.dashboard.performance.terminalDuration.value).toBeNull();
     expect(result.dashboard.performance.mcpDuration.value).toBeNull();
     expect(result.dashboard.tokens.input.value).toBeNull();
+  });
+
+  it("surfaces run TTFT as model latency once runs complete", async () => {
+    metrics.observeMs("codepilot_run_time_to_first_token_ms", 1200);
+    metrics.observeMs("codepilot_run_time_to_first_token_ms", 800);
+    const svc = makeService();
+    const result = await svc.dashboard({});
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // p50 of [800, 1200] (histogram semantics: value in range).
+    const value = result.dashboard.performance.modelLatency.value;
+    expect(value).not.toBeNull();
+    expect(value as number).toBeGreaterThanOrEqual(800);
+    expect(value as number).toBeLessThanOrEqual(1200);
+    expect(
+      result.dashboard.performance.modelLatency.unavailableReason,
+    ).toBeUndefined();
+  });
+
+  it("aggregates terminal and MCP durations from tool rows", async () => {
+    metrics.observeMs("codepilot_tool_duration_ms", 100, { tool: "bash" });
+    metrics.observeMs("codepilot_tool_duration_ms", 300, { tool: "bash" });
+    metrics.observeMs("codepilot_tool_duration_ms", 50, {
+      tool: "mcp__srv__thing",
+    });
+    metrics.observeMs("codepilot_tool_duration_ms", 4000, {
+      tool: "read_files",
+    });
+    const svc = makeService();
+    const result = await svc.dashboard({});
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Weighted terminal average: (100 + 300) / 2 = 200.
+    expect(result.dashboard.performance.terminalDuration.value).toBe(200);
+    expect(result.dashboard.performance.mcpDuration.value).toBe(50);
   });
 
   it("reads execution counters placed at real execution sites", async () => {

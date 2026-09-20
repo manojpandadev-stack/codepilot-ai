@@ -17,7 +17,8 @@ export interface ProtocolIssue {
     | "orphaned-tool-result"
     | "duplicate-tool-use-id"
     | "assistant-after-tool-result-unpaired"
-    | "result-before-use";
+    | "result-before-use"
+    | "image-in-assistant-message";
   /** Conversation entry index (as passed in), or -1 when structural. */
   index: number;
   detail: string;
@@ -50,24 +51,38 @@ export function validateConversationProtocol(
   if (messages.length === 0) {
     return {
       valid: false,
-      issues: [{ kind: "empty-message", index: 0, detail: "empty conversation" }],
+      issues: [
+        { kind: "empty-message", index: 0, detail: "empty conversation" },
+      ],
     };
   }
 
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i]!;
     if (m.role !== "user" && m.role !== "assistant") {
-      issues.push({ kind: "invalid-role", index: i, detail: `role ${String(m.role)}` });
+      issues.push({
+        kind: "invalid-role",
+        index: i,
+        detail: `role ${String(m.role)}`,
+      });
       continue;
     }
     if (typeof m.content === "string") {
       if (m.content.trim().length === 0) {
-        issues.push({ kind: "empty-message", index: i, detail: "empty text content" });
+        issues.push({
+          kind: "empty-message",
+          index: i,
+          detail: "empty text content",
+        });
       }
       continue;
     }
     if (m.content.length === 0) {
-      issues.push({ kind: "empty-message", index: i, detail: "empty block list" });
+      issues.push({
+        kind: "empty-message",
+        index: i,
+        detail: "empty block list",
+      });
       continue;
     }
 
@@ -87,7 +102,15 @@ export function validateConversationProtocol(
         seenToolUseIds.add(block.id);
         useIdsHere.push(block.id);
       } else if (block.type === "tool_result") {
-        resultIdsHere.push(typeof block.tool_use_id === "string" ? block.tool_use_id : "");
+        resultIdsHere.push(
+          typeof block.tool_use_id === "string" ? block.tool_use_id : "",
+        );
+      } else if (block.type === "image" && m.role !== "user") {
+        issues.push({
+          kind: "image-in-assistant-message",
+          index: i,
+          detail: "image blocks are only valid in user messages",
+        });
       }
     }
 
@@ -105,7 +128,8 @@ export function validateConversationProtocol(
       const prevUseIds = new Set<string>();
       if (prev && prev.role === "assistant" && Array.isArray(prev.content)) {
         for (const b of prev.content) {
-          if (b.type === "tool_use" && typeof b.id === "string") prevUseIds.add(b.id);
+          if (b.type === "tool_use" && typeof b.id === "string")
+            prevUseIds.add(b.id);
         }
       }
       for (const rid of resultIdsHere) {

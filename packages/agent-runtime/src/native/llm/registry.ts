@@ -59,7 +59,7 @@ const DEFAULT_ENDPOINTS: Record<string, string> = {
   mistral: "https://api.mistral.ai/v1",
   groq: "https://api.groq.com/openai/v1",
   together: "https://api.together.xyz/v1",
-  "xai": "https://api.x.ai/v1",
+  xai: "https://api.x.ai/v1",
 };
 
 /**
@@ -77,7 +77,9 @@ export function createLlmProvider(
   const baseUrl = config?.baseUrl;
 
   const fetchImpl = options.fetchImpl ?? fetch;
-  const openAiOptions = (extra?: Partial<OpenAiCompatibleOptions>): OpenAiCompatibleOptions => ({
+  const openAiOptions = (
+    extra?: Partial<OpenAiCompatibleOptions>,
+  ): OpenAiCompatibleOptions => ({
     baseUrl: baseUrl ?? DEFAULT_ENDPOINTS[request.providerId] ?? "",
     apiKey,
     fetchImpl,
@@ -91,19 +93,39 @@ export function createLlmProvider(
       // OpenAI-compatible server — treat any baseUrl-bearing local id as
       // Ollama when it points at the Ollama port, else OpenAI-compatible.
       if (request.providerId === "ollama") {
-        return new OllamaLlmProvider({ baseUrl: baseUrl ?? OLLAMA_DEFAULT_HOST, fetchImpl });
+        return new OllamaLlmProvider({
+          baseUrl: baseUrl ?? OLLAMA_DEFAULT_HOST,
+          fetchImpl,
+        });
       }
       if (!baseUrl) {
-        throw new LlmError(request.providerId, "baseUrl is required for lmstudio");
+        throw new LlmError(
+          request.providerId,
+          "baseUrl is required for lmstudio",
+        );
       }
-      return new OpenAiCompatibleLlmProvider(request.providerId, openAiOptions());
+      return new OpenAiCompatibleLlmProvider(
+        request.providerId,
+        openAiOptions(),
+      );
     }
     case "openai":
     case "openai-native":
-      if (!apiKey) throw new LlmError(request.providerId, "API key is required for OpenAI");
-      return new OpenAiCompatibleLlmProvider(request.providerId, openAiOptions());
+      if (!apiKey)
+        throw new LlmError(
+          request.providerId,
+          "API key is required for OpenAI",
+        );
+      return new OpenAiCompatibleLlmProvider(
+        request.providerId,
+        openAiOptions(),
+      );
     case "openrouter":
-      if (!apiKey) throw new LlmError(request.providerId, "API key is required for OpenRouter");
+      if (!apiKey)
+        throw new LlmError(
+          request.providerId,
+          "API key is required for OpenRouter",
+        );
       return new OpenAiCompatibleLlmProvider(
         request.providerId,
         openAiOptions({
@@ -118,14 +140,29 @@ export function createLlmProvider(
     case "groq":
     case "together":
     case "xai":
-      if (!apiKey) throw new LlmError(request.providerId, `API key is required for ${request.providerId}`);
-      return new OpenAiCompatibleLlmProvider(request.providerId, openAiOptions());
+      if (!apiKey)
+        throw new LlmError(
+          request.providerId,
+          `API key is required for ${request.providerId}`,
+        );
+      return new OpenAiCompatibleLlmProvider(
+        request.providerId,
+        openAiOptions(),
+      );
     case "anthropic":
-      if (!apiKey) throw new LlmError(request.providerId, "API key is required for Anthropic");
+      if (!apiKey)
+        throw new LlmError(
+          request.providerId,
+          "API key is required for Anthropic",
+        );
       return new AnthropicLlmProvider({ apiKey, baseUrl, fetchImpl });
     case "google":
     case "gemini":
-      if (!apiKey) throw new LlmError(request.providerId, "API key is required for Google");
+      if (!apiKey)
+        throw new LlmError(
+          request.providerId,
+          "API key is required for Google",
+        );
       return new GoogleLlmProvider({ apiKey, baseUrl, fetchImpl });
     default: {
       // Unknown provider id: require an explicit base URL and speak
@@ -137,7 +174,10 @@ export function createLlmProvider(
           { transient: false },
         );
       }
-      return new OpenAiCompatibleLlmProvider(request.providerId, openAiOptions());
+      return new OpenAiCompatibleLlmProvider(
+        request.providerId,
+        openAiOptions(),
+      );
     }
   }
 }

@@ -107,7 +107,9 @@ describe("SecurityValidator", () => {
   });
 
   it("blocks sensitive file access (.aws/credentials) — Windows separator", () => {
-    const result = validator.validate("read_file", { path: ".aws/credentials" });
+    const result = validator.validate("read_file", {
+      path: ".aws/credentials",
+    });
     expect(result.allowed).toBe(false);
   });
 

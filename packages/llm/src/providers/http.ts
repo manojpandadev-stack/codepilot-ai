@@ -33,7 +33,10 @@ export async function postJson<T>(
   } catch (err) {
     throw mapTransportError(err, url);
   }
-  const text = await readBoundedText(response, options.maxBodyChars ?? 4_000_000);
+  const text = await readBoundedText(
+    response,
+    options.maxBodyChars ?? 4_000_000,
+  );
   if (!response.ok) {
     throw new Error(
       `provider request failed: HTTP ${response.status} ${snip(text, 300)}`,
@@ -147,5 +150,7 @@ function mapTransportError(err: unknown, url: string): Error {
   }
   const detail = err instanceof Error ? err.message : String(err);
   // Never propagate raw fetch internals (they can echo URLs/headers).
-  return new Error(`provider transport failed (${hostOf(url)}): ${snip(detail, 160)}`);
+  return new Error(
+    `provider transport failed (${hostOf(url)}): ${snip(detail, 160)}`,
+  );
 }

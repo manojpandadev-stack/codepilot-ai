@@ -60,7 +60,10 @@ export class SimplePathValidator {
 
   constructor(workspaceRoot: string, extraSensitivePaths?: string[]) {
     this.workspaceRoot = resolvePath(workspaceRoot);
-    const allPaths = [...DEFAULT_SENSITIVE_PATHS, ...(extraSensitivePaths ?? [])];
+    const allPaths = [
+      ...DEFAULT_SENSITIVE_PATHS,
+      ...(extraSensitivePaths ?? []),
+    ];
     this.sensitivePatterns = allPaths.map(
       (p) => new RegExp(escapeRegex(p) + "$", "i"),
     );
@@ -77,7 +80,7 @@ export class SimplePathValidator {
     }
 
     const trimmed = rawPath.trim();
-    
+
     // Reject absolute paths
     if (isAbsolute(trimmed)) {
       return {
@@ -258,7 +261,8 @@ export class ChangeSetManager {
     this.mutation = options.mutation;
     // F-08: Initialize path validator if securityValidator is provided
     if (options.securityValidator) {
-      this.pathValidator = options.securityValidator as unknown as SimplePathValidator;
+      this.pathValidator =
+        options.securityValidator as unknown as SimplePathValidator;
     }
   }
 
@@ -275,7 +279,9 @@ export class ChangeSetManager {
       for (const change of changes) {
         const validation = this.pathValidator.validatePath(change.filePath);
         if (!validation.allowed) {
-          throw new Error(`Path validation failed for '${change.filePath}': ${validation.reason}`);
+          throw new Error(
+            `Path validation failed for '${change.filePath}': ${validation.reason}`,
+          );
         }
       }
     }

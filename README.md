@@ -56,11 +56,11 @@ catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
 
 ### Developer Tools
 - **Browser Tools**: Navigate pages and extract content through policy-checked, SSRF-protected fetching
-- **Architecture Analysis**: Detect frameworks, modules, dependency graphs
-- **Code Review Dashboard**: Critical/High/Medium/Low findings with suggested fixes
-- **Test Intelligence**: Framework detection, affected test discovery
-- **Repository Intelligence**: File discovery, language detection, symbol extraction
-- **Three-Layer Memory**: Project, user, and task memory
+- **Architecture Analysis**: Agent-driven codebase surveys via the Analyze Repository command
+- **Code Review**: Severity-classified findings via review mode and Review commands
+- **Test Execution**: Run suites via approval-gated terminal commands
+- **Workspace Search**: File discovery and content search across the workspace
+- **Task Memory**: Persistent per-task history with resume and continuity
 - **MCP Manager**: Configure and manage MCP servers
 
 ### Optional Backend (Spring Boot)
@@ -199,20 +199,19 @@ See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for d
 codepilot-ai/
 ├── apps/
 │   ├── vscode-extension/    # VS Code extension + React UI
-│   ├── web-dashboard/       # Optional standalone dashboard
-│   └── cli/                 # Optional CLI
+│   └── cli/                 # Headless CLI runner
 ├── packages/
 │   ├── shared/              # Common types and constants
 │   ├── agent-runtime/       # Native CodePilot agent runtime (sessions, tools, continuity)
 │   ├── model-gateway/       # Provider abstraction
-│   ├── tool-engine/         # Repository analysis, review, testing tools
+│   ├── tool-engine/         # Terminal/streaming execution, M4 bridge, audit
 │   ├── policy-engine/       # Tool governance and security
 │   ├── context-engine/      # Context budgeting and management
 │   ├── repository-engine/   # File discovery and indexing
 │   ├── rag-engine/          # Embeddings and semantic search
 │   ├── memory-engine/       # Three-layer memory system
 │   ├── mcp-manager/         # MCP server management
-│   ├── git-engine/          # Git intelligence and checkpoints
+│   ├── git-engine/          # Git utilities (tested library; live git flows via terminal)
 │   └── event-engine/        # Event bus for streaming
 ├── services/
 │   └── control-plane/       # Spring Boot backend

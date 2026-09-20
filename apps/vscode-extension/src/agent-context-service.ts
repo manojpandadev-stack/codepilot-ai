@@ -85,8 +85,7 @@ export interface SkillToolEntry {
 }
 
 export type SkillGateDecision =
-  | { allowed: true }
-  | { allowed: false; reason: string };
+  { allowed: true } | { allowed: false; reason: string };
 
 /**
  * Effective allowed-tool set for the given ACTIVE skills, or null when
@@ -150,13 +149,8 @@ export function createSkillGatedApproval(
     request: SkillApprovalRequest,
   ) => Promise<SkillApprovalDecision> | SkillApprovalDecision,
   getActiveSkills: () => SkillToolEntry[],
-  onGateDeny?: (info: {
-    toolName: string;
-    reason: string;
-  }) => void,
-): (
-  request: SkillApprovalRequest,
-) => Promise<SkillApprovalDecision> {
+  onGateDeny?: (info: { toolName: string; reason: string }) => void,
+): (request: SkillApprovalRequest) => Promise<SkillApprovalDecision> {
   return async (request) => {
     let gate: (toolName: unknown) => SkillGateDecision;
     try {
@@ -303,9 +297,7 @@ export class AgentContextService {
     const result = this.ensureRules();
     if (!result) return [];
     return result.skills
-      .filter(
-        (s) => (s as unknown as { enabled: boolean }).enabled === true,
-      )
+      .filter((s) => (s as unknown as { enabled: boolean }).enabled === true)
       .map((s) => s.name)
       .sort((a, b) => a.localeCompare(b));
   }
@@ -319,17 +311,13 @@ export class AgentContextService {
     const result = this.ensureRules();
     if (!result) return [];
     return result.skills
-      .filter(
-        (s) => (s as unknown as { enabled: boolean }).enabled === true,
-      )
+      .filter((s) => (s as unknown as { enabled: boolean }).enabled === true)
       .map((s) => {
         const raw = s as unknown as { allowedTools?: unknown };
         return {
           name: s.name,
           allowedTools: Array.isArray(raw.allowedTools)
-            ? raw.allowedTools.filter(
-                (t): t is string => typeof t === "string",
-              )
+            ? raw.allowedTools.filter((t): t is string => typeof t === "string")
             : undefined,
         } satisfies SkillToolEntry;
       })
@@ -453,7 +441,9 @@ export class AgentContextService {
           const body = s.instructions.slice(0, MAX_SKILL_CHARS);
           const room = MAX_SKILLS_CHARS - used;
           const clipped =
-            body.length > room ? `${body.slice(0, room)}\n... [truncated]` : body;
+            body.length > room
+              ? `${body.slice(0, room)}\n... [truncated]`
+              : body;
           used += clipped.length;
           skillLines.push(`### Skill: ${s.name}\n${clipped}`);
         }

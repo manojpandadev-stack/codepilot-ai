@@ -39,7 +39,12 @@ export interface NativeSession {
 }
 
 export type NativeSessionEvent =
-  | { type: "status"; sessionId: string; status: "running" | "completed" | "aborted" | "failed"; reason?: string }
+  | {
+      type: "status";
+      sessionId: string;
+      status: "running" | "completed" | "aborted" | "failed";
+      reason?: string;
+    }
   | { type: "loop"; loop: AgentLoopEvent; sessionId: string };
 
 export class NativeSessionManager {
@@ -65,7 +70,15 @@ export class NativeSessionManager {
     return this.sessions.get(sessionId);
   }
 
-  /** Create a session (idempotent per id) and seed its transcript. */
+  /**
+   * Create a session (idempotent per id) and seed its transcript.
+   *
+   * Seeding REPLACES the transcript when `initialMessages` are provided:
+   * `startSession` creates the session and then re-creates it inside the
+   * retry closure, so appending would silently duplicate seeded history
+   * (doubling context on every resumed turn). Replacement keeps exactly
+   * one copy and gives retries the documented fresh transcript.
+   */
   create(sessionId: string, config: NativeSessionConfig): NativeSession {
     let session = this.sessions.get(sessionId);
     if (!session) {
@@ -73,7 +86,7 @@ export class NativeSessionManager {
       this.sessions.set(sessionId, session);
     }
     if (config.initialMessages && config.initialMessages.length > 0) {
-      session.transcript.push(...config.initialMessages);
+      session.transcript = [...config.initialMessages];
     }
     return session;
   }
@@ -88,8 +101,12 @@ export class NativeSessionManager {
           configs: this.providerConfigs.map((c) => ({
             ...c,
             // Per-session credentials win over registry defaults.
-            ...(c.providerId === config.providerId && config.apiKey ? { apiKey: config.apiKey } : {}),
-            ...(c.providerId === config.providerId && config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+            ...(c.providerId === config.providerId && config.apiKey
+              ? { apiKey: config.apiKey }
+              : {}),
+            ...(c.providerId === config.providerId && config.baseUrl
+              ? { baseUrl: config.baseUrl }
+              : {}),
           })),
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
         },
@@ -111,12 +128,18 @@ export class NativeSessionManager {
     prompt: string,
     onEvent: (event: NativeSessionEvent) => void,
     signal?: AbortSignal,
-  ): Promise<{ reason: "complete" | "aborted" | "error" | "max_iterations"; error?: string; text: string }> {
+  ): Promise<{
+    reason: "complete" | "aborted" | "error" | "max_iterations";
+    error?: string;
+    text: string;
+  }> {
     if (this.disposed) throw new Error("Session manager disposed.");
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
     if (!session.settled) {
-      throw new Error("A task is already running in this session. Stop it or wait for completion.");
+      throw new Error(
+        "A task is already running in this session. Stop it or wait for completion.",
+      );
     }
     session.settled = false;
     onEvent({ type: "status", sessionId, status: "running" });
@@ -136,7 +159,8 @@ export class NativeSessionManager {
           maxIterations: config.maxIterations,
           temperature: config.temperature,
           maxResultChars: config.maxResultChars,
-          onEvent: (loopEvent) => onEvent({ type: "loop", loop: loopEvent, sessionId }),
+          onEvent: (loopEvent) =>
+            onEvent({ type: "loop", loop: loopEvent, sessionId }),
         },
         signal,
       );
@@ -154,7 +178,11 @@ export class NativeSessionManager {
                 : "failed",
         ...(result.error !== undefined ? { reason: result.error } : {}),
       });
-      return { reason: result.reason, text: result.text, ...(result.error !== undefined ? { error: result.error } : {}) };
+      return {
+        reason: result.reason,
+        text: result.text,
+        ...(result.error !== undefined ? { error: result.error } : {}),
+      };
     } finally {
       session.settled = true;
     }

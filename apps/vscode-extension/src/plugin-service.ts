@@ -43,11 +43,7 @@ import type { M4PermissionPipeline } from "@codepilot/tool-engine";
 
 /** UI trust badge. `untrusted` = community not yet confirmed; `blocked` = refused. */
 export type PluginDisplayTrust =
-  | "trusted"
-  | "verified"
-  | "community"
-  | "untrusted"
-  | "blocked";
+  "trusted" | "verified" | "community" | "untrusted" | "blocked";
 
 export interface PluginToolView {
   name: string;
@@ -104,7 +100,11 @@ export interface PluginScanResult {
 }
 
 export interface PluginPersistedState {
-  installed: Array<{ id: string; communityConfirmed: boolean; enabled: boolean }>;
+  installed: Array<{
+    id: string;
+    communityConfirmed: boolean;
+    enabled: boolean;
+  }>;
 }
 
 export interface PluginStorage {
@@ -131,11 +131,17 @@ export function isValidPluginId(id: unknown): id is string {
 
 function clean(value: unknown, max = 300): string {
   if (typeof value !== "string") return "";
-  return value.replace(/[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").trim().slice(0, max);
+  return value
+    .replace(/[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .trim()
+    .slice(0, max);
 }
 
 /** Permission preview per capability (mirrors M15 CAPABILITY_PERMISSION). */
-const CAPABILITY_INFO: Record<string, { level: string; approval: boolean; sensitive: boolean }> = {
+const CAPABILITY_INFO: Record<
+  string,
+  { level: string; approval: boolean; sensitive: boolean }
+> = {
   "network.fetch": { level: "network", approval: false, sensitive: true },
   "fs.read": { level: "read", approval: false, sensitive: false },
   "fs.write": { level: "write", approval: true, sensitive: true },
@@ -157,7 +163,10 @@ export class PluginService {
   private m4: M4PermissionPipeline | null = null;
   private readonly storage: PluginStorage | null;
   private readonly platformApiVersion: string;
-  private intents = new Map<string, { communityConfirmed: boolean; enabled: boolean }>();
+  private intents = new Map<
+    string,
+    { communityConfirmed: boolean; enabled: boolean }
+  >();
   /** Manifests seen by the last scan (id → manifest). */
   private discoveredCache = new Map<string, PluginManifest>();
   private disposed = false;
@@ -212,7 +221,10 @@ export class PluginService {
    * view. Never throws: per-plugin failures become errors[]/malformed[].
    */
   scan(pluginsDir: string): PluginScanResult {
-    const discovered = new Map<string, { manifest: PluginManifest; dir: string }>();
+    const discovered = new Map<
+      string,
+      { manifest: PluginManifest; dir: string }
+    >();
     const malformed: PluginManifestProblem[] = [];
     let entries: string[] = [];
     try {
@@ -233,12 +245,18 @@ export class PluginService {
       try {
         parsed = JSON.parse(raw);
       } catch {
-        malformed.push({ dir, error: `malformed manifest (invalid JSON): ${entry}/codepilot.plugin.json` });
+        malformed.push({
+          dir,
+          error: `malformed manifest (invalid JSON): ${entry}/codepilot.plugin.json`,
+        });
         continue;
       }
       const validation = validatePluginManifest(parsed);
       if (!validation.valid) {
-        malformed.push({ dir, error: `invalid manifest ${entry}: ${validation.errors.join("; ")}` });
+        malformed.push({
+          dir,
+          error: `invalid manifest ${entry}: ${validation.errors.join("; ")}`,
+        });
         continue;
       }
       const manifest = parsed as PluginManifest;
@@ -258,7 +276,10 @@ export class PluginService {
       if (this.manager.isInstalled(id)) continue;
       const found = discovered.get(id);
       if (!found) continue;
-      const installed = this.installInternal(found.manifest, intent.communityConfirmed);
+      const installed = this.installInternal(
+        found.manifest,
+        intent.communityConfirmed,
+      );
       if (installed.ok && intent.enabled) {
         this.activateInternal(id, intent.communityConfirmed);
       }
@@ -278,7 +299,9 @@ export class PluginService {
       const manifest = this.manager.getManifest(installed.id);
       if (!manifest) continue;
       const view = this.buildView(manifest, false);
-      view.errors.push("plugin files unavailable (directory removed or unreadable)");
+      view.errors.push(
+        "plugin files unavailable (directory removed or unreadable)",
+      );
       plugins.push(view);
     }
     plugins.sort((a, b) => a.id.localeCompare(b.id));
@@ -291,14 +314,22 @@ export class PluginService {
     id: string,
     options?: { confirmUntrusted?: boolean },
   ): { ok: boolean; errors: string[] } {
-    if (!isValidPluginId(id)) return { ok: false, errors: ["invalid plugin id"] };
+    if (!isValidPluginId(id))
+      return { ok: false, errors: ["invalid plugin id"] };
     const found = this.findDiscovered(id);
-    if (!found) return { ok: false, errors: [`plugin '${id}' is not discoverable (not found on disk)`] };
+    if (!found)
+      return {
+        ok: false,
+        errors: [`plugin '${id}' is not discoverable (not found on disk)`],
+      };
     const confirmed = options?.confirmUntrusted === true;
     const result = this.installInternal(found, confirmed);
     if (!result.ok) return result;
     this.intents.set(id, {
-      communityConfirmed: found.trustLevel === "community" ? true : (this.intents.get(id)?.communityConfirmed ?? false),
+      communityConfirmed:
+        found.trustLevel === "community"
+          ? true
+          : (this.intents.get(id)?.communityConfirmed ?? false),
       enabled: this.intents.get(id)?.enabled ?? false,
     });
     this.persist();
@@ -309,7 +340,8 @@ export class PluginService {
     id: string,
     options?: { confirmUntrusted?: boolean },
   ): { ok: boolean; errors: string[] } {
-    if (!isValidPluginId(id)) return { ok: false, errors: ["invalid plugin id"] };
+    if (!isValidPluginId(id))
+      return { ok: false, errors: ["invalid plugin id"] };
     if (!this.manager.isInstalled(id)) {
       return { ok: false, errors: [`plugin '${id}' is not installed`] };
     }
@@ -318,16 +350,24 @@ export class PluginService {
     // confirmation — a prior install-time confirmation never implies it.
     // (Restart reconciliation bypasses this via activateInternal with the
     // stored intent; interactive calls go through here.)
-    if (manifest?.trustLevel === "community" && options?.confirmUntrusted !== true) {
+    if (
+      manifest?.trustLevel === "community" &&
+      options?.confirmUntrusted !== true
+    ) {
       return {
         ok: false,
-        errors: ["community (untrusted) plugins require explicit enablement to activate"],
+        errors: [
+          "community (untrusted) plugins require explicit enablement to activate",
+        ],
       };
     }
     const confirmed = options?.confirmUntrusted === true;
     const result = this.activateInternal(id, confirmed);
     if (!result.ok) return result;
-    const intent = this.intents.get(id) ?? { communityConfirmed: false, enabled: false };
+    const intent = this.intents.get(id) ?? {
+      communityConfirmed: false,
+      enabled: false,
+    };
     intent.enabled = true;
     if (confirmed) intent.communityConfirmed = true;
     this.intents.set(id, intent);
@@ -336,7 +376,8 @@ export class PluginService {
   }
 
   deactivate(id: string): { ok: boolean; errors: string[] } {
-    if (!isValidPluginId(id)) return { ok: false, errors: ["invalid plugin id"] };
+    if (!isValidPluginId(id))
+      return { ok: false, errors: ["invalid plugin id"] };
     if (!this.manager.isInstalled(id)) {
       return { ok: false, errors: [`plugin '${id}' is not installed`] };
     }
@@ -350,7 +391,8 @@ export class PluginService {
   }
 
   uninstall(id: string): { ok: boolean; errors: string[] } {
-    if (!isValidPluginId(id)) return { ok: false, errors: ["invalid plugin id"] };
+    if (!isValidPluginId(id))
+      return { ok: false, errors: ["invalid plugin id"] };
     if (!this.manager.isInstalled(id)) {
       return { ok: false, errors: [`plugin '${id}' is not installed`] };
     }
@@ -360,8 +402,11 @@ export class PluginService {
     return { ok: true, errors: [] };
   }
 
-  details(id: string): { ok: true; plugin: PluginView } | { ok: false; errors: string[] } {
-    if (!isValidPluginId(id)) return { ok: false, errors: ["invalid plugin id"] };
+  details(
+    id: string,
+  ): { ok: true; plugin: PluginView } | { ok: false; errors: string[] } {
+    if (!isValidPluginId(id))
+      return { ok: false, errors: ["invalid plugin id"] };
     const found = this.findDiscovered(id);
     const manifest = found ?? this.manager.getManifest(id);
     if (!manifest) return { ok: false, errors: [`unknown plugin: '${id}'`] };
@@ -379,12 +424,20 @@ export class PluginService {
     args: Record<string, unknown>,
     options?: { sessionId?: string; taskId?: string; cwd?: string },
   ): Promise<{ ok: boolean; output?: unknown; error?: string }> {
-    if (!isValidPluginId(pluginId)) return { ok: false, error: "invalid plugin id" };
-    if (typeof toolName !== "string" || toolName.length === 0 || toolName.length > 64) {
+    if (!isValidPluginId(pluginId))
+      return { ok: false, error: "invalid plugin id" };
+    if (
+      typeof toolName !== "string" ||
+      toolName.length === 0 ||
+      toolName.length > 64
+    ) {
       return { ok: false, error: "invalid tool name" };
     }
     if (!this.m4) {
-      return { ok: false, error: "backend unavailable (M4 permission pipeline not initialized)" };
+      return {
+        ok: false,
+        error: "backend unavailable (M4 permission pipeline not initialized)",
+      };
     }
     if (!this.manager.isInstalled(pluginId)) {
       return { ok: false, error: `plugin '${pluginId}' is not installed` };
@@ -412,9 +465,15 @@ export class PluginService {
       if (result.status === "completed") {
         return { ok: true, output: result.output };
       }
-      return { ok: false, error: result.error?.message ?? `execution ${result.status}` };
+      return {
+        ok: false,
+        error: result.error?.message ?? `execution ${result.status}`,
+      };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -454,9 +513,13 @@ export class PluginService {
     // Handlers are never loaded from disk: only handler-less (tool-less)
     // manifests can install from discovery. Anything else is refused by the
     // REAL backend validation with an actionable error.
-    const installed = this.manager.install(manifest, {}, {
-      skipCommunityGate: communityConfirmed,
-    });
+    const installed = this.manager.install(
+      manifest,
+      {},
+      {
+        skipCommunityGate: communityConfirmed,
+      },
+    );
     if (!installed.ok) return { ok: false, errors: installed.errors };
     return { ok: true, errors: [] };
   }
@@ -472,7 +535,9 @@ export class PluginService {
       if (!communityConfirmed && intent?.communityConfirmed !== true) {
         return {
           ok: false,
-          errors: ["community (untrusted) plugins require explicit enablement to activate"],
+          errors: [
+            "community (untrusted) plugins require explicit enablement to activate",
+          ],
         };
       }
     }
@@ -485,7 +550,8 @@ export class PluginService {
     const enabled = this.manager.isEnabled(manifest.id);
     const intent = this.intents.get(manifest.id);
     const confirmed =
-      manifest.trustLevel !== "community" || intent?.communityConfirmed === true;
+      manifest.trustLevel !== "community" ||
+      intent?.communityConfirmed === true;
     const displayTrust: PluginDisplayTrust =
       manifest.trustLevel === "official"
         ? "trusted"
@@ -497,7 +563,9 @@ export class PluginService {
     const warnings: string[] = [];
     const errors: string[] = [];
     if (manifest.trustLevel === "community" && !confirmed) {
-      warnings.push("untrusted source — explicit confirmation required before install and activation");
+      warnings.push(
+        "untrusted source — explicit confirmation required before install and activation",
+      );
     }
     const declaredTools = manifest.tools ?? [];
     if (declaredTools.length > 0) {
@@ -508,18 +576,27 @@ export class PluginService {
     for (const cap of manifest.capabilities) {
       const info = CAPABILITY_INFO[cap];
       if (info?.sensitive && manifest.trustLevel === "community") {
-        warnings.push(`broad capability '${cap}' requested by an untrusted source`);
+        warnings.push(
+          `broad capability '${cap}' requested by an untrusted source`,
+        );
       }
     }
-    const capabilities: PluginCapabilityView[] = manifest.capabilities.map((cap) => {
-      const info = CAPABILITY_INFO[cap] ?? { level: "read", approval: true, sensitive: true };
-      return {
-        capability: cap,
-        permissionLevel: info.level,
-        requiresApproval: manifest.trustLevel === "community" ? true : info.approval,
-        sensitive: info.sensitive,
-      };
-    });
+    const capabilities: PluginCapabilityView[] = manifest.capabilities.map(
+      (cap) => {
+        const info = CAPABILITY_INFO[cap] ?? {
+          level: "read",
+          approval: true,
+          sensitive: true,
+        };
+        return {
+          capability: cap,
+          permissionLevel: info.level,
+          requiresApproval:
+            manifest.trustLevel === "community" ? true : info.approval,
+          sensitive: info.sensitive,
+        };
+      },
+    );
     const tools: PluginToolView[] = declaredTools.map((t) => {
       const registryId = `${manifest.id}:${t.name}`;
       const registered = this.registry.has(registryId);
@@ -528,7 +605,8 @@ export class PluginService {
       for (const cap of manifest.capabilities) {
         const info = CAPABILITY_INFO[cap];
         if (info) {
-          if (privilegeRank(info.level) > privilegeRank(level)) level = info.level;
+          if (privilegeRank(info.level) > privilegeRank(level))
+            level = info.level;
           if (info.approval) approval = true;
         }
       }
@@ -554,7 +632,11 @@ export class PluginService {
       name: clean(manifest.name, 100),
       description: clean(manifest.description ?? "", 500),
       version: clean(manifest.version, 32),
-      author: clean(manifest.author ?? (manifest.trustLevel === "official" ? "CodePilot" : "unknown"), 100),
+      author: clean(
+        manifest.author ??
+          (manifest.trustLevel === "official" ? "CodePilot" : "unknown"),
+        100,
+      ),
       apiVersion: clean(manifest.apiVersion, 32),
       trustLevel: manifest.trustLevel,
       displayTrust,

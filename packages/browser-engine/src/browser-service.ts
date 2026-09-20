@@ -189,7 +189,10 @@ export class BrowserService {
    * Get-or-create an isolated session for a task. Sessions are never shared
    * across tasks — the key includes the taskId.
    */
-  async getSession(taskId: string, sessionId = "default"): Promise<BrowserSession> {
+  async getSession(
+    taskId: string,
+    sessionId = "default",
+  ): Promise<BrowserSession> {
     this.assertAlive();
     const key = sessionKey(taskId, sessionId);
     const existing = this.sessions.get(key);
@@ -284,7 +287,13 @@ export class BrowserService {
       try {
         // Hard fallback: ensure no zombie chromium remains. (Playwright's
         // Browser.close() already kills the process; this is belt-and-braces.)
-        const proc = (browser as unknown as { process?: () => ReturnType<typeof import("node:child_process").spawn> | null }).process?.();
+        const proc = (
+          browser as unknown as {
+            process?: () => ReturnType<
+              typeof import("node:child_process").spawn
+            > | null;
+          }
+        ).process?.();
         proc?.kill();
       } catch {
         // already gone
@@ -296,10 +305,7 @@ export class BrowserService {
     if (this.disposed) throw new Error("BrowserService has been disposed");
   }
 
-  private async destroySession(
-    key: string,
-    reason: string,
-  ): Promise<void> {
+  private async destroySession(key: string, reason: string): Promise<void> {
     const s = this.sessions.get(key);
     if (!s) return;
     this.audit({
@@ -368,9 +374,8 @@ export class BrowserService {
         const verdict =
           cached !== undefined
             ? cached
-            : (
-                await validateTargetUrl(url, this.options.urlPolicy ?? {})
-              ).verdict === "allowed";
+            : (await validateTargetUrl(url, this.options.urlPolicy ?? {}))
+                .verdict === "allowed";
         session.validatedUrls.set(`${hopKey}:${url}`, verdict);
         if (!verdict) {
           await route.abort("blockedbyclient");
@@ -461,15 +466,27 @@ export class BrowserService {
     }
   }
 
-  async goBack(taskId: string, sessionId: string, signal?: AbortSignal): Promise<NavigateResult> {
+  async goBack(
+    taskId: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<NavigateResult> {
     return this.historyNav(taskId, sessionId, "goBack", signal);
   }
 
-  async goForward(taskId: string, sessionId: string, signal?: AbortSignal): Promise<NavigateResult> {
+  async goForward(
+    taskId: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<NavigateResult> {
     return this.historyNav(taskId, sessionId, "goForward", signal);
   }
 
-  async reload(taskId: string, sessionId: string, signal?: AbortSignal): Promise<NavigateResult> {
+  async reload(
+    taskId: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<NavigateResult> {
     return this.historyNav(taskId, sessionId, "reload", signal);
   }
 
@@ -485,10 +502,19 @@ export class BrowserService {
       const response = await withAbort(
         () =>
           op === "goBack"
-            ? session.page.goBack({ waitUntil: "domcontentloaded", timeout: this.options.navigationTimeoutMs })
+            ? session.page.goBack({
+                waitUntil: "domcontentloaded",
+                timeout: this.options.navigationTimeoutMs,
+              })
             : op === "goForward"
-              ? session.page.goForward({ waitUntil: "domcontentloaded", timeout: this.options.navigationTimeoutMs })
-              : session.page.reload({ waitUntil: "domcontentloaded", timeout: this.options.navigationTimeoutMs }),
+              ? session.page.goForward({
+                  waitUntil: "domcontentloaded",
+                  timeout: this.options.navigationTimeoutMs,
+                })
+              : session.page.reload({
+                  waitUntil: "domcontentloaded",
+                  timeout: this.options.navigationTimeoutMs,
+                }),
         signal,
       );
       session.lastUsedAt = Date.now();
@@ -577,7 +603,10 @@ export class BrowserService {
     const started = Date.now();
     const session = await this.getSession(taskId, sessionId);
     try {
-      await withAbort(() => session.page.fill(selector, value, { timeout: 10_000 }), signal);
+      await withAbort(
+        () => session.page.fill(selector, value, { timeout: 10_000 }),
+        signal,
+      );
       session.lastUsedAt = Date.now();
       // The VALUE is never recorded (form contents may be sensitive).
       this.audit({
@@ -654,10 +683,10 @@ export class BrowserService {
     try {
       await withAbort(
         () =>
-          session.page.evaluate(
-            ([dx, dy]) => window.scrollBy(dx, dy),
-            [deltaX, deltaY] as const,
-          ),
+          session.page.evaluate(([dx, dy]) => window.scrollBy(dx, dy), [
+            deltaX,
+            deltaY,
+          ] as const),
         signal,
       );
       session.lastUsedAt = Date.now();
@@ -712,7 +741,9 @@ export class BrowserService {
           session.page.evaluate(() =>
             Array.from(document.querySelectorAll("a[href]"))
               .map((a) => (a as HTMLAnchorElement).href)
-              .filter((h) => h.startsWith("http://") || h.startsWith("https://"))
+              .filter(
+                (h) => h.startsWith("http://") || h.startsWith("https://"),
+              )
               .slice(0, 200),
           ),
         signal,
@@ -794,7 +825,10 @@ export class BrowserService {
   }
 
   /** Session status (no page content). */
-  status(taskId: string, sessionId = "default"): {
+  status(
+    taskId: string,
+    sessionId = "default",
+  ): {
     exists: boolean;
     url?: string;
     createdAt?: number;

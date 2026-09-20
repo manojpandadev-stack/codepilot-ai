@@ -576,7 +576,7 @@ export interface ToolRegistryEntry {
 // ============================================================================
 
 export type ComposerChipKind =
-  "file" | "folder" | "url" | "problems" | "selection";
+  "file" | "folder" | "url" | "problems" | "selection" | "image";
 
 /** A single removable chip shown above the composer textarea. */
 export interface ComposerChip {
@@ -585,6 +585,8 @@ export interface ComposerChip {
   label: string;
   /** For files/folders: workspace-relative path. For urls: the URL. */
   ref?: string;
+  /** For images: the data URL (thumbnail source). Never sent as-is. */
+  preview?: string;
 }
 
 let chipIdCounter = 0;
@@ -603,7 +605,34 @@ export function createEmptyComposerContext(): ComposerCtx {
     urls: [],
     diagnostics: null,
     selection: null,
+    images: [],
   };
+}
+
+/**
+ * Attach validated-in-browser images (data URLs from a file picker or
+ * paste/drop). The host re-validates everything (magic bytes, size,
+ * metadata) — this only assembles well-formed payload entries.
+ */
+export function addImagesToContext(
+  ctx: ComposerCtx,
+  images: Array<{ name?: string; mime?: string; dataUrl: string }>,
+): ComposerCtx {
+  const next = [...(ctx.images ?? [])];
+  for (const img of images) {
+    const dataUrl =
+      typeof img.dataUrl === "string" ? img.dataUrl.slice(0, 8_000_000) : "";
+    if (!dataUrl) continue;
+    // Dedupe identical payloads (double-paste is a no-op).
+    if (next.some((existing) => existing.data === dataUrl)) continue;
+    next.push({
+      id: nextChipId("image"),
+      ...(typeof img.name === "string" && img.name ? { name: img.name } : {}),
+      ...(typeof img.mime === "string" && img.mime ? { mime: img.mime } : {}),
+      data: dataUrl,
+    });
+  }
+  return { ...ctx, images: next };
 }
 
 export function addFileEntriesToContext(
@@ -682,6 +711,7 @@ export function removeContextEntry(ctx: ComposerCtx, id: string): ComposerCtx {
     urls: ctx.urls.filter((u) => u.id !== id),
     diagnostics: id === "problems" ? null : (ctx.diagnostics ?? null),
     selection: id === "selection" ? null : (ctx.selection ?? null),
+    images: (ctx.images ?? []).filter((img) => img.id !== id),
   };
 }
 
@@ -691,7 +721,8 @@ export function hasAnyContext(ctx: ComposerCtx): boolean {
     ctx.folders.length > 0 ||
     ctx.urls.length > 0 ||
     !!ctx.diagnostics ||
-    !!ctx.selection
+    !!ctx.selection ||
+    (ctx.images ?? []).length > 0
   );
 }
 
@@ -741,6 +772,14 @@ export function contextToChips(ctx: ComposerCtx): ComposerChip[] {
       label: `📝 Selection: ${name} L${lines}`,
     });
   }
+  for (const img of ctx.images ?? []) {
+    chips.push({
+      id: img.id,
+      kind: "image",
+      label: `🖼 ${img.name ?? "image"}`,
+      preview: img.data.slice(0, 8_000_000),
+    });
+  }
   return chips;
 }
 
@@ -772,6 +811,7 @@ export function buildChatSendPayload(
   if (ctx.urls.length > 0) context.urls = ctx.urls;
   if (ctx.diagnostics) context.diagnostics = ctx.diagnostics;
   if (ctx.selection) context.selection = ctx.selection;
+  if ((ctx.images ?? []).length > 0) context.images = ctx.images;
   return requestId
     ? { text, mode, context, requestId }
     : { text, mode, context };
@@ -3143,7 +3183,9 @@ const CONTINUITY_MAX_TURNS = 64;
 const CONTINUITY_MAX_TITLE = 120;
 
 /** Validate a `continuity/state` payload; null when malformed. */
-export function validateContinuityState(payload: unknown): ContinuityStateView | null {
+export function validateContinuityState(
+  payload: unknown,
+): ContinuityStateView | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
   if (typeof p.active !== "boolean") return null;
@@ -3155,22 +3197,33 @@ export function validateContinuityState(payload: unknown): ContinuityStateView |
   ) {
     return null;
   }
-  if (p.currentTaskId !== null && typeof p.currentTaskId !== "string") return null;
-  if (typeof p.currentTaskId === "string" && p.currentTaskId.length > 200) return null;
-  if (typeof p.compacted !== "boolean" || typeof p.truncated !== "boolean") return null;
-  if (!Array.isArray(p.turns) || p.turns.length > CONTINUITY_MAX_TURNS) return null;
+  if (p.currentTaskId !== null && typeof p.currentTaskId !== "string")
+    return null;
+  if (typeof p.currentTaskId === "string" && p.currentTaskId.length > 200)
+    return null;
+  if (typeof p.compacted !== "boolean" || typeof p.truncated !== "boolean")
+    return null;
+  if (!Array.isArray(p.turns) || p.turns.length > CONTINUITY_MAX_TURNS)
+    return null;
   const turns: ContinuityTurnView[] = [];
   for (const item of p.turns) {
     if (!item || typeof item !== "object") return null;
     const r = item as Record<string, unknown>;
-    if (typeof r.taskId !== "string" || r.taskId.length === 0 || r.taskId.length > 200) {
+    if (
+      typeof r.taskId !== "string" ||
+      r.taskId.length === 0 ||
+      r.taskId.length > 200
+    ) {
       return null;
     }
-    if (typeof r.turn !== "number" || !Number.isInteger(r.turn) || r.turn < 1) return null;
+    if (typeof r.turn !== "number" || !Number.isInteger(r.turn) || r.turn < 1)
+      return null;
     if (typeof r.title !== "string") return null;
     if (typeof r.status !== "string") return null;
-    if (typeof r.createdAtMs !== "number" || typeof r.updatedAtMs !== "number") return null;
-    if (typeof r.compacted !== "boolean" || typeof r.trimmed !== "boolean") return null;
+    if (typeof r.createdAtMs !== "number" || typeof r.updatedAtMs !== "number")
+      return null;
+    if (typeof r.compacted !== "boolean" || typeof r.trimmed !== "boolean")
+      return null;
     turns.push({
       taskId: r.taskId,
       turn: r.turn,
@@ -3218,21 +3271,30 @@ export interface TerminalOutputView {
 export const MAX_TERMINAL_LIVE_BUFFER = 100_000;
 
 /** Validate a `terminal/output` payload; null when malformed. */
-export function validateTerminalOutput(payload: unknown): TerminalOutputView | null {
+export function validateTerminalOutput(
+  payload: unknown,
+): TerminalOutputView | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
-  if (typeof p.toolCallId !== "string" || p.toolCallId.length === 0 || p.toolCallId.length > 200) {
+  if (
+    typeof p.toolCallId !== "string" ||
+    p.toolCallId.length === 0 ||
+    p.toolCallId.length > 200
+  ) {
     return null;
   }
   if (typeof p.toolName !== "string" || p.toolName.length > 120) return null;
   if (p.stream !== "stdout" && p.stream !== "stderr") return null;
   if (typeof p.data !== "string" || p.data.length === 0) return null;
-  if (typeof p.seq !== "number" || !Number.isInteger(p.seq) || p.seq < 1) return null;
+  if (typeof p.seq !== "number" || !Number.isInteger(p.seq) || p.seq < 1)
+    return null;
   // M7 tracked sessions carry an explicit sessionId (validated when present;
   // agent chunks simply omit it).
   if (
     p.sessionId !== undefined &&
-    (typeof p.sessionId !== "string" || p.sessionId.length === 0 || p.sessionId.length > 200)
+    (typeof p.sessionId !== "string" ||
+      p.sessionId.length === 0 ||
+      p.sessionId.length > 200)
   ) {
     return null;
   }
@@ -3267,13 +3329,18 @@ export function appendTerminalOutput(
   if (chunk.seq <= prev.lastSeq) return prev;
   const next = prev.output + chunk.data;
   if (next.length <= maxChars) {
-    return { output: next, outputTruncated: prev.outputTruncated, lastSeq: chunk.seq };
+    return {
+      output: next,
+      outputTruncated: prev.outputTruncated,
+      lastSeq: chunk.seq,
+    };
   }
   // Deterministic truncation: keep a head window plus the newest tail so a
   // capped display still shows how output started and how it ended.
   const head = Math.floor(maxChars * 0.7);
   const tail = maxChars - head;
-  const kept = next.slice(0, head) + "\n…[live output truncated]…\n" + next.slice(-tail);
+  const kept =
+    next.slice(0, head) + "\n…[live output truncated]…\n" + next.slice(-tail);
   return { output: kept, outputTruncated: true, lastSeq: chunk.seq };
 }
 
@@ -3440,8 +3507,7 @@ export function normalizeSkillView(item: unknown): SkillView | null {
     name,
     description: asBoundedStr(t.description, 500),
     source: asBoundedStr(t.source, 32) || "project",
-    version:
-      typeof t.version === "string" ? t.version.slice(0, 32) : undefined,
+    version: typeof t.version === "string" ? t.version.slice(0, 32) : undefined,
     enabled: t.enabled === true,
     filePath: asBoundedStr(t.filePath, 260),
     tags: asStrArray(t.tags),
@@ -3509,7 +3575,8 @@ export function validateSkillAction(
   ]);
   if (!validActions.has(action))
     return { ok: false, error: `unknown skill action: ${action}` };
-  if (action === "skills/list" || action === "skills/state") return { ok: true };
+  if (action === "skills/list" || action === "skills/state")
+    return { ok: true };
   const p = (payload ?? {}) as Record<string, unknown>;
   if (!SKILL_NAME_PATTERN.test(String(p.name ?? ""))) {
     return { ok: false, error: "invalid skill name" };
@@ -3518,9 +3585,12 @@ export function validateSkillAction(
 }
 
 /** Validate a `skills/result` / `skills/error` payload; null when malformed. */
-export function validateSkillResult(
-  payload: unknown,
-): { success: boolean; action: string; error?: string; skill?: SkillView } | null {
+export function validateSkillResult(payload: unknown): {
+  success: boolean;
+  action: string;
+  error?: string;
+  skill?: SkillView;
+} | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
   if (typeof p.success !== "boolean") return null;

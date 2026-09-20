@@ -906,6 +906,23 @@ export interface ComposerContext {
   urls: UrlContext[];
   diagnostics?: DiagnosticsContextPayload | null;
   selection?: SelectionContextPayload | null;
+  /** Attached images (data URLs or raw base64 — host re-validates). */
+  images?: ImageContext[];
+}
+
+/**
+ * One image attached in the composer. `data` is base64 with or without a
+ * `data:<mime>;base64,` prefix. The host sniffs the true MIME from magic
+ * bytes and ignores `mime`/`name` claims.
+ */
+export interface ImageContext {
+  id: string;
+  /** Caller-supplied display name (sanitized host-side, never a path). */
+  name?: string;
+  /** Claimed MIME (advisory only — host sniffs magic bytes). */
+  mime?: string;
+  /** Base64 payload, optionally a data URL. */
+  data: string;
 }
 
 /** Payload returned by the host for any context/* request. */
@@ -1192,6 +1209,23 @@ export function describeValidationFailure(input: {
 export { scrubSecretsText, containsSecretText } from "./secrets.js";
 
 // ============================================================================
+// Image attachments (validation + metadata stripping, shared WebView/host)
+// ============================================================================
+
+export {
+  IMAGE_MIME_ALLOWLIST,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_TURN,
+  describeImage,
+  sniffImageMime,
+  validateImageAttachment,
+  sanitizeImageName,
+  stripImageMetadata,
+  estimateImageTokens,
+} from "./images.js";
+export type { ValidatedImage, ImageValidationError } from "./images.js";
+
+// ============================================================================
 // M18 — Observability & Telemetry
 // ============================================================================
 
@@ -1244,3 +1278,5 @@ export interface ToolApprovalResult {
   approved: boolean;
   reason?: string;
 }
+
+export * from "./images.js";

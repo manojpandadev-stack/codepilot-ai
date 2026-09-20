@@ -292,7 +292,10 @@ export async function parseApplyPatchInput(
     };
   }
   if (!computed.ok || !computed.changes) {
-    return { ok: false, error: `apply_patch failed: ${computed.error ?? "unknown patch error"}` };
+    return {
+      ok: false,
+      error: `apply_patch failed: ${computed.error ?? "unknown patch error"}`,
+    };
   }
 
   const proposals: WriteProposal[] = [];

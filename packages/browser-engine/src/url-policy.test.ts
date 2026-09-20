@@ -39,17 +39,27 @@ describe("url policy — scheme validation", () => {
   });
 
   it("rejects chrome: and about: schemes", async () => {
-    expect((await validateTargetUrl("chrome://settings")).verdict).toBe("blocked-scheme");
-    expect((await validateTargetUrl("about:blank")).verdict).toBe("blocked-scheme");
+    expect((await validateTargetUrl("chrome://settings")).verdict).toBe(
+      "blocked-scheme",
+    );
+    expect((await validateTargetUrl("about:blank")).verdict).toBe(
+      "blocked-scheme",
+    );
   });
 
   it("rejects view-source: and ftp:", async () => {
-    expect((await validateTargetUrl("view-source:https://example.com")).verdict).toBe("blocked-scheme");
-    expect((await validateTargetUrl("ftp://example.com/file")).verdict).toBe("blocked-scheme");
+    expect(
+      (await validateTargetUrl("view-source:https://example.com")).verdict,
+    ).toBe("blocked-scheme");
+    expect((await validateTargetUrl("ftp://example.com/file")).verdict).toBe(
+      "blocked-scheme",
+    );
   });
 
   it("rejects malformed URLs", async () => {
-    expect((await validateTargetUrl("not a url")).verdict).toBe("blocked-invalid");
+    expect((await validateTargetUrl("not a url")).verdict).toBe(
+      "blocked-invalid",
+    );
     expect((await validateTargetUrl("")).verdict).toBe("blocked-invalid");
   });
 });
@@ -83,14 +93,21 @@ describe("url policy — SSRF protection", () => {
   });
 
   it("blocks private ranges", async () => {
-    for (const ip of ["10.0.0.5", "172.16.0.9", "192.168.1.1", "169.254.10.10"]) {
+    for (const ip of [
+      "10.0.0.5",
+      "172.16.0.9",
+      "192.168.1.1",
+      "169.254.10.10",
+    ]) {
       const d = await validateTargetUrl(`http://${ip}/`);
       expect(d.verdict, ip).toBe("blocked-private-network");
     }
   });
 
   it("blocks the cloud metadata endpoint", async () => {
-    const d = await validateTargetUrl("http://169.254.169.254/latest/meta-data/");
+    const d = await validateTargetUrl(
+      "http://169.254.169.254/latest/meta-data/",
+    );
     expect(d.verdict).toBe("blocked-private-network");
   });
 
@@ -100,14 +117,22 @@ describe("url policy — SSRF protection", () => {
   });
 
   it("blocks IPv6 private (fc00::/7) and link-local (fe80::/10)", async () => {
-    expect((await validateTargetUrl("http://[fc00::1]/")).verdict).toBe("blocked-private-network");
-    expect((await validateTargetUrl("http://[fe80::1]/")).verdict).toBe("blocked-private-network");
+    expect((await validateTargetUrl("http://[fc00::1]/")).verdict).toBe(
+      "blocked-private-network",
+    );
+    expect((await validateTargetUrl("http://[fe80::1]/")).verdict).toBe(
+      "blocked-private-network",
+    );
   });
 
   it("blocks obfuscated IPv4 (octal/hex) literals", async () => {
     // 127.0.0.1 in octal parts = 0177.0.0.1; hex = 0x7f.0.0.1
-    expect((await validateTargetUrl("http://0177.0.0.1/")).verdict).toBe("blocked-private-network");
-    expect((await validateTargetUrl("http://0x7f.0.0.1/")).verdict).toBe("blocked-private-network");
+    expect((await validateTargetUrl("http://0177.0.0.1/")).verdict).toBe(
+      "blocked-private-network",
+    );
+    expect((await validateTargetUrl("http://0x7f.0.0.1/")).verdict).toBe(
+      "blocked-private-network",
+    );
   });
 
   it("blocks short-form loopback (127.1) via normalization", async () => {
@@ -192,7 +217,9 @@ describe("audit-safe helpers", () => {
     expect(safeTargetOf("https://example.com/private/path?q=secret")).toBe(
       "https://example.com",
     );
-    expect(safeTargetOf("https://user:pass@example.com/x")).toBe("https://example.com");
+    expect(safeTargetOf("https://user:pass@example.com/x")).toBe(
+      "https://example.com",
+    );
     expect(safeTargetOf("garbage")).toBe("(invalid url)");
   });
 

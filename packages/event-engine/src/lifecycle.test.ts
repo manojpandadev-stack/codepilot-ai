@@ -18,11 +18,21 @@ describe("lifecycle: EventBus subscriptions", () => {
       const u2 = bus.on("agent.completed", () => {
         calls += 1;
       });
-      bus.emit({ type: "agent.completed", timestamp: Date.now(), sessionId: "s", payload: {} });
+      bus.emit({
+        type: "agent.completed",
+        timestamp: Date.now(),
+        sessionId: "s",
+        payload: {},
+      });
       expect(calls).toBe(2);
       u1();
       u2();
-      bus.emit({ type: "agent.completed", timestamp: Date.now(), sessionId: "s", payload: {} });
+      bus.emit({
+        type: "agent.completed",
+        timestamp: Date.now(),
+        sessionId: "s",
+        payload: {},
+      });
       expect(calls).toBe(2);
     }
     bus.removeAllListeners();
@@ -36,7 +46,12 @@ describe("lifecycle: EventBus subscriptions", () => {
       calls += 1;
     });
     bus.removeAllListeners();
-    bus.emit({ type: "agent.error", timestamp: Date.now(), sessionId: "s", payload: {} });
+    bus.emit({
+      type: "agent.error",
+      timestamp: Date.now(),
+      sessionId: "s",
+      payload: {},
+    });
     expect(calls).toBe(0);
   });
 });

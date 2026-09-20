@@ -50,9 +50,7 @@ export function assertSummarizerPrivacyAllowed(
 // Structured summary validation
 // ============================================================================
 
-const SUMMARY_STRING_KEYS = [
-  "objective",
-] as const;
+const SUMMARY_STRING_KEYS = ["objective"] as const;
 
 const SUMMARY_LIST_KEYS = [
   "constraints",
@@ -73,9 +71,9 @@ const SUMMARY_LIST_KEYS = [
  * types, or non-array lists make the summary REJECTED — callers fall back to
  * truncation rather than persisting a degraded summary.
  */
-export function validateSummaryOutput(raw: unknown):
-  | { ok: true; summary: CompactionSummary }
-  | { ok: false; reason: string } {
+export function validateSummaryOutput(
+  raw: unknown,
+): { ok: true; summary: CompactionSummary } | { ok: false; reason: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, reason: "summary is not an object" };
   }
@@ -107,7 +105,10 @@ export function validateSummaryOutput(raw: unknown):
 // ============================================================================
 
 /** Flatten wire messages to a bounded transcript for the summarizer prompt. */
-function renderTranscript(messages: ResumeWireMessage[], maxChars: number): string {
+function renderTranscript(
+  messages: ResumeWireMessage[],
+  maxChars: number,
+): string {
   const parts: string[] = [];
   let chars = 0;
   for (const m of messages) {
@@ -117,7 +118,8 @@ function renderTranscript(messages: ResumeWireMessage[], maxChars: number): stri
     } else {
       const lines: string[] = [];
       for (const b of m.content) {
-        if (b.type === "text") lines.push(`[${m.role}] ${(b as { text: string }).text}`);
+        if (b.type === "text")
+          lines.push(`[${m.role}] ${(b as { text: string }).text}`);
         else if (b.type === "tool_use")
           lines.push(
             `[${m.role} tool_use ${(b as { name: string }).name}] ${JSON.stringify((b as { input: unknown }).input ?? {}).slice(0, 400)}`,
@@ -136,7 +138,10 @@ function renderTranscript(messages: ResumeWireMessage[], maxChars: number): stri
   return parts.join("\n");
 }
 
-export function buildSummaryPrompt(transcript: string, priorSummary?: string): string {
+export function buildSummaryPrompt(
+  transcript: string,
+  priorSummary?: string,
+): string {
   const prior = priorSummary
     ? `A previous summary of even older history follows. Fold it in: keep every still-relevant point, then update it with the newer transcript.\n<previous_summary>\n${priorSummary}\n</previous_summary>\n\n`
     : "";
@@ -252,7 +257,10 @@ export async function summarizeConversation(
   const started = Date.now();
 
   const provider = createLlmProvider(
-    { providerId: toNativeProviderId(config.providerId), modelId: config.modelId },
+    {
+      providerId: toNativeProviderId(config.providerId),
+      modelId: config.modelId,
+    },
     {
       configs: [
         {

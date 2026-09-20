@@ -19,10 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodePilotRuntime, discoverOllamaModels } from "./runtime.js";
 import type { ModelCapability } from "./runtime.js";
 import { OllamaProvider, ProviderRegistry } from "@codepilot/model-gateway";
-import {
-  stubOllamaFetch,
-  type StubTurn,
-} from "./ollama-fetch-stub.js";
+import { stubOllamaFetch, type StubTurn } from "./ollama-fetch-stub.js";
 
 const OLLAMA_URL = "http://localhost:11434";
 
@@ -211,9 +208,10 @@ describe("CodePilotRuntime — canonical flow over a provider-resolved model", (
         "skills",
         "ask_question",
       ]) {
-        expect(offered, `native tool ${name} not offered to the model`).toContain(
-          name,
-        );
+        expect(
+          offered,
+          `native tool ${name} not offered to the model`,
+        ).toContain(name);
       }
     } finally {
       await runtime.dispose();

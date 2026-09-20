@@ -114,7 +114,8 @@ export function isValidScheduleId(id: unknown): id is string {
 }
 
 export function isValidTimezone(zone: unknown): zone is string {
-  if (typeof zone !== "string" || zone.length === 0 || zone.length > 64) return false;
+  if (typeof zone !== "string" || zone.length === 0 || zone.length > 64)
+    return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: zone });
     return true;
@@ -141,9 +142,11 @@ export function validateScheduleInput(
 ): { ok: true; value: ValidatedSchedule } | { ok: false; errors: string[] } {
   const errors: string[] = [];
 
-  const name = typeof input.name === "string" ? input.name.trim().slice(0, 100) : "";
+  const name =
+    typeof input.name === "string" ? input.name.trim().slice(0, 100) : "";
   if (!name) errors.push("name is required (1-100 chars)");
-  const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 4000) : "";
+  const prompt =
+    typeof input.prompt === "string" ? input.prompt.trim().slice(0, 4000) : "";
   if (!prompt) errors.push("prompt is required (1-4000 chars)");
 
   if (input.kind !== "once" && input.kind !== "recurring") {
@@ -161,9 +164,13 @@ export function validateScheduleInput(
     } else {
       const at = Date.parse(input.atIso);
       if (Number.isNaN(at)) {
-        errors.push(`atIso is not a valid date-time: '${input.atIso.slice(0, 64)}'`);
+        errors.push(
+          `atIso is not a valid date-time: '${input.atIso.slice(0, 64)}'`,
+        );
       } else if (at <= Date.now()) {
-        errors.push("atIso is in the past — a one-time schedule there would never run");
+        errors.push(
+          "atIso is in the past — a one-time schedule there would never run",
+        );
       } else {
         atIso = new Date(at).toISOString();
       }
@@ -177,19 +184,26 @@ export function validateScheduleInput(
     const hasEvery = input.everyMinutes !== undefined;
     const hasDaily = input.dailyAt !== undefined;
     if (hasEvery === hasDaily) {
-      errors.push("recurring schedules need exactly one of everyMinutes or dailyAt");
+      errors.push(
+        "recurring schedules need exactly one of everyMinutes or dailyAt",
+      );
     }
     if (hasEvery) {
       const n =
-        typeof input.everyMinutes === "string" && input.everyMinutes.trim() !== ""
+        typeof input.everyMinutes === "string" &&
+        input.everyMinutes.trim() !== ""
           ? Number(input.everyMinutes)
           : input.everyMinutes;
       if (typeof n !== "number" || !Number.isInteger(n)) {
         errors.push("everyMinutes must be an integer number of minutes");
       } else if (n < MIN_EVERY_MINUTES) {
-        errors.push(`everyMinutes must be at least ${MIN_EVERY_MINUTES} (runaway protection)`);
+        errors.push(
+          `everyMinutes must be at least ${MIN_EVERY_MINUTES} (runaway protection)`,
+        );
       } else if (n > MAX_EVERY_MINUTES) {
-        errors.push(`everyMinutes must be at most ${MAX_EVERY_MINUTES} (~30 days)`);
+        errors.push(
+          `everyMinutes must be at most ${MAX_EVERY_MINUTES} (~30 days)`,
+        );
       } else {
         everyMinutes = n;
       }
@@ -202,14 +216,18 @@ export function validateScheduleInput(
         const hh = m ? Number(m[1]) : -1;
         const mm = m ? Number(m[2]) : -1;
         if (!m || hh > 23 || mm > 59) {
-          errors.push(`dailyAt must be a valid time 'HH:MM' (00:00-23:59), got '${input.dailyAt.slice(0, 16)}'`);
+          errors.push(
+            `dailyAt must be a valid time 'HH:MM' (00:00-23:59), got '${input.dailyAt.slice(0, 16)}'`,
+          );
         } else {
           dailyAt = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
         }
       }
       if (input.timezone !== undefined) {
         if (!isValidTimezone(input.timezone)) {
-          errors.push(`unknown IANA timezone: '${String(input.timezone).slice(0, 64)}'`);
+          errors.push(
+            `unknown IANA timezone: '${String(input.timezone).slice(0, 64)}'`,
+          );
         } else {
           timezone = input.timezone;
         }
@@ -224,7 +242,11 @@ export function validateScheduleInput(
 
   let missedRunPolicy: MissedRunPolicy = "skip";
   if (input.missedRunPolicy !== undefined) {
-    if (input.missedRunPolicy !== "skip" && input.missedRunPolicy !== "run-once" && input.missedRunPolicy !== "run-all") {
+    if (
+      input.missedRunPolicy !== "skip" &&
+      input.missedRunPolicy !== "run-once" &&
+      input.missedRunPolicy !== "run-all"
+    ) {
       errors.push("missedRunPolicy must be skip | run-once | run-all");
     } else {
       missedRunPolicy = input.missedRunPolicy;
@@ -242,8 +264,16 @@ export function validateScheduleInput(
 
   let maxRetries = 0;
   if (input.maxRetries !== undefined) {
-    const r = typeof input.maxRetries === "string" && input.maxRetries.trim() !== "" ? Number(input.maxRetries) : input.maxRetries;
-    if (typeof r !== "number" || !Number.isInteger(r) || r < 0 || r > MAX_RETRIES) {
+    const r =
+      typeof input.maxRetries === "string" && input.maxRetries.trim() !== ""
+        ? Number(input.maxRetries)
+        : input.maxRetries;
+    if (
+      typeof r !== "number" ||
+      !Number.isInteger(r) ||
+      r < 0 ||
+      r > MAX_RETRIES
+    ) {
       errors.push(`maxRetries must be an integer 0-${MAX_RETRIES}`);
     } else {
       maxRetries = r;
@@ -283,7 +313,8 @@ export function describeSchedule(def: {
     if (m % 60 === 0) return `every ${m / 60}h`;
     return `every ${m}m`;
   }
-  if (def.dailyAt) return `daily ${def.dailyAt}${def.timezone ? ` (${def.timezone})` : ""}`;
+  if (def.dailyAt)
+    return `daily ${def.dailyAt}${def.timezone ? ` (${def.timezone})` : ""}`;
   return "recurring (unset)";
 }
 
@@ -366,11 +397,17 @@ export class ScheduleService {
       id = newScheduleId();
     } else if (isValidScheduleId(input.id)) {
       if (this.scheduler.get(input.id)) {
-        return { ok: false, errors: [`schedule id '${input.id}' already exists`] };
+        return {
+          ok: false,
+          errors: [`schedule id '${input.id}' already exists`],
+        };
       }
       id = input.id;
     } else {
-      return { ok: false, errors: ["id must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"] };
+      return {
+        ok: false,
+        errors: ["id must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"],
+      };
     }
     const def = this.scheduler.upsert({ id, ...validated.value });
     this.ensureStarted();
@@ -385,7 +422,8 @@ export class ScheduleService {
     input: ScheduleInput,
   ): { ok: true; schedule: ScheduleView } | { ok: false; errors: string[] } {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidScheduleId(id)) return { ok: false, errors: ["invalid schedule id"] };
+    if (!isValidScheduleId(id))
+      return { ok: false, errors: ["invalid schedule id"] };
     const existing = this.scheduler.get(id);
     if (!existing) return { ok: false, errors: [`unknown schedule: ${id}`] };
     // Merge over the stored definition so unspecified fields (including
@@ -398,7 +436,8 @@ export class ScheduleService {
       everyMinutes: input.everyMinutes ?? existing.everyMinutes,
       dailyAt: input.dailyAt ?? existing.dailyAt,
       timezone: input.timezone ?? existing.timezone,
-      missedRunPolicy: input.missedRunPolicy ?? existing.missedRunPolicy ?? "skip",
+      missedRunPolicy:
+        input.missedRunPolicy ?? existing.missedRunPolicy ?? "skip",
       enabled: input.enabled ?? existing.enabled,
       maxRetries: input.maxRetries ?? existing.maxRetries ?? 0,
     };
@@ -418,8 +457,10 @@ export class ScheduleService {
     enabled: unknown,
   ): { ok: true; schedule: ScheduleView } | { ok: false; errors: string[] } {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidScheduleId(id)) return { ok: false, errors: ["invalid schedule id"] };
-    if (typeof enabled !== "boolean") return { ok: false, errors: ["enabled must be a boolean"] };
+    if (!isValidScheduleId(id))
+      return { ok: false, errors: ["invalid schedule id"] };
+    if (typeof enabled !== "boolean")
+      return { ok: false, errors: ["enabled must be a boolean"] };
     const existing = this.scheduler.get(id);
     if (!existing) return { ok: false, errors: [`unknown schedule: ${id}`] };
     // Preserve EVERYTHING (maxRetries, missed policy, bookkeeping) — a
@@ -434,11 +475,17 @@ export class ScheduleService {
 
   remove(id: unknown): { ok: true } | { ok: false; errors: string[] } {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidScheduleId(id)) return { ok: false, errors: ["invalid schedule id"] };
+    if (!isValidScheduleId(id))
+      return { ok: false, errors: ["invalid schedule id"] };
     // Refuse while a run for this schedule is in flight: removal stops
     // FUTURE runs, and an in-flight execution must not be orphaned silently.
     if (this.scheduler.hasActiveRun(id)) {
-      return { ok: false, errors: [`schedule '${id}' has an active execution — wait for it to finish first`] };
+      return {
+        ok: false,
+        errors: [
+          `schedule '${id}' has an active execution — wait for it to finish first`,
+        ],
+      };
     }
     const removed = this.scheduler.remove(id);
     if (!removed) return { ok: false, errors: [`unknown schedule: ${id}`] };
@@ -448,9 +495,12 @@ export class ScheduleService {
 
   // ---- Run now ----------------------------------------------------------------------
 
-  runNow(id: unknown): { ok: true; status: string } | { ok: false; errors: string[] } {
+  runNow(
+    id: unknown,
+  ): { ok: true; status: string } | { ok: false; errors: string[] } {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidScheduleId(id)) return { ok: false, errors: ["invalid schedule id"] };
+    if (!isValidScheduleId(id))
+      return { ok: false, errors: ["invalid schedule id"] };
     const result = this.scheduler.runNow(id);
     if (!result.ok) return { ok: false, errors: [result.error] };
     this.ensureStarted();
@@ -464,8 +514,13 @@ export class ScheduleService {
     return this.scheduler.list().map((s) => this.toView(s));
   }
 
-  details(id: unknown): { ok: true; details: ScheduleDetailsView } | { ok: false; errors: string[] } {
-    if (!isValidScheduleId(id)) return { ok: false, errors: ["invalid schedule id"] };
+  details(
+    id: unknown,
+  ):
+    | { ok: true; details: ScheduleDetailsView }
+    | { ok: false; errors: string[] } {
+    if (!isValidScheduleId(id))
+      return { ok: false, errors: ["invalid schedule id"] };
     const def = this.scheduler.get(id);
     if (!def) return { ok: false, errors: [`unknown schedule: ${id}`] };
     const history = this.scheduler
@@ -477,14 +532,22 @@ export class ScheduleService {
 
   history(limit = 50): ScheduleRunView[] {
     const capped = Math.max(1, Math.min(50, Math.floor(limit)));
-    const names = new Map(this.scheduler.list().map((s) => [s.id, s.name] as const));
+    const names = new Map(
+      this.scheduler.list().map((s) => [s.id, s.name] as const),
+    );
     return this.scheduler
       .runHistory(capped)
       .map((r) => this.toRunView(r, names.get(r.scheduleId) ?? r.scheduleId));
   }
 
   /** Aggregate run metrics (computed from bounded history). */
-  metrics(): { total: number; success: number; failed: number; running: number; queued: number } {
+  metrics(): {
+    total: number;
+    success: number;
+    failed: number;
+    running: number;
+    queued: number;
+  } {
     const history = this.scheduler.runHistory(50);
     return {
       total: history.length,
@@ -527,12 +590,18 @@ export class ScheduleService {
   private liveStatus(id: string): "idle" | "queued" | "running" {
     const rec = this.scheduler
       .runHistory(50)
-      .find((r) => r.scheduleId === id && (r.status === "queued" || r.status === "running"));
+      .find(
+        (r) =>
+          r.scheduleId === id &&
+          (r.status === "queued" || r.status === "running"),
+      );
     return rec?.status === "running" ? "running" : rec ? "queued" : "idle";
   }
 
   private toView(def: ScheduleDefinition): ScheduleView {
-    const history = this.scheduler.runHistory(50).filter((r) => r.scheduleId === def.id);
+    const history = this.scheduler
+      .runHistory(50)
+      .filter((r) => r.scheduleId === def.id);
     const successCount = history.filter((r) => r.status === "success").length;
     const failedCount = history.filter((r) => r.status === "failed").length;
     // Next run is computed fresh (never a stale persisted value); disabled
@@ -544,14 +613,18 @@ export class ScheduleService {
       prompt: def.prompt.slice(0, 4000),
       kind: def.kind,
       ...(def.atIso ? { atIso: def.atIso } : {}),
-      ...(def.everyMinutes !== undefined ? { everyMinutes: def.everyMinutes } : {}),
+      ...(def.everyMinutes !== undefined
+        ? { everyMinutes: def.everyMinutes }
+        : {}),
       ...(def.dailyAt ? { dailyAt: def.dailyAt } : {}),
       ...(def.timezone ? { timezone: def.timezone } : {}),
       missedRunPolicy: def.missedRunPolicy ?? "skip",
       enabled: def.enabled,
       maxRetries: def.maxRetries ?? 0,
       createdAtMs: def.createdAtMs,
-      ...(def.lastRunAtMs !== undefined ? { lastRunAtMs: def.lastRunAtMs } : {}),
+      ...(def.lastRunAtMs !== undefined
+        ? { lastRunAtMs: def.lastRunAtMs }
+        : {}),
       ...(def.lastRunStatus ? { lastRunStatus: def.lastRunStatus } : {}),
       ...(freshNext !== undefined ? { nextRunAtMs: freshNext } : {}),
       liveStatus: this.liveStatus(def.id),
@@ -561,7 +634,10 @@ export class ScheduleService {
     };
   }
 
-  private toRunView(record: ScheduleRunRecord, scheduleName: string): ScheduleRunView {
+  private toRunView(
+    record: ScheduleRunRecord,
+    scheduleName: string,
+  ): ScheduleRunView {
     const view: ScheduleRunView = {
       scheduleId: record.scheduleId,
       scheduleName: scheduleName.slice(0, 100),

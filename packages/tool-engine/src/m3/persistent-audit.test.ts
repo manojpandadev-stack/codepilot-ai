@@ -250,7 +250,10 @@ describe("PersistentAuditLogger — durability", () => {
       log.record(entry({ executionId: `c${i}` }));
     }
     await log.flush();
-    const lines = adapter.raw("tool-audit.jsonl").split("\n").filter((l) => l.length > 0);
+    const lines = adapter
+      .raw("tool-audit.jsonl")
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(lines).toHaveLength(50);
     const ids = lines.map((l) => (JSON.parse(l) as ToolAuditEntry).executionId);
     expect(ids).toEqual(Array.from({ length: 50 }, (_, i) => `c${i}`));
@@ -261,17 +264,15 @@ describe("PersistentAuditLogger — durability", () => {
     const adapter = makeMemoryAdapter();
     const log = new PersistentAuditLogger(adapter);
     adapter.failAppends = true;
-    expect(() =>
-      log.record(entry({ executionId: "lost" })),
-    ).not.toThrow();
+    expect(() => log.record(entry({ executionId: "lost" }))).not.toThrow();
     await expect(log.flush()).resolves.toBeUndefined();
     // Recovery: writes resume once the disk is back.
     adapter.failAppends = false;
     log.record(entry({ executionId: "found" }));
     await log.flush();
-    expect(parseAll(adapter.raw("tool-audit.jsonl")).map((r) => r.executionId)).toEqual([
-      "found",
-    ]);
+    expect(
+      parseAll(adapter.raw("tool-audit.jsonl")).map((r) => r.executionId),
+    ).toEqual(["found"]);
     await log.dispose();
   });
 });

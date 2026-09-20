@@ -51,9 +51,7 @@ function normalizeBaseUrl(baseUrl?: string): string {
   return raw;
 }
 
-function toWireContent(
-  content: LlmMessage["content"],
-): string {
+function toWireContent(content: LlmMessage["content"]): string {
   if (typeof content === "string") return content;
   const parts: string[] = [];
   for (const block of content) {
@@ -66,6 +64,10 @@ function toWireContent(
       parts.push(
         `[tool_result ${block.name ?? block.tool_use_id}${block.is_error ? " ERROR" : ""}] ${block.content.slice(0, 6000)}`,
       );
+    } else if (block.type === "image") {
+      // Simplified text path: mark the image explicitly so it is never
+      // silently dropped (native providers carry the real bytes).
+      parts.push(`[image ${block.mime}]`);
     }
   }
   return parts.join("\n");
@@ -97,13 +99,11 @@ function toWireTools(
 }
 
 /** Split `<think>…</think>` spans out of streamed content. */
-export function splitThinking(text: string): Array<
-  | { kind: "text"; text: string }
-  | { kind: "reasoning"; text: string }
-> {
+export function splitThinking(
+  text: string,
+): Array<{ kind: "text"; text: string } | { kind: "reasoning"; text: string }> {
   const parts: Array<
-    | { kind: "text"; text: string }
-    | { kind: "reasoning"; text: string }
+    { kind: "text"; text: string } | { kind: "reasoning"; text: string }
   > = [];
   const re = /<think>([\s\S]*?)(<\/think>|$)/g;
   let last = 0;
@@ -194,7 +194,11 @@ export class OllamaProvider implements LlmProvider {
         } | null;
         if (!parsed) continue;
         if (typeof parsed.error === "string" && parsed.error) {
-          yield { type: "done", success: false, error: parsed.error.slice(0, 500) };
+          yield {
+            type: "done",
+            success: false,
+            error: parsed.error.slice(0, 500),
+          };
           return;
         }
         const message = parsed.message;
@@ -257,7 +261,11 @@ export class OllamaProvider implements LlmProvider {
       let input: Record<string, unknown> = {};
       try {
         const parsedArgs = JSON.parse(call.argsText || "{}") as unknown;
-        if (parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)) {
+        if (
+          parsedArgs &&
+          typeof parsedArgs === "object" &&
+          !Array.isArray(parsedArgs)
+        ) {
           input = parsedArgs as Record<string, unknown>;
         }
       } catch {
@@ -290,7 +298,9 @@ export class OllamaProvider implements LlmProvider {
     const data = (await res.json()) as { models?: Array<{ name?: unknown }> };
     const models = Array.isArray(data.models) ? data.models : [];
     return models
-      .filter((m) => typeof m?.name === "string" && (m.name as string).length > 0)
+      .filter(
+        (m) => typeof m?.name === "string" && (m.name as string).length > 0,
+      )
       .map((m) => ({ id: m.name as string, name: m.name as string }));
   }
 

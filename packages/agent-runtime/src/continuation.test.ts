@@ -46,7 +46,14 @@ describe("trimTrailingIncompleteToolExchange", () => {
       },
       {
         role: "user",
-        content: [{ type: "tool_result", tool_use_id: "c1", name: "read_file", content: "x" }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "c1",
+            name: "read_file",
+            content: "x",
+          },
+        ],
       },
     ];
     expect(trimTrailingIncompleteToolExchange(messages)).toBe(messages);
@@ -95,9 +102,7 @@ describe("selectContinuationMessages", () => {
   });
 
   it("reuses the faithful build for plain history", () => {
-    const task = taskWith([
-      { role: "user", text: "do it", timestampMs: 1 },
-    ]);
+    const task = taskWith([{ role: "user", text: "do it", timestampMs: 1 }]);
     const messages = selectContinuationMessages(task);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ role: "user", content: "do it" });
@@ -112,10 +117,14 @@ describe("selectContinuationMessages", () => {
     const full = selectContinuationMessages(task);
     expect(full.length).toBeGreaterThan(1);
     const shorter: ResumeWireMessage[] = [{ role: "user", content: "summary" }];
-    expect(selectContinuationMessages(task, { compacted: shorter })).toEqual(shorter);
+    expect(selectContinuationMessages(task, { compacted: shorter })).toEqual(
+      shorter,
+    );
     // Equal-or-longer compacted build is ignored (resume rule).
     const longer: ResumeWireMessage[] = [...full, ...full];
-    expect(selectContinuationMessages(task, { compacted: longer })).toEqual(full);
+    expect(selectContinuationMessages(task, { compacted: longer })).toEqual(
+      full,
+    );
     expect(selectContinuationMessages(task, { compacted: [] })).toEqual(full);
     expect(selectContinuationMessages(task, { compacted: null })).toEqual(full);
   });
@@ -126,15 +135,15 @@ describe("selectContinuationMessages", () => {
       {
         role: "assistant",
         timestampMs: 2,
-        blocks: [
-          { type: "tool_use", id: "cx", name: "bash", input: "{}" },
-        ],
+        blocks: [{ type: "tool_use", id: "cx", name: "bash", input: "{}" }],
       },
     ]);
     // Default (resume behavior): untouched.
     expect(selectContinuationMessages(task)).toHaveLength(2);
     // Per-turn seeding: clean boundary only (uses-only tail dropped).
-    const trimmed = selectContinuationMessages(task, { trimIncompleteTail: true });
+    const trimmed = selectContinuationMessages(task, {
+      trimIncompleteTail: true,
+    });
     expect(trimmed).toHaveLength(1);
     expect(trimmed[0]?.role).toBe("user");
   });
@@ -149,7 +158,10 @@ describe("selectContinuationChain", () => {
   });
 
   it("concatenates per-task histories oldest→newest", () => {
-    const chain = selectContinuationChain([userTurn("one", 1), userTurn("two", 2)]);
+    const chain = selectContinuationChain([
+      userTurn("one", 1),
+      userTurn("two", 2),
+    ]);
     expect(chain.map((m) => m.content)).toEqual(["one", "two"]);
   });
 
@@ -186,7 +198,10 @@ describe("selectContinuationChain", () => {
       ],
       "task-big",
     );
-    const small = taskWith([{ role: "user", text: "fresh", timestampMs: 9 }], "task-small");
+    const small = taskWith(
+      [{ role: "user", text: "fresh", timestampMs: 9 }],
+      "task-small",
+    );
     const chain = selectContinuationChain([big, small], {
       composeCompacted: (t) =>
         t.id === big.id ? [{ role: "user", content: "big-summary" }] : null,

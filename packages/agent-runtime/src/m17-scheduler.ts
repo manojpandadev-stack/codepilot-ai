@@ -384,7 +384,8 @@ export class TaskScheduler {
 
   /** Cancel everything: stop ticking, mark queued/running as cancelled. Idempotent. */
   cancelAll(): void {
-    if (this.cancelled && this.timer === null && this.queue.length === 0) return;
+    if (this.cancelled && this.timer === null && this.queue.length === 0)
+      return;
     this.cancelled = true;
     this.stop();
     this.queue = [];

@@ -39,7 +39,8 @@ import {
 } from "@codepilot/tool-engine";
 import type { TerminalStreamEventWithCorrelation } from "@codepilot/tool-engine";
 import type { ToolPermissionPolicy } from "@codepilot/shared";
-import { OLLAMA_DEFAULT_BASE_URL } from "@codepilot/shared";
+import { OLLAMA_DEFAULT_BASE_URL, scrubSecretsText } from "@codepilot/shared";
+import { modelSupportsVision } from "@codepilot/llm";
 import {
   OllamaProvider,
   ProviderRegistry,
@@ -69,10 +70,14 @@ import {
 import { NativeSessionManager } from "./native/engine/session.js";
 import type { LlmProviderConfig } from "./native/llm/registry.js";
 import type { AgentTool, AgentUsage, AgentMessage } from "./native/types.js";
+import { NATIVE_AGENT_ID } from "./native/types.js";
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/** Re-exported so hosts and tests share one agent identity constant. */
+export { NATIVE_AGENT_ID };
 
 /**
  * Map a UI agent mode onto the PolicyEngine's mode union ("plan" | "act" | "review").
@@ -251,7 +256,12 @@ export class CodePilotRuntime {
     sessionId: null,
     currentIteration: 0,
     messages: [],
-    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    },
     filesChanged: [],
     toolCallHistory: [],
     lastError: null,
@@ -281,6 +291,12 @@ export class CodePilotRuntime {
 
   /** Last per-run usage snapshot from the loop (normalized). */
   private lastRunUsage: RuntimeUsage | undefined;
+
+  /** First model output (text or reasoning delta) of the current run. */
+  private firstTokenAt: number | null = null;
+
+  /** Tool calls that failed this run (executor error or gate denial). */
+  private toolFailureCount = 0;
 
   /**
    * Live tool names for terminal_output correlation: toolCallId → name.
@@ -432,7 +448,9 @@ export class CodePilotRuntime {
         name: owned.name,
         description: owned.description ?? owned.name,
         inputSchema: owned.inputSchema ?? { type: "object" },
-        ...(owned.timeoutMs !== undefined ? { timeoutMs: owned.timeoutMs } : {}),
+        ...(owned.timeoutMs !== undefined
+          ? { timeoutMs: owned.timeoutMs }
+          : {}),
         execute: async (input, context) => {
           // Adapt the owned tool shape (all-optional context) to the native
           // dispatcher contract (required agentId, abort signal).
@@ -459,15 +477,25 @@ export class CodePilotRuntime {
         ? {
             type: "object",
             properties: {
-              file_path: { type: "string", description: "Workspace-relative file path" },
+              file_path: {
+                type: "string",
+                description: "Workspace-relative file path",
+              },
               operation: {
                 type: "string",
                 enum: ["replace", "insert", "append"],
-                description: "replace: swap old_string→new_string; insert: insert after line; append: add to end",
+                description:
+                  "replace: swap old_string→new_string; insert: insert after line; append: add to end",
               },
-              old_string: { type: "string", description: "Text to replace (replace operation)" },
+              old_string: {
+                type: "string",
+                description: "Text to replace (replace operation)",
+              },
               new_string: { type: "string", description: "Replacement text" },
-              line: { type: "number", description: "1-based line number (insert operation)" },
+              line: {
+                type: "number",
+                description: "1-based line number (insert operation)",
+              },
               content: { type: "string", description: "Text to insert/append" },
             },
             required: ["file_path", "operation"],
@@ -475,7 +503,10 @@ export class CodePilotRuntime {
         : {
             type: "object",
             properties: {
-              patch: { type: "string", description: "Patch beginning with '*** Begin Patch'" },
+              patch: {
+                type: "string",
+                description: "Patch beginning with '*** Begin Patch'",
+              },
             },
             required: ["patch"],
           };
@@ -507,7 +538,10 @@ export class CodePilotRuntime {
         type: "object",
         properties: {
           command: { type: "string", description: "The shell command to run" },
-          timeoutMs: { type: "number", description: "Optional timeout in milliseconds" },
+          timeoutMs: {
+            type: "number",
+            description: "Optional timeout in milliseconds",
+          },
         },
         required: ["command"],
       },
@@ -618,8 +652,10 @@ export class CodePilotRuntime {
       /**
        * Verbatim resume: prior conversation seeded into the session
        * (ResumeWireMessage shape — the native engine's native wire format).
-       * Only roles user/assistant with text/tool_use/tool_result blocks.
-       * Never contains secrets.
+       * Only roles user/assistant with text/tool_use/tool_result/image
+       * blocks. Never contains secrets. Image blocks carry validated,
+       * metadata-stripped bytes (`dataBase64`); `fileRef`-only blocks are
+       * rejected by the provider layer — the host must resolve them first.
        */
       initialMessages?: Array<{
         role: "user" | "assistant";
@@ -627,13 +663,26 @@ export class CodePilotRuntime {
           | string
           | Array<
               | { type: "text"; text: string }
-              | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+              | {
+                  type: "tool_use";
+                  id: string;
+                  name: string;
+                  input: Record<string, unknown>;
+                }
               | {
                   type: "tool_result";
                   tool_use_id: string;
                   name: string;
                   content: string;
                   is_error?: boolean;
+                }
+              | {
+                  type: "image";
+                  mime: string;
+                  dataBase64?: string;
+                  fileRef?: string;
+                  name?: string;
+                  sizeBytes?: number;
                 }
             >;
         ts?: number;
@@ -665,6 +714,35 @@ export class CodePilotRuntime {
       );
     }
 
+    // ---- Vision capability guard (fail-closed) ----
+    // Image content must never be sent to a model known to be text-only
+    // (it would be silently ignored or error opaquely server-side). Unknown
+    // endpoints (local servers with unlisted models, BYO URLs) are allowed:
+    // their capabilities cannot be established statically.
+    if (
+      (merged.initialMessages ?? []).some(
+        (m) =>
+          Array.isArray(m.content) && m.content.some((b) => b.type === "image"),
+      )
+    ) {
+      const vision = modelSupportsVision(
+        merged.providerId || "ollama",
+        merged.modelId || "",
+      );
+      if (vision === false) {
+        const message =
+          `Model "${merged.modelId || "(default)"}" via provider "${merged.providerId || "ollama"}" ` +
+          `does not support image input. No request was made. Switch to a vision-capable model.`;
+        this.emit({
+          type: "error",
+          error: message,
+          recoverable: false,
+          ...this.buildCorrelation(),
+        });
+        throw new Error(message);
+      }
+    }
+
     // ---- Concurrent-start guard ----
     if (this.state.status === "running" && !this.runSettled) {
       throw new Error(
@@ -675,6 +753,8 @@ export class CodePilotRuntime {
     // ---- Reset per-run state ----
     this.runSettled = false;
     this.lastRunUsage = undefined;
+    this.firstTokenAt = null;
+    this.toolFailureCount = 0;
     this.eventCounter = 0;
     this.runStartedAt = Date.now();
     this.terminalToolNames.clear();
@@ -779,11 +859,14 @@ export class CodePilotRuntime {
       modelId: merged.modelId || "",
       ...(merged.apiKey ? { apiKey: merged.apiKey } : {}),
       ...(merged.baseUrl ? { baseUrl: merged.baseUrl } : {}),
-      systemPrompt: merged.systemPrompt ?? this.buildDefaultSystemPrompt(merged),
+      systemPrompt:
+        merged.systemPrompt ?? this.buildDefaultSystemPrompt(merged),
       tools,
       gate: this.buildGate(),
       maxIterations: merged.maxIterations ?? 50,
-      ...(merged.temperature !== undefined ? { temperature: merged.temperature } : {}),
+      ...(merged.temperature !== undefined
+        ? { temperature: merged.temperature }
+        : {}),
       ...(merged.initialMessages && merged.initialMessages.length > 0
         ? { initialMessages: merged.initialMessages as AgentMessage[] }
         : {}),
@@ -800,11 +883,14 @@ export class CodePilotRuntime {
             modelId: merged.modelId || "",
             ...(merged.apiKey ? { apiKey: merged.apiKey } : {}),
             ...(merged.baseUrl ? { baseUrl: merged.baseUrl } : {}),
-            systemPrompt: merged.systemPrompt ?? this.buildDefaultSystemPrompt(merged),
+            systemPrompt:
+              merged.systemPrompt ?? this.buildDefaultSystemPrompt(merged),
             tools,
             gate: this.buildGate(),
             maxIterations: merged.maxIterations ?? 50,
-            ...(merged.temperature !== undefined ? { temperature: merged.temperature } : {}),
+            ...(merged.temperature !== undefined
+              ? { temperature: merged.temperature }
+              : {}),
             ...(merged.initialMessages && merged.initialMessages.length > 0
               ? { initialMessages: merged.initialMessages as AgentMessage[] }
               : {}),
@@ -816,11 +902,14 @@ export class CodePilotRuntime {
               modelId: merged.modelId || "",
               ...(merged.apiKey ? { apiKey: merged.apiKey } : {}),
               ...(merged.baseUrl ? { baseUrl: merged.baseUrl } : {}),
-              systemPrompt: merged.systemPrompt ?? this.buildDefaultSystemPrompt(merged),
+              systemPrompt:
+                merged.systemPrompt ?? this.buildDefaultSystemPrompt(merged),
               tools,
               gate: this.buildGate(),
               maxIterations: merged.maxIterations ?? 50,
-              ...(merged.temperature !== undefined ? { temperature: merged.temperature } : {}),
+              ...(merged.temperature !== undefined
+                ? { temperature: merged.temperature }
+                : {}),
               ...(merged.initialMessages && merged.initialMessages.length > 0
                 ? { initialMessages: merged.initialMessages as AgentMessage[] }
                 : {}),
@@ -892,6 +981,9 @@ export class CodePilotRuntime {
           result: result.text,
           usage,
           durationMs: metrics.durationMs,
+          ...(metrics.timeToFirstTokenMs !== undefined
+            ? { timeToFirstTokenMs: metrics.timeToFirstTokenMs }
+            : {}),
           ...this.buildCorrelation(),
         });
       }
@@ -906,7 +998,7 @@ export class CodePilotRuntime {
       const message = error instanceof Error ? error.message : String(error);
       const stack =
         error instanceof Error && error.stack ? `\n${error.stack}` : "";
-      this.state.lastError = `${message}${stack}`;
+      this.state.lastError = scrubSecretsText(`${message}${stack}`);
 
       if (isCancelled) {
         this.doTransition("CANCELLED", message);
@@ -926,7 +1018,10 @@ export class CodePilotRuntime {
         const runtimeErr = this.normalizeError(error);
         this.state.lastRuntimeError = runtimeErr;
 
-        console.error("[agent-runtime] AGENT_ERROR:", message);
+        console.error(
+          "[agent-runtime] AGENT_ERROR:",
+          scrubSecretsText(message),
+        );
         this.emit({
           type: "error",
           error: `Agent runtime failed: ${message}`,
@@ -1004,7 +1099,11 @@ export class CodePilotRuntime {
     sessionId: string,
     event:
       | { type: "status"; sessionId: string; status: string; reason?: string }
-      | { type: "loop"; loop: import("./native/engine/agent-loop.js").AgentLoopEvent; sessionId: string },
+      | {
+          type: "loop";
+          loop: import("./native/engine/agent-loop.js").AgentLoopEvent;
+          sessionId: string;
+        },
   ): void {
     if (event.type === "status") {
       return;
@@ -1026,6 +1125,9 @@ export class CodePilotRuntime {
         break;
       case "text_delta":
         this.state.status = "running";
+        if (this.firstTokenAt === null) {
+          this.firstTokenAt = Date.now();
+        }
         this.emit({
           type: "text_delta",
           text: loop.text,
@@ -1035,6 +1137,9 @@ export class CodePilotRuntime {
         break;
       case "reasoning_delta":
         this.state.status = "running";
+        if (this.firstTokenAt === null) {
+          this.firstTokenAt = Date.now();
+        }
         this.emit({
           type: "reasoning_delta",
           text: loop.text,
@@ -1077,6 +1182,7 @@ export class CodePilotRuntime {
           // surface as tool_failed so UI cards, history, and healing see a
           // failure — matching the long-standing tool_failed contract for
           // failed executions. The error detail rides in `error`.
+          this.toolFailureCount += 1;
           this.emit({
             type: "tool_failed",
             toolCallId: loop.call.toolCallId,
@@ -1104,6 +1210,7 @@ export class CodePilotRuntime {
         break;
       case "tool_denied":
         this.terminalToolNames.delete(loop.call.toolCallId);
+        this.toolFailureCount += 1;
         this.emit({
           type: "tool_failed",
           toolCallId: loop.call.toolCallId,
@@ -1118,7 +1225,9 @@ export class CodePilotRuntime {
           outputTokens: loop.usage.outputTokens,
           cacheReadTokens: loop.usage.cacheReadTokens,
           cacheWriteTokens: loop.usage.cacheWriteTokens,
-          ...(loop.usage.totalCost !== undefined ? { totalCost: loop.usage.totalCost } : {}),
+          ...(loop.usage.totalCost !== undefined
+            ? { totalCost: loop.usage.totalCost }
+            : {}),
         };
         break;
       case "finish":
@@ -1146,7 +1255,9 @@ export class CodePilotRuntime {
     const merged = this.defaultConfig;
     await this.startSession(prompt, {
       agentMode: merged.agentMode,
-      ...(options?.mode ? { agentMode: options.mode as CodePilotAgentConfig["agentMode"] } : {}),
+      ...(options?.mode
+        ? { agentMode: options.mode as CodePilotAgentConfig["agentMode"] }
+        : {}),
     });
   }
 
@@ -1180,6 +1291,10 @@ export class CodePilotRuntime {
       reason,
       ...this.buildCorrelation(),
     });
+    // The abort path bypasses startSession's catch (which would write
+    // metrics): record the cancelled run here so lastRunMetrics is
+    // meaningful on every settlement path.
+    this.state.lastRunMetrics = this.buildRunMetrics(false, true);
   }
 
   async stopSession(): Promise<void> {
@@ -1188,6 +1303,9 @@ export class CodePilotRuntime {
       this.runSettled = true;
       this.stateMachine.cancel("Session stopped");
       this.state.status = "idle";
+      // A stopped run still produced partial telemetry — record it so
+      // lastRunMetrics is meaningful on every settlement path.
+      this.state.lastRunMetrics = this.buildRunMetrics(false, true);
     }
     if (this.state.sessionId) {
       this.sessions.stop(this.state.sessionId);
@@ -1354,7 +1472,11 @@ export class CodePilotRuntime {
       );
     }
 
-    if (config.enableTools !== false && config.extraTools && config.extraTools.length > 0) {
+    if (
+      config.enableTools !== false &&
+      config.extraTools &&
+      config.extraTools.length > 0
+    ) {
       const toolLines = config.extraTools
         .map((t) => `- ${t.name}: ${t.description}`)
         .join("\n");
@@ -1386,6 +1508,8 @@ export class CodePilotRuntime {
     eventId: string;
     sessionId: string | undefined;
     taskId: string | undefined;
+    runId: string | undefined;
+    agentId: string;
     timestamp: number;
     agentState: AgentState;
   } {
@@ -1393,6 +1517,8 @@ export class CodePilotRuntime {
       eventId: `evt-${++this.eventCounter}`,
       sessionId: this.activeSessionId ?? undefined,
       taskId: this.currentTaskId ?? undefined,
+      runId: this.currentTaskId ?? undefined,
+      agentId: NATIVE_AGENT_ID,
       timestamp: Date.now(),
       agentState: this.stateMachine.state,
     };
@@ -1431,7 +1557,11 @@ export class CodePilotRuntime {
 
   /** Build a RuntimeError from an unknown thrown value. */
   private normalizeError(error: unknown): RuntimeError {
-    const message = error instanceof Error ? error.message : String(error);
+    const raw = error instanceof Error ? error.message : String(error);
+    // Scrub before classification AND storage: error text travels into
+    // events, the webview, and persistence — secret-shaped fragments must
+    // never ride along. Classification runs on the scrubbed text.
+    const message = scrubSecretsText(raw);
     const lower = message.toLowerCase();
 
     let code: RuntimeError["code"] = "UNKNOWN";
@@ -1501,20 +1631,35 @@ export class CodePilotRuntime {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     };
+    const merged = this.defaultConfig;
     return {
       taskId: this.currentTaskId ?? "",
       sessionId: this.activeSessionId,
+      runId: this.currentTaskId ?? undefined,
+      agentId: NATIVE_AGENT_ID,
+      providerId: merged.providerId || "ollama",
+      modelId: merged.modelId || "",
+      agentMode: merged.agentMode || "act",
       startedAt: this.runStartedAt,
       completedAt: now,
       durationMs: now - this.runStartedAt,
+      ...(this.firstTokenAt !== null
+        ? {
+            firstTokenAt: this.firstTokenAt,
+            timeToFirstTokenMs: this.firstTokenAt - this.runStartedAt,
+          }
+        : {}),
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       cacheReadTokens: usage.cacheReadTokens,
       cacheWriteTokens: usage.cacheWriteTokens,
+      ...(usage.totalCost !== undefined ? { totalCost: usage.totalCost } : {}),
       toolCallCount: this.state.toolCallHistory.reduce(
         (sum, t) => sum + t.count,
         0,
       ),
+      toolFailures: this.toolFailureCount,
+      iterations: this.state.currentIteration,
       filesChanged: this.state.filesChanged.length,
       retriesConsumed: this.state.retriesConsumed ?? 0,
       cancelled,

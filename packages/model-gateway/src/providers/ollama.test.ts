@@ -258,7 +258,9 @@ describe("OllamaProvider — endpoint correctness (404 regression)", () => {
     const health = await makeProvider().healthCheck(signal());
     expect(health.status).toBe("HEALTHY");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:11434/api/tags");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://localhost:11434/api/tags",
+    );
   });
 
   it("normalizes trailing-slash base URLs before appending the probe path", async () => {
@@ -287,7 +289,9 @@ describe("OllamaProvider — endpoint correctness (404 regression)", () => {
   it("classifies HTTP 404 from the tags endpoint as DEGRADED (not connected)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => jsonResponse({ error: "not found" }, 404)) as unknown as typeof fetch,
+      vi.fn(async () =>
+        jsonResponse({ error: "not found" }, 404),
+      ) as unknown as typeof fetch,
     );
     const health = await makeProvider().healthCheck(signal());
     expect(health.status).toBe("DEGRADED");

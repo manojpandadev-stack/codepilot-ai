@@ -9,6 +9,7 @@
  */
 
 import type { PersistedConversationMessage } from "./m12-task-store.js";
+import { estimateImageTokens } from "@codepilot/shared";
 
 /** Same documented approximation as the M6 budgeter. */
 export const CHARS_PER_TOKEN = 4;
@@ -39,17 +40,24 @@ export interface ContextPressure {
 }
 
 /** Estimate tokens for one conversation entry (both content shapes). */
-export function estimateEntryTokens(entry: PersistedConversationMessage): number {
+export function estimateEntryTokens(
+  entry: PersistedConversationMessage,
+): number {
   let chars = 0;
+  let totalImageTokens = 0;
   if (entry.text !== undefined) chars += entry.text.length;
   if (entry.blocks !== undefined) {
     for (const b of entry.blocks) {
       if (b.type === "text") chars += b.text.length;
-      else if (b.type === "tool_use") chars += (b.input?.length ?? 0) + b.name.length;
-      else chars += b.content.length + b.name.length;
+      else if (b.type === "tool_use")
+        chars += (b.input?.length ?? 0) + b.name.length;
+      else if (b.type === "image") {
+        // Images cost real context: estimated tokens, not pixels or bytes.
+        totalImageTokens += estimateImageTokens(b.sizeBytes ?? 0);
+      } else chars += b.content.length + b.name.length;
     }
   }
-  return Math.ceil(chars / CHARS_PER_TOKEN);
+  return Math.ceil(chars / CHARS_PER_TOKEN) + totalImageTokens;
 }
 
 /** Estimate total tokens for a conversation. */
@@ -72,11 +80,17 @@ export function resolveContextWindowTokens(input: {
   providerId: string;
   modelId: string;
   /** Per-model lookup supplied by the host (catalogue/discovery metadata). */
-  lookupModelContextWindow?: (providerId: string, modelId: string) => number | undefined;
+  lookupModelContextWindow?: (
+    providerId: string,
+    modelId: string,
+  ) => number | undefined;
   /** Provider-level lookup (flagship typical window). */
   lookupProviderContextWindow?: (providerId: string) => number | undefined;
 }): { contextWindowTokens: number; usedFallback: boolean } {
-  const explicitModel = input.lookupModelContextWindow?.(input.providerId, input.modelId);
+  const explicitModel = input.lookupModelContextWindow?.(
+    input.providerId,
+    input.modelId,
+  );
   if (typeof explicitModel === "number" && explicitModel > 0) {
     return { contextWindowTokens: explicitModel, usedFallback: false };
   }
@@ -84,7 +98,10 @@ export function resolveContextWindowTokens(input: {
   if (typeof providerLevel === "number" && providerLevel > 0) {
     return { contextWindowTokens: providerLevel, usedFallback: false };
   }
-  return { contextWindowTokens: FALLBACK_CONTEXT_WINDOW_TOKENS, usedFallback: true };
+  return {
+    contextWindowTokens: FALLBACK_CONTEXT_WINDOW_TOKENS,
+    usedFallback: true,
+  };
 }
 
 /** Classify the current context pressure into a zone. */
@@ -92,7 +109,10 @@ export function classifyContextPressure(
   estimatedTokens: number,
   contextWindowTokens: number,
 ): ContextPressure {
-  const safeWindow = contextWindowTokens > 0 ? contextWindowTokens : FALLBACK_CONTEXT_WINDOW_TOKENS;
+  const safeWindow =
+    contextWindowTokens > 0
+      ? contextWindowTokens
+      : FALLBACK_CONTEXT_WINDOW_TOKENS;
   // Budget headroom: the model's window also carries the system prompt,
   // tool definitions, and the upcoming response — compact well before the
   // raw window is full. 50% working margin is deliberately conservative.
@@ -123,11 +143,22 @@ export function evaluateCompactionNeed(input: {
   conversation: PersistedConversationMessage[];
   providerId: string;
   modelId: string;
-  lookupModelContextWindow?: (providerId: string, modelId: string) => number | undefined;
+  lookupModelContextWindow?: (
+    providerId: string,
+    modelId: string,
+  ) => number | undefined;
   lookupProviderContextWindow?: (providerId: string) => number | undefined;
 }): ContextPressure & { shouldCompact: boolean } {
-  const { contextWindowTokens, usedFallback } = resolveContextWindowTokens(input);
+  const { contextWindowTokens, usedFallback } =
+    resolveContextWindowTokens(input);
   const estimatedTokens = estimateConversationTokens(input.conversation);
-  const pressure = classifyContextPressure(estimatedTokens, contextWindowTokens);
-  return { ...pressure, usedFallback, shouldCompact: pressure.zone === "compact" };
+  const pressure = classifyContextPressure(
+    estimatedTokens,
+    contextWindowTokens,
+  );
+  return {
+    ...pressure,
+    usedFallback,
+    shouldCompact: pressure.zone === "compact",
+  };
 }

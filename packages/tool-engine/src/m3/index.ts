@@ -53,7 +53,11 @@ export type {
 } from "./permission-manager.js";
 
 // ---- Audit ----
-export { ToolAuditLogger, PersistentAuditLogger, redactSecrets } from "./audit-logger.js";
+export {
+  ToolAuditLogger,
+  PersistentAuditLogger,
+  redactSecrets,
+} from "./audit-logger.js";
 export type {
   ToolAuditEntry,
   ToolAuditSink,

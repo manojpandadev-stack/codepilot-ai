@@ -20,7 +20,8 @@ import type {
 } from "../types.js";
 import { parseSseData, postStreamText, safeJsonParse } from "./http.js";
 
-export const GOOGLE_DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
+export const GOOGLE_DEFAULT_BASE_URL =
+  "https://generativelanguage.googleapis.com";
 
 function toWireContent(
   content: LlmMessage["content"],
@@ -39,6 +40,10 @@ function toWireContent(
           name: block.name ?? block.tool_use_id,
           response: { output: block.content.slice(0, 6000) },
         },
+      });
+    } else if (block.type === "image") {
+      parts.push({
+        inlineData: { mimeType: block.mime, data: block.dataBase64 },
       });
     }
   }
@@ -59,14 +64,18 @@ export class GoogleProvider implements LlmProvider {
       .trim()
       .replace(/\/+$/, "");
     if (!/^https?:\/\//i.test(base)) {
-      throw new Error(`provider "${options.providerId}" requires an http(s) baseUrl`);
+      throw new Error(
+        `provider "${options.providerId}" requires an http(s) baseUrl`,
+      );
     }
     this.baseUrl = base;
     this.apiKey = options.apiKey;
   }
 
   private url(): string {
-    const key = this.apiKey ? `?key=${encodeURIComponent(this.apiKey)}&alt=sse` : "?alt=sse";
+    const key = this.apiKey
+      ? `?key=${encodeURIComponent(this.apiKey)}&alt=sse`
+      : "?alt=sse";
     return `${this.baseUrl}/v1beta/models/${encodeURIComponent(this.modelId)}:streamGenerateContent${key}`;
   }
 
@@ -138,7 +147,10 @@ export class GoogleProvider implements LlmProvider {
         if (!parsed || typeof parsed !== "object") continue;
         if (parsed.error && typeof parsed.error === "object") {
           const message = (parsed.error as { message?: unknown }).message;
-          failed = typeof message === "string" ? message.slice(0, 500) : "google stream error";
+          failed =
+            typeof message === "string"
+              ? message.slice(0, 500)
+              : "google stream error";
           break;
         }
         for (const candidate of parsed.candidates ?? []) {
@@ -147,12 +159,13 @@ export class GoogleProvider implements LlmProvider {
               yield { type: "text", text: part.text as string };
             }
             const fn = part.functionCall as
-              | { name?: unknown; args?: unknown }
-              | undefined;
+              { name?: unknown; args?: unknown } | undefined;
             if (fn && typeof fn.name === "string" && fn.name) {
               callIndex += 1;
               const input =
-                fn.args && typeof fn.args === "object" && !Array.isArray(fn.args)
+                fn.args &&
+                typeof fn.args === "object" &&
+                !Array.isArray(fn.args)
                   ? (fn.args as Record<string, unknown>)
                   : {};
               calls.push({ id: `call-${callIndex}`, name: fn.name, input });
@@ -163,7 +176,9 @@ export class GoogleProvider implements LlmProvider {
         if (meta && typeof meta === "object") {
           usage = {
             inputTokens:
-              typeof meta.promptTokenCount === "number" ? meta.promptTokenCount : 0,
+              typeof meta.promptTokenCount === "number"
+                ? meta.promptTokenCount
+                : 0,
             outputTokens:
               typeof meta.candidatesTokenCount === "number"
                 ? meta.candidatesTokenCount

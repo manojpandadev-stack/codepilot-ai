@@ -2,7 +2,13 @@
 // Composer — professional prompt input for the chat view
 // ============================================================================
 
-import { type KeyboardEvent, type ReactNode, useRef } from "react";
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useRef,
+} from "react";
 import {
   IconBolt,
   IconFile,
@@ -65,15 +71,26 @@ function Chip({
       <IconLink size={10} />
     ) : chip.kind === "problems" ? (
       <IconWarning size={10} />
+    ) : chip.kind === "image" ? (
+      <IconFile size={10} />
     ) : (
       <IconFile size={10} />
     );
+  const thumbnail =
+    chip.kind === "image" && chip.preview ? (
+      <img
+        src={chip.preview}
+        alt={chip.label}
+        className="w-5 h-5 rounded object-cover flex-shrink-0"
+      />
+    ) : null;
   return (
     <span
       title={chip.ref ?? chip.label}
       className="inline-flex items-center gap-1 pl-1.5 pr-0.5 py-0.5 rounded-full border border-vscode-border bg-vscode-panel text-[10px] text-vscode-fg max-w-[220px]"
     >
       <span className="text-vscode-text-link flex-shrink-0">{icon}</span>
+      {thumbnail}
       <span className="truncate">{chip.label.replace(/^[^\w]+\s*/, "")}</span>
       <button
         onClick={onRemove}
@@ -103,6 +120,10 @@ export interface ComposerProps {
   onAttachUrl: () => void;
   onAttachProblems: () => void;
   onAttachSelection: () => void;
+  /** Delivers validated-in-browser image payloads (host re-validates). */
+  onImagesSelected: (
+    images: Array<{ name?: string; mime?: string; dataUrl: string }>,
+  ) => void;
   /** Menu selections strip the "@" keyword, then run the attach handler. */
   onPickMention: (attach: () => void) => void;
   onPickSlash: (command: string) => void;
@@ -128,6 +149,7 @@ export interface ComposerProps {
 
 export function Composer(props: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const chips = contextToChips(props.composerContext);
   const slashPrefix = (props.input.match(/\/(\w*)$/) ?? [])[1] ?? "";
   const slashItems: SlashCommandDef[] = props.slashMenuOpen
@@ -144,6 +166,55 @@ export function Composer(props: ComposerProps) {
       e.preventDefault();
       props.onCloseMenus();
       props.onSend();
+    }
+  };
+
+  const readFilesAsDataUrls = (files: FileList | File[]) => {
+    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (list.length === 0) return;
+    const results: Array<{ name?: string; mime?: string; dataUrl: string }> =
+      [];
+    let pending = list.length;
+    const done = () => {
+      pending -= 1;
+      if (pending === 0 && results.length > 0) {
+        props.onImagesSelected(results);
+      }
+    };
+    for (const file of list) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          results.push({
+            name: file.name,
+            mime: file.type || undefined,
+            dataUrl: reader.result,
+          });
+        }
+        done();
+      };
+      reader.onerror = done;
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+    if (files.length > 0) {
+      e.preventDefault();
+      readFilesAsDataUrls(files);
+    }
+  };
+
+  const handleDrop = (e: DragEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+    if (files.length > 0) {
+      e.preventDefault();
+      readFilesAsDataUrls(files);
     }
   };
 
@@ -221,6 +292,11 @@ export function Composer(props: ComposerProps) {
                 props.onAttachSelection,
                 <IconFile size={11} key="s" />,
               ],
+              [
+                "Images…",
+                () => imageInputRef.current?.click(),
+                <IconFile size={11} key="i" />,
+              ],
             ] as Array<[string, () => void, ReactNode]>
           ).map(([label, handler, icon]) => (
             <button
@@ -246,10 +322,26 @@ export function Composer(props: ComposerProps) {
             onChange={(e) => props.onInputChange(e.target.value)}
             onBlur={props.onCloseMenus}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            onDrop={handleDrop}
             placeholder="Describe what you want to do…  (/ for commands, @ for context)"
             aria-label="Chat message"
             rows={2}
             className="w-full text-[13px] px-3 py-2 bg-transparent text-vscode-input-fg placeholder:text-vscode-input-placeholder resize-none focus:outline-none"
+          />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            className="hidden"
+            aria-label="Attach images"
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                readFilesAsDataUrls(e.target.files);
+              }
+              e.target.value = "";
+            }}
           />
           <div className="flex items-center gap-1.5 px-2 pb-1.5">
             {/* Attach */}
@@ -289,6 +381,14 @@ export function Composer(props: ComposerProps) {
                 className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
               >
                 <IconWarning size={13} />
+              </button>
+              <button
+                onClick={() => imageInputRef.current?.click()}
+                aria-label="Attach image(s)"
+                title="Attach image(s) (png, jpeg, webp, gif)"
+                className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
+              >
+                <IconFile size={13} />
               </button>
             </div>
 

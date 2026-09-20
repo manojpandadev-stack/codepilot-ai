@@ -28,13 +28,26 @@ export interface ResumeWireMessage {
     | string
     | Array<
         | { type: "text"; text: string }
-        | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+        | {
+            type: "tool_use";
+            id: string;
+            name: string;
+            input: Record<string, unknown>;
+          }
         | {
             type: "tool_result";
             tool_use_id: string;
             name: string;
             content: string;
             is_error?: boolean;
+          }
+        | {
+            type: "image";
+            mime: string;
+            dataBase64?: string;
+            fileRef?: string;
+            name?: string;
+            sizeBytes?: number;
           }
       >;
   ts?: number;
@@ -43,7 +56,12 @@ export interface ResumeWireMessage {
 /** Text/tool_use blocks allowed in an assistant message. */
 type AssistantBlock =
   | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    };
 
 /** Tool_result blocks live in a following user message (protocol shape). */
 type ToolResultBlock = {
@@ -74,18 +92,53 @@ export function buildInitialMessages(task: PersistedTask): ResumeWireMessage[] {
       // (the TaskStore upsert path writes text blocks for user turns). Read
       // both — a user entry with blocks-only content must NOT become an
       // empty wire message (that breaks role alternation assumptions and
-      // loses the user's words from restored history).
-      const text =
-        entry.text ??
-        (entry.blocks ?? [])
-          .filter((b): b is { type: "text"; text: string } => b.type === "text")
-          .map((b) => b.text)
-          .join("\n");
-      out.push({
-        role: entry.role,
-        content: text,
-        ...(entry.timestampMs ? { ts: entry.timestampMs } : {}),
-      });
+      // loses the user's words from restored history). Image blocks are
+      // preserved verbatim (fileRef form — the host resolves them to bytes
+      // before the provider request).
+      const textBlocks = (entry.blocks ?? []).filter(
+        (b): b is { type: "text"; text: string } => b.type === "text",
+      );
+      const text = entry.text ?? textBlocks.map((b) => b.text).join("\n");
+      const images = (entry.blocks ?? []).filter(
+        (
+          b,
+        ): b is {
+          type: "image";
+          mime: string;
+          fileRef: string;
+          dataBase64?: string;
+          name?: string;
+          sizeBytes?: number;
+        } => b.type === "image",
+      );
+      if (images.length === 0) {
+        out.push({
+          role: entry.role,
+          content: text,
+          ...(entry.timestampMs ? { ts: entry.timestampMs } : {}),
+        });
+      } else {
+        out.push({
+          role: entry.role,
+          content: [
+            ...images.map((b) => ({
+              type: "image" as const,
+              mime: b.mime,
+              // In-memory bytes win when present (hydrated live turn);
+              // otherwise the fileRef the host resolves before requesting.
+              ...(b.dataBase64
+                ? { dataBase64: b.dataBase64 }
+                : b.fileRef
+                  ? { fileRef: b.fileRef }
+                  : {}),
+              ...(b.name ? { name: b.name } : {}),
+              ...(b.sizeBytes !== undefined ? { sizeBytes: b.sizeBytes } : {}),
+            })),
+            ...(text.length > 0 ? [{ type: "text" as const, text }] : []),
+          ],
+          ...(entry.timestampMs ? { ts: entry.timestampMs } : {}),
+        });
+      }
       continue;
     }
     const assistantBlocks: AssistantBlock[] = [];
@@ -98,15 +151,24 @@ export function buildInitialMessages(task: PersistedTask): ResumeWireMessage[] {
         if (b.input !== undefined) {
           try {
             const parsed: unknown = JSON.parse(b.input);
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            if (
+              parsed &&
+              typeof parsed === "object" &&
+              !Array.isArray(parsed)
+            ) {
               input = parsed as Record<string, unknown>;
             }
           } catch {
             // Non-JSON (truncated/plain) — omitted rather than guessed.
           }
         }
-        assistantBlocks.push({ type: "tool_use", id: b.id, name: b.name, input });
-      } else {
+        assistantBlocks.push({
+          type: "tool_use",
+          id: b.id,
+          name: b.name,
+          input,
+        });
+      } else if (b.type === "tool_result") {
         resultBlocks.push({
           type: "tool_result",
           tool_use_id: b.tool_use_id,
@@ -115,6 +177,10 @@ export function buildInitialMessages(task: PersistedTask): ResumeWireMessage[] {
           ...(b.is_error ? { is_error: true } : {}),
         });
       }
+      // Image blocks never belong to assistant entries in CodePilot flows
+      // (host seeds them on user messages only). Anything else here would
+      // be a protocol violation, so it is skipped rather than coerced into
+      // a fabricated tool_result.
     }
     if (assistantBlocks.length > 0) {
       out.push({
@@ -278,7 +344,9 @@ export interface ResumeFidelityInfo {
  * - v2 conversation ending on an assistant entry (mid-response) is PARTIAL.
  * - v2 ending on a clean user boundary is FULL.
  */
-export function classifyResumeFidelity(task: PersistedTask): ResumeFidelityInfo {
+export function classifyResumeFidelity(
+  task: PersistedTask,
+): ResumeFidelityInfo {
   const conv = task.conversation;
   if (!conv || conv.length === 0) {
     return {
@@ -326,7 +394,8 @@ export function planProviderRestore(
   isKnownProvider: (id: string) => boolean,
 ): ResumeProviderPlan {
   const mc = (task.modelConfig ?? {}) as Record<string, unknown>;
-  const taskProvider = typeof mc.providerId === "string" ? mc.providerId : undefined;
+  const taskProvider =
+    typeof mc.providerId === "string" ? mc.providerId : undefined;
   const taskModel = typeof mc.modelId === "string" ? mc.modelId : undefined;
   const notes: string[] = [];
   if (taskProvider && isKnownProvider(taskProvider)) {

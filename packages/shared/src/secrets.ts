@@ -45,7 +45,10 @@ const SECRET_SCRUB_RULES: SecretRule[] = [
   // Leading boundary on sk-: "task-123…" / "flask-server" contain "sk-"
   // as a substring and must never match.
   { pattern: /\bsk-[A-Za-z0-9_-]{8,}/g, replacement: "[REDACTED]" },
-  { pattern: /\b(xox[a-z]?|github_pat)[-_][A-Za-z0-9_-]{16,}\b/g, replacement: "[REDACTED]" },
+  {
+    pattern: /\b(xox[a-z]?|github_pat)[-_][A-Za-z0-9_-]{16,}\b/g,
+    replacement: "[REDACTED]",
+  },
   { pattern: /gh[pousr]_[A-Za-z0-9]{20,}/g, replacement: "[REDACTED]" },
   { pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: "[REDACTED]" },
   {

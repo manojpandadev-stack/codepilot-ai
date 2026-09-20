@@ -15,9 +15,14 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { containsSecretText } from "@codepilot/shared";
+import { containsSecretText, MAX_IMAGE_BYTES } from "@codepilot/shared";
 import { buildInitialMessages } from "./resume.js";
 import type { CompactionArtifact } from "./compaction-types.js";
+
+/** Max staged images kept per task (across turns). */
+export const MAX_STAGED_IMAGES_PER_TASK = 8;
+/** Max bytes per staged image (mirrors the shared validation cap). */
+export const MAX_STAGED_IMAGE_BYTES = MAX_IMAGE_BYTES;
 
 // ============================================================================
 // Types
@@ -60,7 +65,7 @@ export interface PersistedConversationMessage {
   role: "user" | "assistant";
   /** Plain text content. Mutually exclusive with structured `blocks`. */
   text?: string;
-  /** Structured content blocks (tool_use / tool_result / text). */
+  /** Structured content blocks (tool_use / tool_result / text / image). */
   blocks?: Array<
     | { type: "text"; text: string }
     | {
@@ -77,6 +82,24 @@ export interface PersistedConversationMessage {
         /** Bounded result content (redacted on persist). */
         content: string;
         is_error?: boolean;
+      }
+    | {
+        type: "image";
+        mime: string;
+        /**
+         * Task-scoped relative filename (`images/<id>.bin`) — resolved
+         * against the task directory at resume. Inline bytes are NEVER
+         * persisted (keeps the task record bounded; no base64 in JSON).
+         */
+        fileRef: string;
+        /**
+         * Inline bytes for the LIVE request only (in-memory; the persist
+         * path strips this field — see boundConversationEntry).
+         */
+        dataBase64?: string;
+        /** Sanitized display name (never a path). */
+        name?: string;
+        sizeBytes?: number;
       }
   >;
   /**
@@ -225,6 +248,12 @@ function looksLikeEmbeddedSecret(text: string): boolean {
 export class TaskStore {
   private readonly tasksDir: string;
   private readonly options: Required<TaskStoreOptions>;
+  /**
+   * Monotonic mutation clock (see nextWriteMs): Date.now() alone can repeat
+   * within one millisecond, which made newest-first listing depend on
+   * directory read order when tasks are created/updated back-to-back.
+   */
+  private lastWriteMs = 0;
 
   constructor(storageDir: string, options?: TaskStoreOptions) {
     this.tasksDir = storageDir;
@@ -233,7 +262,8 @@ export class TaskStore {
       maxTaskBytes: options?.maxTaskBytes ?? 2 * 1024 * 1024,
       maxConversationEntries:
         options?.maxConversationEntries ?? DEFAULT_MAX_CONVERSATION_ENTRIES,
-      maxToolInputChars: options?.maxToolInputChars ?? DEFAULT_MAX_TOOL_INPUT_CHARS,
+      maxToolInputChars:
+        options?.maxToolInputChars ?? DEFAULT_MAX_TOOL_INPUT_CHARS,
       maxToolOutputChars:
         options?.maxToolOutputChars ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS,
     };
@@ -265,7 +295,7 @@ export class TaskStore {
         -this.options.maxConversationEntries,
       );
     }
-    task.updatedAtMs = Date.now();
+    task.updatedAtMs = this.nextWriteMs();
     await this.write(task);
     return task;
   }
@@ -276,7 +306,7 @@ export class TaskStore {
     modelConfig?: Record<string, unknown>,
     opts?: { workspaceRoot?: string },
   ): Promise<PersistedTask> {
-    const now = Date.now();
+    const now = this.nextWriteMs();
     const task: PersistedTask = {
       id: `task-${now}-${Math.random().toString(36).slice(2, 8)}`,
       createdAtMs: now,
@@ -285,9 +315,7 @@ export class TaskStore {
       title,
       messages: [],
       modelConfig: modelConfig ? redactForPersistence(modelConfig) : undefined,
-      ...(opts?.workspaceRoot
-        ? { workspaceRoot: opts.workspaceRoot }
-        : {}),
+      ...(opts?.workspaceRoot ? { workspaceRoot: opts.workspaceRoot } : {}),
       resumeGeneration: 0,
     };
     await this.write(task);
@@ -313,7 +341,16 @@ export class TaskStore {
       const task = await this.read(entry.slice(0, -5));
       if (task) tasks.push(task);
     }
-    return tasks.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+    // Newest first. Within one process the mutation clock is strictly
+    // monotonic (nextWriteMs), so updatedAtMs is already a total order;
+    // createdAtMs then id break ties for records written by older processes
+    // (pre-fix files, concurrent stores) — never directory read order.
+    return tasks.sort(
+      (a, b) =>
+        b.updatedAtMs - a.updatedAtMs ||
+        b.createdAtMs - a.createdAtMs ||
+        (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+    );
   }
 
   /**
@@ -328,6 +365,15 @@ export class TaskStore {
     id: string,
     role: "user" | "assistant" | "tool" | "system",
     content: string,
+    opts?: {
+      /**
+       * Structured blocks for the v2 conversation entry (e.g. image
+       * fileRefs for an image turn). The legacy text log always records
+       * `content`; when provided, blocks replace the auto-derived text
+       * entry. Image blocks persist fileRefs only (never inline bytes).
+       */
+      blocks?: PersistedConversationMessage["blocks"];
+    },
   ): Promise<PersistedTask | null> {
     const task = await this.read(id);
     if (!task) return null;
@@ -339,7 +385,12 @@ export class TaskStore {
     if (role === "user") {
       if (!task.conversation) task.conversation = [];
       task.conversation.push(
-        this.boundConversationEntry({ role: "user", text: content, timestampMs }),
+        this.boundConversationEntry({
+          role: "user",
+          text: content,
+          timestampMs,
+          ...(opts?.blocks ? { blocks: opts.blocks } : {}),
+        }),
       );
       if (task.conversation.length > this.options.maxConversationEntries) {
         task.conversation = task.conversation.slice(
@@ -347,7 +398,7 @@ export class TaskStore {
         );
       }
     }
-    task.updatedAtMs = Date.now();
+    task.updatedAtMs = this.nextWriteMs();
     await this.write(task);
     return task;
   }
@@ -362,7 +413,7 @@ export class TaskStore {
     if (task.status === "completed" || task.status === "archived") return null;
     task.resumeGeneration = (task.resumeGeneration ?? 0) + 1;
     task.status = "running";
-    task.updatedAtMs = Date.now();
+    task.updatedAtMs = this.nextWriteMs();
     await this.write(task);
     return task;
   }
@@ -384,7 +435,7 @@ export class TaskStore {
     if (task.compactions.length > 20) {
       task.compactions = task.compactions.slice(-20);
     }
-    task.updatedAtMs = Date.now();
+    task.updatedAtMs = this.nextWriteMs();
     await this.write(task);
     return task;
   }
@@ -417,8 +468,9 @@ export class TaskStore {
       task.checkpointIds = patch.checkpointIds;
     if (patch.touchedFiles !== undefined)
       task.touchedFiles = patch.touchedFiles;
-    if (patch.lastStep !== undefined) task.lastStep = patch.lastStep.slice(0, 120);
-    task.updatedAtMs = Date.now();
+    if (patch.lastStep !== undefined)
+      task.lastStep = patch.lastStep.slice(0, 120);
+    task.updatedAtMs = this.nextWriteMs();
     await this.write(task);
     return task;
   }
@@ -462,13 +514,91 @@ export class TaskStore {
     const file = this.taskFile(id);
     try {
       fs.rmSync(file, { force: true });
+      fs.rmSync(this.taskImagesDir(id), { recursive: true, force: true });
       return true;
     } catch {
       return false;
     }
   }
 
+  /**
+   * Staged image attachments for a task.
+   *
+   * Validated, metadata-stripped bytes are written to
+   * `<tasksDir>/<taskId>/images/<random>.bin`; the conversation persists
+   * only the relative `fileRef` (`images/<random>.bin`). Absolute paths
+   * never enter the record, so local filesystem layout cannot leak to the
+   * model. Returns the `fileRef`, or an `{ error }` when bounds reject it.
+   */
+  async stageImage(
+    id: string,
+    image: { mime: string; name: string; sizeBytes: number; bytes: Uint8Array },
+  ): Promise<{ fileRef: string } | { error: string }> {
+    if (image.bytes.length > MAX_STAGED_IMAGE_BYTES) {
+      return { error: "image exceeds per-image size limit" };
+    }
+    const dir = this.taskImagesDir(id);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const existing = fs.readdirSync(dir).filter((f) => f.endsWith(".bin"));
+      if (existing.length >= MAX_STAGED_IMAGES_PER_TASK) {
+        return { error: "task image limit reached" };
+      }
+      const leaf = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}.bin`;
+      const absolute = path.join(dir, leaf);
+      const tmp = `${absolute}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, image.bytes);
+      fs.renameSync(tmp, absolute);
+      return { fileRef: `images/${leaf}` };
+    } catch (err) {
+      return {
+        error: `cannot stage image: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  /**
+   * Read staged image bytes for resume. `fileRef` must be a bare
+   * `images/<name>.bin` leaf — anything else (absolute paths, `..`,
+   * separators) is rejected, and the resolved path must stay inside the
+   * task's images directory. Returns null on any failure.
+   */
+  readStagedImage(id: string, fileRef: string): Uint8Array | null {
+    if (!/^images\/[A-Za-z0-9][A-Za-z0-9._-]{0,64}\.bin$/.test(fileRef)) {
+      return null;
+    }
+    try {
+      const dir = this.taskImagesDir(id);
+      const absolute = path.resolve(dir, path.basename(fileRef));
+      const root = path.resolve(dir) + path.sep;
+      if (!absolute.startsWith(root)) return null;
+      const data = fs.readFileSync(absolute);
+      if (data.length === 0 || data.length > MAX_STAGED_IMAGE_BYTES) {
+        return null;
+      }
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    } catch {
+      return null;
+    }
+  }
+
+  private taskImagesDir(id: string): string {
+    const safe = path.basename(id);
+    return path.join(this.tasksDir, safe, "images");
+  }
+
   // --------------------------------------------------------------------------
+
+  /**
+   * Strictly monotonic mutation timestamp: max(Date.now(), last+1).
+   * Guarantees back-to-back create/update calls never share an updatedAtMs,
+   * so newest-first listing is deterministic within a process.
+   */
+  private nextWriteMs(): number {
+    const now = Date.now();
+    this.lastWriteMs = now > this.lastWriteMs ? now : this.lastWriteMs + 1;
+    return this.lastWriteMs;
+  }
 
   private taskFile(id: string): string {
     // Defensive: ids are generated here, but never allow traversal.
@@ -510,13 +640,17 @@ export class TaskStore {
     if (entry.text !== undefined) {
       bounded.text = entry.text.slice(0, this.options.maxToolOutputChars);
     }
-    if (entry.modelId !== undefined) bounded.modelId = entry.modelId.slice(0, 120);
+    if (entry.modelId !== undefined)
+      bounded.modelId = entry.modelId.slice(0, 120);
     if (entry.providerId !== undefined)
       bounded.providerId = entry.providerId.slice(0, 120);
     if (entry.blocks !== undefined) {
       bounded.blocks = entry.blocks.map((b) => {
         if (b.type === "text") {
-          return { type: "text", text: b.text.slice(0, this.options.maxToolOutputChars) };
+          return {
+            type: "text",
+            text: b.text.slice(0, this.options.maxToolOutputChars),
+          };
         }
         if (b.type === "tool_use") {
           return {
@@ -524,8 +658,34 @@ export class TaskStore {
             id: b.id,
             name: b.name.slice(0, 120),
             ...(b.input !== undefined
-              ? { input: boundedSerialize(b.input, this.options.maxToolInputChars) }
+              ? {
+                  input: boundedSerialize(
+                    b.input,
+                    this.options.maxToolInputChars,
+                  ),
+                }
               : {}),
+          };
+        }
+        if (b.type === "image") {
+          // Persist the file reference ONLY — inline bytes must never reach
+          // disk (task record stays bounded; no base64 in JSON). A block
+          // without a resolvable reference degrades to an honest marker.
+          if (typeof b.fileRef !== "string" || b.fileRef.length === 0) {
+            return {
+              type: "text",
+              text: `[image omitted: ${b.name ?? "unnamed image"} has no persisted reference]`.slice(
+                0,
+                this.options.maxToolOutputChars,
+              ),
+            };
+          }
+          return {
+            type: "image",
+            mime: b.mime.slice(0, 64),
+            fileRef: String(b.fileRef).slice(0, 160),
+            ...(b.name ? { name: b.name.slice(0, 128) } : {}),
+            ...(b.sizeBytes !== undefined ? { sizeBytes: b.sizeBytes } : {}),
           };
         }
         return {

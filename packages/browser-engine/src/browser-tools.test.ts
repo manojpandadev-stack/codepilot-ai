@@ -37,7 +37,13 @@ interface FakeBrowserService {
     sessionId: string,
     url: string,
     signal?: AbortSignal,
-  ) => Promise<{ ok: boolean; url?: string; status?: number; title?: string; error?: string }>;
+  ) => Promise<{
+    ok: boolean;
+    url?: string;
+    status?: number;
+    title?: string;
+    error?: string;
+  }>;
   goBack: () => Promise<{ ok: boolean; url?: string; title?: string }>;
   goForward: () => Promise<{ ok: boolean; url?: string; title?: string }>;
   reload: () => Promise<{ ok: boolean; url?: string; title?: string }>;
@@ -54,14 +60,33 @@ interface FakeBrowserService {
     value: string,
     signal?: AbortSignal,
   ) => Promise<{ ok: boolean; error?: string }>;
-  press: (t: string, s: string, key: string, signal?: AbortSignal) => Promise<{ ok: boolean; error?: string }>;
-  scroll: (t: string, s: string, dx: number, dy: number, signal?: AbortSignal) => Promise<{ ok: boolean; error?: string }>;
-  wait: (t: string, s: string, sel: string | number, signal?: AbortSignal) => Promise<{ ok: boolean; error?: string }>;
+  press: (
+    t: string,
+    s: string,
+    key: string,
+    signal?: AbortSignal,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  scroll: (
+    t: string,
+    s: string,
+    dx: number,
+    dy: number,
+    signal?: AbortSignal,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  wait: (
+    t: string,
+    s: string,
+    sel: string | number,
+    signal?: AbortSignal,
+  ) => Promise<{ ok: boolean; error?: string }>;
   inspect: (
     t: string,
     s: string,
     signal?: AbortSignal,
-  ) => Promise<{ url: string; title: string; text: string; links: string[] } | { ok: false; error: string }>;
+  ) => Promise<
+    | { url: string; title: string; text: string; links: string[] }
+    | { ok: false; error: string }
+  >;
   screenshot: (
     t: string,
     s: string,
@@ -73,8 +98,16 @@ interface FakeBrowserService {
 function makeFakeService() {
   const calls: Array<{ op: string; args: unknown[] }> = [];
   const service: FakeBrowserService = {
-    navigate: async (taskId: string, sessionId: string, url: string, signal?: AbortSignal) => {
-      calls.push({ op: "navigate", args: [taskId, sessionId, url, signal?.aborted] });
+    navigate: async (
+      taskId: string,
+      sessionId: string,
+      url: string,
+      signal?: AbortSignal,
+    ) => {
+      calls.push({
+        op: "navigate",
+        args: [taskId, sessionId, url, signal?.aborted],
+      });
       return { ok: true, url, status: 200, title: "Test Page" };
     },
     goBack: async () => ({ ok: true, url: "https://x.test/", title: "t" }),
@@ -241,7 +274,11 @@ describe("browser tools — execution + M4", () => {
         // via the ApprovalManager, NOT by the presentApproval return value
         // (which the pipeline intentionally ignores; it is fire-and-forget).
         presented = request.approvalId;
-        m4.approvalManager.approve(request.approvalId, "single_execution", "test approve");
+        m4.approvalManager.approve(
+          request.approvalId,
+          "single_execution",
+          "test approve",
+        );
         return { decision: "allow" as const };
       },
     });
@@ -259,7 +296,9 @@ describe("browser tools — execution + M4", () => {
     );
     expect(presented).not.toBeNull();
     expect(result.status).toBe("completed");
-    expect(calls.some((c) => c.op === "click" && c.args[0] === "#submit")).toBe(true);
+    expect(calls.some((c) => c.op === "click" && c.args[0] === "#submit")).toBe(
+      true,
+    );
   });
 
   it("browser_extract redacts secrets from page text", async () => {
@@ -273,7 +312,11 @@ describe("browser tools — execution + M4", () => {
 
   it("schema validation rejects malformed input before M4", async () => {
     const { exec } = setup();
-    const result = await exec.execute("browser_navigate", { url: 42 }, { taskId: "t1" });
+    const result = await exec.execute(
+      "browser_navigate",
+      { url: 42 },
+      { taskId: "t1" },
+    );
     expect(result.status).toBe("failed");
     const missing = await exec.execute("browser_click", {}, { taskId: "t1" });
     expect(missing.status).toBe("failed");
@@ -281,7 +324,11 @@ describe("browser tools — execution + M4", () => {
 
   it("browser_close runs without a live session (idempotent)", async () => {
     const { exec } = setup();
-    const result = await exec.execute("browser_close", {}, { taskId: "no-such-task" });
+    const result = await exec.execute(
+      "browser_close",
+      {},
+      { taskId: "no-such-task" },
+    );
     expect(result.status).toBe("completed");
   });
 });

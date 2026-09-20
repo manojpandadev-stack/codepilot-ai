@@ -10,6 +10,7 @@ export type {
   LlmTextBlock,
   LlmToolUseBlock,
   LlmToolResultBlock,
+  LlmImageBlock,
   LlmContentBlock,
   LlmMessage,
   LlmToolDefinition,
@@ -33,12 +34,13 @@ export type {
   LlmCatalogField,
   LlmCatalogProvider,
 } from "./catalogue.js";
-export { CODEPILOT_PROVIDER_CATALOG } from "./catalogue.js";
+export {
+  CODEPILOT_PROVIDER_CATALOG,
+  modelSupportsVision,
+} from "./catalogue.js";
 export { OllamaProvider, OLLAMA_DEFAULT_BASE_URL } from "./providers/ollama.js";
 export { splitThinking } from "./providers/ollama.js";
-export {
-  OpenAICompatibleProvider,
-} from "./providers/openai-compatible.js";
+export { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 export type { OpenAICompatibleOptions } from "./providers/openai-compatible.js";
 export { OpenAIProvider, OPENAI_DEFAULT_BASE_URL } from "./providers/openai.js";
 export {

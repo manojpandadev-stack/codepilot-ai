@@ -10,9 +10,7 @@
 
 import type { LlmProvider, LlmProviderOptions } from "./types.js";
 import { OllamaProvider, OLLAMA_DEFAULT_BASE_URL } from "./providers/ollama.js";
-import {
-  OpenAICompatibleProvider,
-} from "./providers/openai-compatible.js";
+import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 import { OpenAIProvider, OPENAI_DEFAULT_BASE_URL } from "./providers/openai.js";
 import {
   OpenRouterProvider,
@@ -66,8 +64,7 @@ export function createLlmProvider(options: LlmProviderOptions): LlmProvider {
   if (!options.modelId) {
     throw new Error(`provider "${canonical}" requires modelId`);
   }
-  const baseUrl =
-    options.baseUrl?.trim() || defaultBaseUrlFor(canonical) || "";
+  const baseUrl = options.baseUrl?.trim() || defaultBaseUrlFor(canonical) || "";
   const resolved: LlmProviderOptions = { ...options, baseUrl };
   switch (canonical) {
     case "ollama":
@@ -86,9 +83,7 @@ export function createLlmProvider(options: LlmProviderOptions): LlmProvider {
     case "openai-compatible":
     case "custom":
       if (!resolved.baseUrl) {
-        throw new Error(
-          `provider "${canonical}" requires an explicit baseUrl`,
-        );
+        throw new Error(`provider "${canonical}" requires an explicit baseUrl`);
       }
       return new OpenAICompatibleProvider(resolved);
     default:

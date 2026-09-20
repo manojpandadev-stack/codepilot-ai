@@ -47,7 +47,10 @@ function TurnRow({ turn }: { turn: ContinuityTurnView }) {
         <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[9px] text-vscode-desc">
           <span>{new Date(turn.createdAtMs).toLocaleString()}</span>
           {turn.compacted && (
-            <Badge tone="info" title="Earlier context in this turn was compacted">
+            <Badge
+              tone="info"
+              title="Earlier context in this turn was compacted"
+            >
               optimized
             </Badge>
           )}
@@ -80,7 +83,11 @@ export interface ContinuityBarProps {
   onReset: () => void;
 }
 
-export function ContinuityBar({ state, isRunning, onReset }: ContinuityBarProps) {
+export function ContinuityBar({
+  state,
+  isRunning,
+  onReset,
+}: ContinuityBarProps) {
   const [expanded, setExpanded] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const turns = state?.turns ?? [];
@@ -107,7 +114,8 @@ export function ContinuityBar({ state, isRunning, onReset }: ContinuityBarProps)
             className="flex items-center gap-1 text-[11px] text-vscode-fg hover:text-vscode-text-link min-w-0"
           >
             <span className="truncate">
-              Continuing conversation · {chainLength} turn{chainLength === 1 ? "" : "s"}
+              Continuing conversation · {chainLength} turn
+              {chainLength === 1 ? "" : "s"}
             </span>
             <IconChevron
               size={11}

@@ -153,7 +153,15 @@ export class TerminalSession {
 
   /** Spawn the session process. Throws when spawn fails. */
   start(): TerminalSession {
-    const { command, args = [], cwd, env, timeoutMs, signal, stdin } = this.options;
+    const {
+      command,
+      args = [],
+      cwd,
+      env,
+      timeoutMs,
+      signal,
+      stdin,
+    } = this.options;
     if (typeof command !== "string" || command.trim().length === 0) {
       throw new Error("TerminalSession.start: command is required");
     }
@@ -165,7 +173,9 @@ export class TerminalSession {
       windowsHide: true,
       // Shell mode keeps a stdin pipe open so the shell reads the script
       // from stdin (PowerShell source travels there — never the command line).
-      ...(stdin !== undefined ? { stdio: ["pipe", "pipe", "pipe"] as const } : {}),
+      ...(stdin !== undefined
+        ? { stdio: ["pipe", "pipe", "pipe"] as const }
+        : {}),
     });
     this.child = child;
     this.status = "running";

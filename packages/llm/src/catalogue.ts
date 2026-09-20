@@ -58,7 +58,8 @@ const apiKeyField = (label: string): LlmCatalogField => ({
   label,
   type: "password",
   placeholder: "Enter API key...",
-  description: "API key issued by the provider. Stored in OS secret storage only.",
+  description:
+    "API key issued by the provider. Stored in OS secret storage only.",
 });
 
 const baseUrlField = (placeholder: string): LlmCatalogField => ({
@@ -87,9 +88,7 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
     env: [],
     client: "ollama",
     metadata: {
-      configFields: [
-        baseUrlField("http://localhost:11434"),
-      ],
+      configFields: [baseUrlField("http://localhost:11434")],
     },
     models: {
       "qwen3:8b": {
@@ -392,3 +391,55 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
     },
   },
 ];
+
+/** Capability keys that mean "this model accepts image input". */
+const VISION_CAPABILITY_KEYS: readonly string[] = ["images", "vision"];
+
+function capabilitiesIncludeVision(
+  capabilities: readonly string[] | undefined,
+): boolean {
+  if (!capabilities) return false;
+  return capabilities.some((c) => VISION_CAPABILITY_KEYS.includes(c));
+}
+
+/**
+ * Whether a provider/model pair is known to accept image input, per the
+ * curated catalogue.
+ *
+ * - A model explicitly listed in the catalogue decides by its own
+ *   capabilities (vision keys: "images" or "vision").
+ * - Local runtimes (Ollama, LM Studio) serve whatever the user installed:
+ *   unlisted models are unknowable statically → `undefined` (live discovery
+ *   and the server own the truth).
+ * - Generic bring-your-own endpoints (`openai-compatible`, `custom`,
+ *   legacy `openai`) accept any model by construction → `undefined`.
+ * - Any other catalogued provider falls back to its provider-level
+ *   capabilities (`false` when vision is absent).
+ * - Unknown provider ids → `undefined`.
+ *
+ * Callers treat `false` as fail-closed (clear capability error) and
+ * `undefined` as unknowable (allowed; server errors surface naturally).
+ */
+export function modelSupportsVision(
+  providerId: string,
+  modelId: string,
+): boolean | undefined {
+  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === providerId);
+  if (!provider) return undefined;
+  const model = provider.models?.[modelId];
+  if (model?.capabilities !== undefined) {
+    return capabilitiesIncludeVision(model.capabilities);
+  }
+  if (providerId === "ollama" || providerId === "lmstudio") return undefined;
+  if (
+    providerId === "openai-compatible" ||
+    providerId === "custom" ||
+    providerId === "openai"
+  ) {
+    return undefined;
+  }
+  if (provider.capabilities !== undefined) {
+    return capabilitiesIncludeVision(provider.capabilities);
+  }
+  return undefined;
+}

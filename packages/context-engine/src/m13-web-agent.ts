@@ -221,18 +221,26 @@ export class WebAgent {
     });
     if (!guard.ok) {
       const msg = guard.error ?? "blocked";
-      if (/private|local|loopback|link-local|multicast|reserved|metadata|unspecified|documentation|carrier-grade-nat|numeric IP|forbidden|allow-list|denied|DNS/i.test(msg)) {
+      if (
+        /private|local|loopback|link-local|multicast|reserved|metadata|unspecified|documentation|carrier-grade-nat|numeric IP|forbidden|allow-list|denied|DNS/i.test(
+          msg,
+        )
+      ) {
         return { ok: false, error: `navigation blocked: ${msg}` };
       }
       if (/protocol/i.test(msg)) return { ok: false, error: msg };
-      if (/redirect/i.test(msg)) return { ok: false, error: `redirect blocked for security: ${msg}` };
+      if (/redirect/i.test(msg))
+        return { ok: false, error: `redirect blocked for security: ${msg}` };
       return { ok: false, error: `fetch failed: ${msg}` };
     }
 
     const rawContent = `URL: ${guard.finalUrl}\n\n${guard.text ?? ""}`;
     const first = { content: rawContent, metadata: { rawHtml: guard.rawHtml } };
     const textContent = first?.content ?? "";
-    if (textContent.startsWith("Error:") || textContent.startsWith("URL: ") === false) {
+    if (
+      textContent.startsWith("Error:") ||
+      textContent.startsWith("URL: ") === false
+    ) {
       // fetchUrlContent surfaces failures as Error text or non-URL payloads.
       const message = textContent.startsWith("Error:")
         ? textContent.slice(7).trim()
@@ -244,9 +252,13 @@ export class WebAgent {
     }
     // Strip the "URL: <url>" prefix fetchUrlContent prepends.
     const bodyStart = textContent.indexOf("\n\n");
-    const body = bodyStart >= 0 ? textContent.slice(bodyStart + 2) : textContent;
+    const body =
+      bodyStart >= 0 ? textContent.slice(bodyStart + 2) : textContent;
 
-    const raw = typeof first.metadata?.rawHtml === "string" ? (first.metadata.rawHtml as string) : "";
+    const raw =
+      typeof first.metadata?.rawHtml === "string"
+        ? (first.metadata.rawHtml as string)
+        : "";
     const html = raw;
     const finalUrl = guard.finalUrl;
     const links = html ? extractLinks(html, finalUrl) : [];

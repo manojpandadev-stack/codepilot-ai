@@ -107,6 +107,7 @@ import {
   createEmptyComposerContext,
   addFileEntriesToContext,
   addFolderEntriesToContext,
+  addImagesToContext,
   addUrlToContext,
   setProblemsInContext,
   setSelectionInContext,
@@ -2117,6 +2118,10 @@ export function App() {
     null,
   );
   const [models, setModels] = useState<ModelInfoLite[]>([]);
+  // True while a model list is in flight (initial load, refresh, provider
+  // switch). Cleared on every model-bearing response so the selector shows
+  // loading feedback instead of a stale "No models" empty state.
+  const [modelsLoading, setModelsLoading] = useState(true);
   // Provider catalogue state (authoritative list comes from the host).
   // NOTE: the legacy 4-entry `provider/list` state was removed — `catalog`
   // (from provider/catalog, derived from @codepilot/model-gateway) is the
@@ -2138,7 +2143,9 @@ export function App() {
   // M12 v5 continuity: validated host snapshot of the active turn chain.
   // Null until the first `continuity/state` arrives; malformed snapshots
   // never replace the previous state (fail-safe display).
-  const [continuity, setContinuity] = useState<ContinuityStateView | null>(null);
+  const [continuity, setContinuity] = useState<ContinuityStateView | null>(
+    null,
+  );
   const lastDiffActionRef = useRef<{ kind: DiffResultKind } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   // Mirrors selectedTaskId for use inside the (long-lived) message listener
@@ -2255,10 +2262,7 @@ export function App() {
                     // Command tools: surface the bounded final output as the
                     // expandable detail (today nothing sets it, so terminal
                     // output was invisible after completion).
-                    ...terminalCompletionDetail(
-                      e.name,
-                      msg.payload.output,
-                    ),
+                    ...terminalCompletionDetail(e.name, msg.payload.output),
                   }
                 : e,
             ),
@@ -2409,6 +2413,7 @@ export function App() {
           ) {
             const incoming = normalizeModelList(pm.models);
             setModels(incoming);
+            setModelsLoading(false);
             // Model validation on provider switch: if the persisted model is
             // not offered by the new provider, fall back to its default.
             const current = settingsRef.current.model;
@@ -2429,6 +2434,7 @@ export function App() {
         }
         case "model/list":
           setModels(normalizeModelList(msg.payload));
+          setModelsLoading(false);
           break;
         case "tools/list_result":
           setToolRegistry(normalizeToolList(msg.payload));
@@ -3760,6 +3766,16 @@ export function App() {
     sendMessage("context/selection", {});
   }, []);
 
+  const handleImagesSelected = useCallback(
+    (images: Array<{ name?: string; mime?: string; dataUrl: string }>) => {
+      setMentionMenuOpen(false);
+      // Stored as structured metadata + thumbnail chips; the host validates
+      // magic bytes, size, and metadata before anything reaches the model.
+      setComposerContext((prev) => addImagesToContext(prev, images));
+    },
+    [],
+  );
+
   const handleStop = useCallback(() => {
     sendMessage("agent/stop", {});
     // RUNNING → STOPPED: release the UI immediately and invalidate the current
@@ -3837,6 +3853,7 @@ export function App() {
     // Clear the model list immediately: the old provider's models must never
     // linger under the new provider (prevents stale model selection).
     setModels([]);
+    setModelsLoading(true);
     // Ask the host for the new provider's models; the response handler is
     // provider-tagged so a slow earlier response cannot overwrite a newer one.
     sendMessage("provider/models", { providerId });
@@ -4113,6 +4130,7 @@ export function App() {
                   onAttachUrl={handleAttachUrl}
                   onAttachProblems={handleAttachProblems}
                   onAttachSelection={handleAttachSelection}
+                  onImagesSelected={handleImagesSelected}
                   onPickMention={(attach) => {
                     closeMentionMenuAndStripKeyword();
                     attach();
@@ -4127,7 +4145,7 @@ export function App() {
                   }
                   settings={settings}
                   models={models}
-                  modelsLoading={false}
+                  modelsLoading={modelsLoading}
                   onModeChange={(mode) => {
                     setSettings((s) => ({ ...s, agentMode: mode }));
                     sendMessage("settings/set", {
@@ -4139,7 +4157,10 @@ export function App() {
                     setSettings((s) => ({ ...s, model }));
                     sendMessage("settings/set", { key: "model", value: model });
                   }}
-                  onRefreshModels={() => sendMessage("model/list", {})}
+                  onRefreshModels={() => {
+                    setModelsLoading(true);
+                    sendMessage("model/list", {});
+                  }}
                   usage={usage}
                   autoApproval={autoApproval}
                 />
@@ -5073,8 +5094,8 @@ export function App() {
               </div>
 
               <div className="text-[10px] text-vscode-desc">
-                Only ACTIVE skills join the next prompt (bounded context). Skills
-                are repository content — they cannot bypass M4, disable
+                Only ACTIVE skills join the next prompt (bounded context).
+                Skills are repository content — they cannot bypass M4, disable
                 approval, or execute code.
               </div>
 
@@ -5127,7 +5148,9 @@ export function App() {
                             {s.name}
                           </span>
                           <span
-                            title={s.enabled ? "Active — in next prompt" : "Inactive"}
+                            title={
+                              s.enabled ? "Active — in next prompt" : "Inactive"
+                            }
                             className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${
                               s.enabled
                                 ? "bg-green-900 text-green-200 border-green-700"
@@ -5191,8 +5214,8 @@ export function App() {
                 <div className="rounded-md border border-vscode-warning-fg/40 bg-vscode-warning-fg/5 px-2.5 py-1.5">
                   <div className="text-[11px] font-semibold text-vscode-warning-fg mb-1">
                     {skillsSkipped.length} file
-                    {skillsSkipped.length === 1 ? "" : "s"} skipped by validation
-                    — fix the file, then Refresh
+                    {skillsSkipped.length === 1 ? "" : "s"} skipped by
+                    validation — fix the file, then Refresh
                   </div>
                   {skillsSkipped.map((m, i) => (
                     <div

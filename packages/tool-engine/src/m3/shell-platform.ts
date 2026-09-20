@@ -10,7 +10,13 @@
  *     - win32  → "powershell" (WindowsApps/PowerShell execution alias; the
  *       probe lives in the consumer test, which asserts the resolved default
  *       is a real shell on the current machine)
- *     - linux/darwin → `$SHELL` if set, else /bin/bash
+ *     - linux/darwin → basename of `$SHELL` if set, else "bash"
+ *       (always a bare name resolved through PATH — see contract below)
+ *
+ *   Contract: the default is a *bare shell name* ("powershell", "bash", …)
+ *   resolved through PATH at spawn time — never an absolute path — so the
+ *   same logical value works across machines and platforms (and so the
+ *   invocation builder can key shell kind off the basename safely).
  *
  *   `getShellInvocation(shell, command)` → `{ command, args, input? }`:
  *     - powershell family → spawn `powershell` with a UTF-8 bootstrap that
@@ -36,7 +42,9 @@ export type ShellKind = "powershell" | "cmd" | "wsl" | "posix";
 
 /** Classify a shell executable (bare name or full path) into its family. */
 export function getShellKind(shell: string): ShellKind {
-  const base = (shell.split(/[\\/]/).pop() ?? shell).toLowerCase().replace(/\.exe$/, "");
+  const base = (shell.split(/[\\/]/).pop() ?? shell)
+    .toLowerCase()
+    .replace(/\.exe$/, "");
   if (base === "powershell" || base === "pwsh") return "powershell";
   if (base === "cmd") return "cmd";
   if (base === "wsl") return "wsl";
@@ -51,8 +59,12 @@ export function getDefaultShell(platform: string): string {
     return "powershell";
   }
   const shell = process.env.SHELL;
-  if (shell && shell.trim().length > 0) return shell;
-  return "/bin/bash";
+  if (shell && shell.trim().length > 0) {
+    // Contract: bare shell name (resolved via PATH), not an absolute path.
+    const base = shell.split("/").pop() ?? shell;
+    return base.length > 0 ? base : "bash";
+  }
+  return "bash";
 }
 
 /** UTF-8 bootstrap: script arrives via stdin; exit code propagates. */
@@ -67,12 +79,20 @@ const POWERSHELL_STDIN_BOOTSTRAP =
  * Build the invocation (executable + args + optional stdin payload) that
  * runs `command` under `shell`.
  */
-export function getShellInvocation(shell: string, command: string): ShellInvocation {
+export function getShellInvocation(
+  shell: string,
+  command: string,
+): ShellInvocation {
   switch (getShellKind(shell)) {
     case "powershell":
       return {
         command: shell,
-        args: ["-NoProfile", "-NonInteractive", "-Command", POWERSHELL_STDIN_BOOTSTRAP],
+        args: [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          POWERSHELL_STDIN_BOOTSTRAP,
+        ],
         input: command,
       };
     case "cmd":
@@ -84,7 +104,10 @@ export function getShellInvocation(shell: string, command: string): ShellInvocat
       const base = shell.split("/").pop() ?? shell;
       // sh/dash don't support -l meaningfully; everything else gets a login
       // shell so the user's profile environment is inherited.
-      const args = base === "sh" || base === "dash" ? ["-c", command] : ["-l", "-c", command];
+      const args =
+        base === "sh" || base === "dash"
+          ? ["-c", command]
+          : ["-l", "-c", command];
       return { command: shell, args };
     }
   }

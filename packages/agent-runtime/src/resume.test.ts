@@ -53,8 +53,18 @@ describe("verbatim resume — reconstruction", () => {
       role: "assistant",
       blocks: [
         { type: "text", text: "I will read the files." },
-        { type: "tool_use", id: "call_1", name: "read_file", input: '{"path":"a.ts"}' },
-        { type: "tool_result", tool_use_id: "call_1", name: "read_file", content: "file body" },
+        {
+          type: "tool_use",
+          id: "call_1",
+          name: "read_file",
+          input: '{"path":"a.ts"}',
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "call_1",
+          name: "read_file",
+          content: "file body",
+        },
       ],
       timestampMs: Date.now(),
     });
@@ -62,7 +72,10 @@ describe("verbatim resume — reconstruction", () => {
     expect(reloaded).not.toBeNull();
     const msgs = buildInitialMessages(reloaded!);
     expect(msgs.length).toBe(3);
-    expect(msgs[0]).toMatchObject({ role: "user", content: "Inspect the project" });
+    expect(msgs[0]).toMatchObject({
+      role: "user",
+      content: "Inspect the project",
+    });
     expect(msgs[1]).toMatchObject({ role: "assistant" });
     const blocks = msgs[1]!.content as Array<{ type: string }>;
     expect(blocks.map((b) => b.type)).toEqual(["text", "tool_use"]);
@@ -89,8 +102,64 @@ describe("verbatim resume — reconstruction", () => {
     const reloaded = (await store.get(task.id))!;
     const msgs = buildInitialMessages(reloaded);
     expect(
-      msgs.map((m) => (typeof m.content === "string" ? m.content : (m.content[0] as { text?: string }).text)),
+      msgs.map((m) =>
+        typeof m.content === "string"
+          ? m.content
+          : (m.content[0] as { text?: string }).text,
+      ),
     ).toEqual(["first", "reply A", "second", "reply B"]);
+  });
+
+  it("2b. preserves image blocks on user entries (fileRef form)", async () => {
+    const task = await store.create("Image resume");
+    await store.upsertConversationEntry(task.id, "run-img", {
+      role: "user",
+      timestampMs: 3,
+      blocks: [
+        {
+          type: "image",
+          mime: "image/png",
+          fileRef: "images/abc123.bin",
+          name: "shot.png",
+          sizeBytes: 1200,
+        },
+        { type: "text", text: "what is this?" },
+      ],
+    });
+    const reloaded = (await store.get(task.id))!;
+    const msgs = buildInitialMessages(reloaded);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.role).toBe("user");
+    const content = msgs[0]!.content as Array<{ type: string }>;
+    // Images first (deterministic provider ordering), then text.
+    expect(content.map((b) => b.type)).toEqual(["image", "text"]);
+    expect(content[0]).toMatchObject({
+      mime: "image/png",
+      fileRef: "images/abc123.bin",
+    });
+    // No inline bytes leak into the persisted/resumed form.
+    expect(JSON.stringify(msgs)).not.toContain("dataBase64");
+  });
+
+  it("2c. image-only user entries still seed (no empty message)", async () => {
+    const task = await store.create("Image only");
+    await store.upsertConversationEntry(task.id, "run-img2", {
+      role: "user",
+      timestampMs: 4,
+      blocks: [
+        {
+          type: "image",
+          mime: "image/jpeg",
+          fileRef: "images/def456.bin",
+        },
+      ],
+    });
+    const reloaded = (await store.get(task.id))!;
+    const msgs = buildInitialMessages(reloaded);
+    expect(msgs).toHaveLength(1);
+    expect(
+      (msgs[0]!.content as Array<{ type: string }>).map((b) => b.type),
+    ).toEqual(["image"]);
   });
 
   it("3. parses bounded tool inputs back to objects; non-JSON omitted (not guessed)", async () => {
@@ -98,8 +167,18 @@ describe("verbatim resume — reconstruction", () => {
     await store.upsertConversationEntry(task.id, "run-1", {
       role: "assistant",
       blocks: [
-        { type: "tool_use", id: "c1", name: "search", input: '{"query":"foo","limit":5}' },
-        { type: "tool_use", id: "c2", name: "broken", input: "not json at all…" },
+        {
+          type: "tool_use",
+          id: "c1",
+          name: "search",
+          input: '{"query":"foo","limit":5}',
+        },
+        {
+          type: "tool_use",
+          id: "c2",
+          name: "broken",
+          input: "not json at all…",
+        },
         { type: "tool_use", id: "c3", name: "noinput" },
       ],
       timestampMs: Date.now(),
@@ -111,7 +190,10 @@ describe("verbatim resume — reconstruction", () => {
       id?: string;
       input?: Record<string, unknown>;
     }>;
-    expect(blocks[0]).toMatchObject({ id: "c1", input: { query: "foo", limit: 5 } });
+    expect(blocks[0]).toMatchObject({
+      id: "c1",
+      input: { query: "foo", limit: 5 },
+    });
     expect(blocks.find((b) => b.id === "c2")!.input).toEqual({});
     expect(blocks.find((b) => b.id === "c3")!.input).toEqual({});
   });
@@ -163,7 +245,11 @@ describe("verbatim resume — fidelity classification", () => {
       messages: [],
       conversation: [
         { role: "user", text: "go", timestampMs: 1 },
-        { role: "assistant", blocks: [{ type: "text", text: "working…" }], timestampMs: 2 },
+        {
+          role: "assistant",
+          blocks: [{ type: "text", text: "working…" }],
+          timestampMs: 2,
+        },
       ],
     };
     expect(classifyResumeFidelity(t).fidelity).toBe("PARTIAL");
@@ -179,7 +265,11 @@ describe("verbatim resume — fidelity classification", () => {
       messages: [],
       conversation: [
         { role: "user", text: "go", timestampMs: 1 },
-        { role: "assistant", blocks: [{ type: "text", text: "done" }], timestampMs: 2 },
+        {
+          role: "assistant",
+          blocks: [{ type: "text", text: "done" }],
+          timestampMs: 2,
+        },
         { role: "user", text: "now do the rest", timestampMs: 3 },
       ],
     };
@@ -200,9 +290,16 @@ describe("verbatim resume — provider restoration", () => {
   it("4. task provider/model win when the provider is known", () => {
     const task: PersistedTask = {
       ...base,
-      modelConfig: { providerId: "openrouter", modelId: "nvidia/nemotron-3.5-lightning:free" },
+      modelConfig: {
+        providerId: "openrouter",
+        modelId: "nvidia/nemotron-3.5-lightning:free",
+      },
     };
-    const plan = planProviderRestore(task, "ollama", (id) => id === "openrouter");
+    const plan = planProviderRestore(
+      task,
+      "ollama",
+      (id) => id === "openrouter",
+    );
     expect(plan).toMatchObject({
       providerId: "openrouter",
       modelId: "nvidia/nemotron-3.5-lightning:free",
@@ -304,10 +401,16 @@ describe("verbatim resume — store mechanics", () => {
   });
 
   it("8. corrupt task file is quarantined, listing stays functional", async () => {
-    fs.writeFileSync(path.join(dir, "task-888-corrupt.json"), "{ broken", "utf8");
+    fs.writeFileSync(
+      path.join(dir, "task-888-corrupt.json"),
+      "{ broken",
+      "utf8",
+    );
     const loaded = await store.get("task-888-corrupt");
     expect(loaded).toBeNull();
-    expect(fs.existsSync(path.join(dir, "task-888-corrupt.json.corrupt"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "task-888-corrupt.json.corrupt"))).toBe(
+      true,
+    );
     const all = await store.list();
     expect(all.every((t) => t.id !== "task-888-corrupt")).toBe(true);
   });
@@ -359,7 +462,13 @@ describe("verbatim resume — wire invariants", () => {
           { type: "tool_use", id: "a", name: "t1", input: "{}" },
           { type: "tool_result", tool_use_id: "a", name: "t1", content: "ok" },
           { type: "tool_use", id: "b", name: "t2", input: "{}" },
-          { type: "tool_result", tool_use_id: "b", name: "t2", content: "err", is_error: true },
+          {
+            type: "tool_result",
+            tool_use_id: "b",
+            name: "t2",
+            content: "err",
+            is_error: true,
+          },
         ],
         timestampMs: 1,
       });

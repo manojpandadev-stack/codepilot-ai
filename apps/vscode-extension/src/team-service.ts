@@ -69,12 +69,7 @@ function isTeamRole(value: unknown): value is TeamRole {
 // ============================================================================
 
 export type TeamStatus =
-  | "idle"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "interrupted";
+  "idle" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
 export type TeamMode = "plan" | "act" | "review";
 
@@ -225,7 +220,8 @@ export function buildTeamAgentConfig(
       if (!bridge) {
         return {
           approved: false,
-          reason: "Permission pipeline unavailable — team tool execution blocked for safety",
+          reason:
+            "Permission pipeline unavailable — team tool execution blocked for safety",
         };
       }
       const decision = await bridge.evaluateLiveTool({
@@ -269,13 +265,17 @@ function clean(value: unknown, max: number): string {
 export function validateTeamFiles(
   files: unknown,
 ): { ok: true; files: string[] } | { ok: false; error: string } {
-  if (!Array.isArray(files)) return { ok: false, error: "files must be an array" };
-  if (files.length > 20) return { ok: false, error: "at most 20 files per entry" };
+  if (!Array.isArray(files))
+    return { ok: false, error: "files must be an array" };
+  if (files.length > 20)
+    return { ok: false, error: "at most 20 files per entry" };
   const out: string[] = [];
   for (const f of files) {
-    if (typeof f !== "string") return { ok: false, error: "file paths must be strings" };
+    if (typeof f !== "string")
+      return { ok: false, error: "file paths must be strings" };
     const norm = f.replace(/\\/g, "/").trim();
-    if (!norm || norm.length > 500) return { ok: false, error: `invalid file path: '${f}'` };
+    if (!norm || norm.length > 500)
+      return { ok: false, error: `invalid file path: '${f}'` };
     if (norm.startsWith("/") || /^[a-zA-Z]:\//.test(norm)) {
       return { ok: false, error: `absolute paths are not allowed: '${f}'` };
     }
@@ -340,7 +340,8 @@ function newRunId(): string {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const CHANGED_FILE_PATTERN = /(?:Modified|Changed|Created|Updated)\s+([^\s]+\.\w+)/gi;
+const CHANGED_FILE_PATTERN =
+  /(?:Modified|Changed|Created|Updated)\s+([^\s]+\.\w+)/gi;
 
 export class TeamService {
   private readonly taskStore: TaskStore;
@@ -390,12 +391,17 @@ export class TeamService {
   ): Promise<{ ok: true; team: TeamView } | { ok: false; errors: string[] }> {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
     const rawObjective = typeof objective === "string" ? objective : "";
-    if (!rawObjective.trim()) return { ok: false, errors: ["objective is required"] };
+    if (!rawObjective.trim())
+      return { ok: false, errors: ["objective is required"] };
     if (rawObjective.trim().length > 2000) {
-      return { ok: false, errors: ["objective must be at most 2000 characters"] };
+      return {
+        ok: false,
+        errors: ["objective must be at most 2000 characters"],
+      };
     }
     const cleanObjective = clean(objective, 2000);
-    if (!cleanObjective) return { ok: false, errors: ["objective is required"] };
+    if (!cleanObjective)
+      return { ok: false, errors: ["objective is required"] };
 
     // Roles: explicit selection or M14 classification (production default).
     let roles: TeamRole[];
@@ -438,7 +444,11 @@ export class TeamService {
 
     let mode: TeamMode = "act";
     if (options?.mode !== undefined) {
-      if (options.mode !== "plan" && options.mode !== "act" && options.mode !== "review") {
+      if (
+        options.mode !== "plan" &&
+        options.mode !== "act" &&
+        options.mode !== "review"
+      ) {
         return { ok: false, errors: ["mode must be plan | act | review"] };
       }
       mode = options.mode;
@@ -447,13 +457,24 @@ export class TeamService {
     // Optional per-role file declarations (workspace-relative only).
     const filesByRole: Partial<Record<TeamRole, string[]>> = {};
     if (options?.filesByRole !== undefined) {
-      if (!options.filesByRole || typeof options.filesByRole !== "object" || Array.isArray(options.filesByRole)) {
+      if (
+        !options.filesByRole ||
+        typeof options.filesByRole !== "object" ||
+        Array.isArray(options.filesByRole)
+      ) {
         return { ok: false, errors: ["filesByRole must be an object"] };
       }
       for (const [role, files] of Object.entries(options.filesByRole)) {
-        if (!isTeamRole(role)) return { ok: false, errors: [`unknown role in filesByRole: ${role}`] };
+        if (!isTeamRole(role))
+          return {
+            ok: false,
+            errors: [`unknown role in filesByRole: ${role}`],
+          };
         if (!roles.includes(role)) {
-          return { ok: false, errors: [`files declared for unselected role: ${role}`] };
+          return {
+            ok: false,
+            errors: [`files declared for unselected role: ${role}`],
+          };
         }
         const validated = validateTeamFiles(files);
         if (!validated.ok) return { ok: false, errors: [validated.error] };
@@ -496,9 +517,16 @@ export class TeamService {
     };
     let record;
     try {
-      record = await this.taskStore.create(`[team] ${cleanObjective.slice(0, 120)}`);
+      record = await this.taskStore.create(
+        `[team] ${cleanObjective.slice(0, 120)}`,
+      );
     } catch (err) {
-      return { ok: false, errors: [`persistence unavailable: ${err instanceof Error ? err.message : String(err)}`] };
+      return {
+        ok: false,
+        errors: [
+          `persistence unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        ],
+      };
     }
     this.rememberRecord(teamId, record.id);
     await this.taskStore.update(record.id, {
@@ -524,7 +552,11 @@ export class TeamService {
       completedCount: 0,
       failedCount: 0,
     };
-    this.emit({ type: "team/created", teamId, message: `Team created (${roles.length} roles)` });
+    this.emit({
+      type: "team/created",
+      teamId,
+      message: `Team created (${roles.length} roles)`,
+    });
     return { ok: true, team };
   }
 
@@ -535,7 +567,8 @@ export class TeamService {
     options?: { mode?: unknown },
   ): Promise<{ ok: true; team: TeamView } | { ok: false; errors: string[] }> {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidTeamId(teamId)) return { ok: false, errors: ["invalid team id"] };
+    if (!isValidTeamId(teamId))
+      return { ok: false, errors: ["invalid team id"] };
     const stored = await this.readTeamState(teamId);
     if (!stored) return { ok: false, errors: [`unknown team: ${teamId}`] };
     if (stored.status === "running" || this.runs.has(teamId)) {
@@ -544,7 +577,11 @@ export class TeamService {
 
     let mode: TeamMode = stored.mode;
     if (options?.mode !== undefined) {
-      if (options.mode !== "plan" && options.mode !== "act" && options.mode !== "review") {
+      if (
+        options.mode !== "plan" &&
+        options.mode !== "act" &&
+        options.mode !== "review"
+      ) {
         return { ok: false, errors: ["mode must be plan | act | review"] };
       }
       mode = options.mode;
@@ -577,7 +614,12 @@ export class TeamService {
     stored.mode = mode;
     await this.persistTeamState(teamId, stored);
 
-    this.emit({ type: "team/started", teamId, runId, message: "Team run started" });
+    this.emit({
+      type: "team/started",
+      teamId,
+      runId,
+      message: "Team run started",
+    });
     void this.runInBackground(teamId, run, stored, stored.objective);
     const view = await this.getTeam(teamId);
     if (!view) return { ok: false, errors: ["team vanished during start"] };
@@ -591,7 +633,8 @@ export class TeamService {
     options?: { runId?: unknown },
   ): Promise<{ ok: true; team: TeamView } | { ok: false; errors: string[] }> {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidTeamId(teamId)) return { ok: false, errors: ["invalid team id"] };
+    if (!isValidTeamId(teamId))
+      return { ok: false, errors: ["invalid team id"] };
     if (options?.runId !== undefined && !isValidRunId(options.runId)) {
       return { ok: false, errors: ["invalid run id"] };
     }
@@ -600,12 +643,22 @@ export class TeamService {
     const run = this.runs.get(teamId);
     if (!run || stored.status !== "running") {
       if (options?.runId !== undefined) {
-        return { ok: false, errors: ["stale run id: no matching active run (replayed command rejected)"] };
+        return {
+          ok: false,
+          errors: [
+            "stale run id: no matching active run (replayed command rejected)",
+          ],
+        };
       }
       return { ok: false, errors: ["team is not running"] };
     }
     if (options?.runId !== undefined && options.runId !== run.runId) {
-      return { ok: false, errors: ["stale run id: no matching active run (replayed command rejected)"] };
+      return {
+        ok: false,
+        errors: [
+          "stale run id: no matching active run (replayed command rejected)",
+        ],
+      };
     }
     // Settle locally FIRST so the background runInBackground returns early
     // and cancellation stays authoritative (no failed-after-cancelled flip).
@@ -624,8 +677,17 @@ export class TeamService {
     stored.status = "cancelled";
     stored.lastError = undefined;
     await this.persistTeamState(teamId, stored);
-    await this.appendTeamMessage(teamId, "system", `Run ${run.runId} cancelled.`);
-    this.emit({ type: "team/cancelled", teamId, runId: run.runId, status: "cancelled" });
+    await this.appendTeamMessage(
+      teamId,
+      "system",
+      `Run ${run.runId} cancelled.`,
+    );
+    this.emit({
+      type: "team/cancelled",
+      teamId,
+      runId: run.runId,
+      status: "cancelled",
+    });
     // Keep the DAG for post-cancel inspection; drop the run slot.
     const cancelledDag = run.orchestrator.getDAG();
     if (cancelledDag) this.lastDag.set(teamId, cancelledDag);
@@ -641,7 +703,8 @@ export class TeamService {
     teamId: unknown,
   ): Promise<{ ok: true; team: TeamView } | { ok: false; errors: string[] }> {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidTeamId(teamId)) return { ok: false, errors: ["invalid team id"] };
+    if (!isValidTeamId(teamId))
+      return { ok: false, errors: ["invalid team id"] };
     const stored = await this.readTeamState(teamId);
     if (!stored) return { ok: false, errors: [`unknown team: ${teamId}`] };
     if (this.runs.has(teamId)) {
@@ -651,7 +714,10 @@ export class TeamService {
       return { ok: false, errors: ["team has never run — start it instead"] };
     }
     if (stored.status === "completed") {
-      return { ok: false, errors: ["team already completed — nothing to retry"] };
+      return {
+        ok: false,
+        errors: ["team already completed — nothing to retry"],
+      };
     }
     // failed / cancelled / interrupted (stored-running without a live run)
     // may all retry.
@@ -694,8 +760,17 @@ export class TeamService {
     stored.runCount += 1;
     stored.lastError = undefined;
     await this.persistTeamState(teamId, stored);
-    await this.appendTeamMessage(teamId, "system", `Retry run ${run.runId} started (run #${stored.runCount}).`);
-    this.emit({ type: "team/started", teamId, runId, message: "Team retry started" });
+    await this.appendTeamMessage(
+      teamId,
+      "system",
+      `Retry run ${run.runId} started (run #${stored.runCount}).`,
+    );
+    this.emit({
+      type: "team/started",
+      teamId,
+      runId,
+      message: "Team retry started",
+    });
     void this.runInBackground(teamId, run, stored, continued);
     const view = await this.getTeam(teamId);
     if (!view) return { ok: false, errors: ["team vanished during retry"] };
@@ -708,7 +783,8 @@ export class TeamService {
     teamId: unknown,
   ): Promise<{ ok: true } | { ok: false; errors: string[] }> {
     if (this.disposed) return { ok: false, errors: ["service disposed"] };
-    if (!isValidTeamId(teamId)) return { ok: false, errors: ["invalid team id"] };
+    if (!isValidTeamId(teamId))
+      return { ok: false, errors: ["invalid team id"] };
     const stored = await this.readTeamState(teamId);
     if (!stored) return { ok: false, errors: [`unknown team: ${teamId}`] };
     // A live run owns the team; a stored "running" without one is an
@@ -738,7 +814,8 @@ export class TeamService {
     const views: TeamView[] = [];
     for (const record of records) {
       const state = record.agentState as StoredTeamState | undefined;
-      if (!state || state.kind !== "team" || typeof state.teamId !== "string") continue;
+      if (!state || state.kind !== "team" || typeof state.teamId !== "string")
+        continue;
       views.push(await this.buildView(state.teamId, state, record.updatedAtMs));
     }
     return views.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
@@ -817,22 +894,52 @@ export class TeamService {
     const dag = run.orchestrator.getDAG();
     if (dag) this.lastDag.set(teamId, dag);
     const tasks = dag?.getAllTasks() ?? [];
-    const failedTasks = tasks.filter((t) => t.status === "failed" || t.status === "blocked");
+    const failedTasks = tasks.filter(
+      (t) => t.status === "failed" || t.status === "blocked",
+    );
     const cancelledTasks = tasks.filter((t) => t.status === "cancelled");
     if (!failed && failedTasks.length === 0 && cancelledTasks.length === 0) {
       stored.status = "completed";
       stored.lastError = undefined;
-      await this.appendTeamMessage(teamId, "assistant", excerpt(outcome?.finalResult ?? "done", 2000));
-      this.emit({ type: "team/completed", teamId, runId: run.runId, status: "completed" });
-    } else if (cancelledTasks.length > 0 && failedTasks.length === 0 && !failed) {
+      await this.appendTeamMessage(
+        teamId,
+        "assistant",
+        excerpt(outcome?.finalResult ?? "done", 2000),
+      );
+      this.emit({
+        type: "team/completed",
+        teamId,
+        runId: run.runId,
+        status: "completed",
+      });
+    } else if (
+      cancelledTasks.length > 0 &&
+      failedTasks.length === 0 &&
+      !failed
+    ) {
       stored.status = "cancelled";
-      this.emit({ type: "team/cancelled", teamId, runId: run.runId, status: "cancelled" });
+      this.emit({
+        type: "team/cancelled",
+        teamId,
+        runId: run.runId,
+        status: "cancelled",
+      });
     } else {
       stored.status = "failed";
       const reason = failed?.message ?? `${failedTasks.length} task(s) failed`;
       stored.lastError = reason.slice(0, 500);
-      await this.appendTeamMessage(teamId, "system", `Run failed: ${stored.lastError}`);
-      this.emit({ type: "team/failed", teamId, runId: run.runId, status: "failed", message: stored.lastError });
+      await this.appendTeamMessage(
+        teamId,
+        "system",
+        `Run failed: ${stored.lastError}`,
+      );
+      this.emit({
+        type: "team/failed",
+        teamId,
+        runId: run.runId,
+        status: "failed",
+        message: stored.lastError,
+      });
     }
     await this.persistTeamState(teamId, stored);
     try {
@@ -847,21 +954,31 @@ export class TeamService {
       const touched = tasks.flatMap((t) => parseChangedFiles(t.result ?? ""));
       if (touched.length > 0) {
         const recordId = this.taskRecordId(teamId);
-        if (recordId) await this.taskStore.update(recordId, { touchedFiles: [...new Set(touched)].slice(0, 100) });
+        if (recordId)
+          await this.taskStore.update(recordId, {
+            touchedFiles: [...new Set(touched)].slice(0, 100),
+          });
       }
     } catch {
       // best effort
     }
   }
 
-  private async onOrchestratorEvent(teamId: string, run: ActiveRun): Promise<void> {
+  private async onOrchestratorEvent(
+    teamId: string,
+    run: ActiveRun,
+  ): Promise<void> {
     if (run.settled) return;
     const dag = run.orchestrator.getDAG();
     if (!dag) return;
     // Acquire holds for newly-running tasks; release terminal ones.
     for (const task of dag.getAllTasks()) {
       const declared = run.declaredFiles.get(task.id) ?? [];
-      if (task.status === "running" && declared.length > 0 && !run.heldLocks.has(task.id)) {
+      if (
+        task.status === "running" &&
+        declared.length > 0 &&
+        !run.heldLocks.has(task.id)
+      ) {
         try {
           const locked = run.locks.acquire(task.id, declared);
           run.heldLocks.set(task.id, { files: locked, atMs: Date.now() });
@@ -924,7 +1041,8 @@ export class TeamService {
   ): Map<string, string[]> {
     const out = new Map<string, string[]>();
     for (const task of dag.getAllTasks()) {
-      const files = (filesByRole as Record<string, string[]>)[task.agentRole] ?? [];
+      const files =
+        (filesByRole as Record<string, string[]>)[task.agentRole] ?? [];
       if (files.length > 0) out.set(task.id, [...files]);
     }
     return out;
@@ -976,7 +1094,10 @@ export class TeamService {
     return null;
   }
 
-  private async persistTeamState(teamId: string, stored: StoredTeamState): Promise<void> {
+  private async persistTeamState(
+    teamId: string,
+    stored: StoredTeamState,
+  ): Promise<void> {
     const recordId = this.taskRecordId(teamId);
     if (!recordId) return;
     // M12 has no "idle": parked teams are stored as archived (never
@@ -1011,7 +1132,11 @@ export class TeamService {
     const recordId = this.taskRecordId(teamId);
     if (!recordId) return;
     try {
-      await this.taskStore.appendMessage(recordId, role, content.slice(0, 4000));
+      await this.taskStore.appendMessage(
+        recordId,
+        role,
+        content.slice(0, 4000),
+      );
     } catch {
       // best effort
     }
@@ -1026,7 +1151,8 @@ export class TeamService {
     for (const t of view?.tasks ?? []) {
       const label = `${t.roleLabel} (${t.taskId}): ${(t.resultExcerpt ?? t.description).slice(0, 200)}`;
       if (t.status === "completed") completed.push(label);
-      else if (t.status === "failed" || t.status === "blocked") failed.push(label);
+      else if (t.status === "failed" || t.status === "blocked")
+        failed.push(label);
     }
     return { completed, failed };
   }
@@ -1042,7 +1168,8 @@ export class TeamService {
       run?.orchestrator.getDAG() ??
       this.lastDag.get(teamId) ??
       TaskDAG.buildFromRoles(stored.roles, stored.objective);
-    const declared = run?.declaredFiles ?? this.mapFilesToTasks(dag, stored.filesByRole ?? {});
+    const declared =
+      run?.declaredFiles ?? this.mapFilesToTasks(dag, stored.filesByRole ?? {});
     const tasks = snapshotTasks(dag, declared, run?.conflicts ?? new Map());
     const locks: TeamLockView[] = [];
     if (run) {
@@ -1065,7 +1192,9 @@ export class TeamService {
       status = stored.runCount > 0 ? "interrupted" : "idle";
     }
     const completedCount = tasks.filter((t) => t.status === "completed").length;
-    const failedCount = tasks.filter((t) => t.status === "failed" || t.status === "blocked").length;
+    const failedCount = tasks.filter(
+      (t) => t.status === "failed" || t.status === "blocked",
+    ).length;
     return {
       teamId,
       taskId: this.taskRecordId(teamId) ?? "",
@@ -1151,7 +1280,9 @@ function snapshotTasks(
 ): TeamTaskView[] {
   return dag.getAllTasks().map((t) => {
     const resultFiles = t.result ? parseChangedFiles(t.result) : [];
-    const files = [...new Set([...(declared.get(t.id) ?? []), ...resultFiles])].slice(0, 50);
+    const files = [
+      ...new Set([...(declared.get(t.id) ?? []), ...resultFiles]),
+    ].slice(0, 50);
     return {
       taskId: t.id,
       role: t.agentRole,
@@ -1178,7 +1309,10 @@ function parseChangedFiles(result: string): string[] {
   CHANGED_FILE_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = CHANGED_FILE_PATTERN.exec(result)) !== null) {
-    const file = (match[1] ?? "").replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+    const file = (match[1] ?? "")
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "")
+      .toLowerCase();
     if (file && !out.includes(file)) out.push(file);
     if (out.length >= 20) break;
   }

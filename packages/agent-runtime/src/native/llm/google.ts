@@ -58,26 +58,52 @@ export function toGeminiContents(messages: AgentMessage[]): {
   const contents: Array<Record<string, unknown>> = [];
   for (const msg of messages) {
     if (typeof msg.content === "string") {
-      if (contents.length === 0 && msg.role === "user" && !system && msg.content.length === 0) continue;
-      contents.push({ role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] });
+      if (
+        contents.length === 0 &&
+        msg.role === "user" &&
+        !system &&
+        msg.content.length === 0
+      )
+        continue;
+      contents.push({
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: [{ text: msg.content }],
+      });
       continue;
     }
     if (msg.role === "assistant") {
       const parts: Array<Record<string, unknown>> = [];
       for (const b of msg.content) {
         if (b.type === "text") parts.push({ text: b.text });
-        else if (b.type === "tool_use") {
+        else if (b.type === "image") {
+          throw new Error("image blocks are only supported in user messages");
+        } else if (b.type === "tool_use") {
           parts.push({ functionCall: { name: b.name, args: b.input } });
         }
       }
       if (parts.length > 0) contents.push({ role: "model", parts });
       continue;
     }
-    // user: text + tool results (functionResponse parts)
+    // user: text + images (inlineData parts) + tool results (functionResponse parts).
+    // Text is always emitted before images (deterministic ordering).
     const parts: Array<Record<string, unknown>> = [];
     for (const b of msg.content) {
       if (b.type === "text") parts.push({ text: b.text });
-      else if (b.type === "tool_result") {
+    }
+    for (const b of msg.content) {
+      if (b.type === "image") {
+        if (typeof b.dataBase64 !== "string" || b.dataBase64.length === 0) {
+          throw new Error(
+            "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+          );
+        }
+        parts.push({
+          inlineData: {
+            mimeType: b.mime ?? "image/png",
+            data: b.dataBase64,
+          },
+        });
+      } else if (b.type === "tool_result") {
         parts.push({
           functionResponse: {
             name: b.name,
@@ -155,15 +181,22 @@ export class GoogleLlmProvider implements LlmProvider {
         yield { type: "finish", reason: "aborted" };
         return;
       }
-      throw new LlmError(this.id, `request failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new LlmError(
+        this.id,
+        `request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     if (!response.ok || !response.body) {
       cleanup();
       const detail = await response.text().catch(() => "");
       // Never include the key in errors — the URL is not echoed.
-      throw new LlmError(this.id, `generateContent failed ${response.status}: ${detail.slice(0, 300)}`, {
-        status: response.status,
-      });
+      throw new LlmError(
+        this.id,
+        `generateContent failed ${response.status}: ${detail.slice(0, 300)}`,
+        {
+          status: response.status,
+        },
+      );
     }
 
     let inputTokens = 0;
@@ -234,7 +267,12 @@ export class GoogleLlmProvider implements LlmProvider {
       if (inputTokens > 0 || outputTokens > 0) {
         yield {
           type: "usage",
-          usage: { inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          usage: {
+            inputTokens,
+            outputTokens,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
         };
       }
       yield { type: "finish", reason: abortRequested ? "aborted" : "complete" };

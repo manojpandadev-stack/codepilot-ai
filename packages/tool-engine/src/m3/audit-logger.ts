@@ -138,7 +138,6 @@ export class ToolAuditLogger implements ToolAuditSink {
   }
 }
 
-
 // ============================================================================
 // PersistentAuditLogger — bounded append-only JSONL persistence
 // ============================================================================
@@ -239,7 +238,10 @@ export class PersistentAuditLogger implements ToolAuditSink {
     );
     this.maxFiles = Math.max(2, options.maxFiles ?? DEFAULT_MAX_FILES);
     this.baseName = options.baseName ?? DEFAULT_BASE_NAME;
-    this.flushDelayMs = Math.max(0, options.flushDelayMs ?? DEFAULT_FLUSH_DELAY_MS);
+    this.flushDelayMs = Math.max(
+      0,
+      options.flushDelayMs ?? DEFAULT_FLUSH_DELAY_MS,
+    );
     this.recoverFromStartup();
   }
   // ------------------------------------------------------------------
@@ -252,8 +254,7 @@ export class PersistentAuditLogger implements ToolAuditSink {
       let content = raw;
       // Torn tail: last line has no trailing newline — it was never durably
       // appended, so discard it (JSONL append-only contract).
-      const torn =
-        content.length > 0 && !content.endsWith("\n");
+      const torn = content.length > 0 && !content.endsWith("\n");
       if (torn) {
         const lastNl = content.lastIndexOf("\n");
         content = lastNl === -1 ? "" : content.slice(0, lastNl + 1);
@@ -263,7 +264,8 @@ export class PersistentAuditLogger implements ToolAuditSink {
         try {
           this.adapter.removeFile(this.baseName);
           for (const line of content.split("\n")) {
-            if (line.length > 0) this.adapter.appendLine(this.baseName, `${line}\n`);
+            if (line.length > 0)
+              this.adapter.appendLine(this.baseName, `${line}\n`);
           }
           this.adapter.sync();
         } catch {
@@ -296,7 +298,9 @@ export class PersistentAuditLogger implements ToolAuditSink {
         ? redactSecrets(entry.permissionDecision)
         : undefined,
       // Derived from tool input → scrubbed before it can reach disk.
-      safeTarget: entry.safeTarget ? redactSecrets(entry.safeTarget) : undefined,
+      safeTarget: entry.safeTarget
+        ? redactSecrets(entry.safeTarget)
+        : undefined,
     };
     // Bounded in-memory tail (fast cache — mirrors ToolAuditLogger behavior).
     this.recent.push(safe);
@@ -388,11 +392,14 @@ export class PersistentAuditLogger implements ToolAuditSink {
   private enforceDiskBudgetLocked(): void {
     try {
       const seq = (n: string): number =>
-        n === this.baseName ? 0 : Number(n.slice(this.baseName.length + 1)) || 0;
+        n === this.baseName
+          ? 0
+          : Number(n.slice(this.baseName.length + 1)) || 0;
       const files = this.adapter
         .listFiles()
         .filter(
-          (f) => f.name === this.baseName || f.name.startsWith(`${this.baseName}.`),
+          (f) =>
+            f.name === this.baseName || f.name.startsWith(`${this.baseName}.`),
         )
         .sort((a, b) => seq(a.name) - seq(b.name));
       let total = files.reduce((sum, f) => sum + f.size, 0);
@@ -428,7 +435,9 @@ export class PersistentAuditLogger implements ToolAuditSink {
     const all: ToolAuditEntry[] = [];
     try {
       const seq = (n: string): number =>
-        n === this.baseName ? 0 : Number(n.slice(this.baseName.length + 1)) || 0;
+        n === this.baseName
+          ? 0
+          : Number(n.slice(this.baseName.length + 1)) || 0;
       // Rotation moves active → .1 → .2 …, so a HIGHER index is OLDER and the
       // active file always holds the newest records: read highest-first, the
       // active file last. (Ascending order would return newest-first and make
@@ -436,7 +445,8 @@ export class PersistentAuditLogger implements ToolAuditSink {
       const files = this.adapter
         .listFiles()
         .filter(
-          (f) => f.name === this.baseName || f.name.startsWith(`${this.baseName}.`),
+          (f) =>
+            f.name === this.baseName || f.name.startsWith(`${this.baseName}.`),
         )
         .sort((a, b) => seq(b.name) - seq(a.name));
       for (const f of files) {
@@ -486,4 +496,3 @@ export class PersistentAuditLogger implements ToolAuditSink {
     await this.chain;
   }
 }
-

@@ -142,7 +142,10 @@ export function createAgentTerminalSessionTools(
     execute: async (input, ctx) => {
       const taskId = callerTaskId(ctx);
       if (!taskId) {
-        return fail("No task identity available — session cannot be created", "FORBIDDEN");
+        return fail(
+          "No task identity available — session cannot be created",
+          "FORBIDDEN",
+        );
       }
       const cwdRaw =
         input && typeof (input as Record<string, unknown>).cwd === "string"
@@ -201,11 +204,18 @@ export function createAgentTerminalSessionTools(
     execute: async (input, ctx) => {
       const taskId = callerTaskId(ctx);
       if (!taskId) {
-        return fail("No task identity available — command cannot run", "FORBIDDEN");
+        return fail(
+          "No task identity available — command cannot run",
+          "FORBIDDEN",
+        );
       }
       const rec = (input ?? {}) as Record<string, unknown>;
       const sessionId = rec.sessionId;
-      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 256) {
+      if (
+        typeof sessionId !== "string" ||
+        sessionId.length === 0 ||
+        sessionId.length > 256
+      ) {
         return fail("sessionId is required (string, max 256 chars)", "INVALID");
       }
       const command = rec.command;
@@ -216,7 +226,9 @@ export function createAgentTerminalSessionTools(
         return fail(`command exceeds ${MAX_COMMAND_LEN} characters`, "INVALID");
       }
       const timeoutMs =
-        typeof rec.timeoutMs === "number" && Number.isFinite(rec.timeoutMs) && rec.timeoutMs > 0
+        typeof rec.timeoutMs === "number" &&
+        Number.isFinite(rec.timeoutMs) &&
+        rec.timeoutMs > 0
           ? rec.timeoutMs
           : undefined;
       try {
@@ -243,10 +255,7 @@ export function createAgentTerminalSessionTools(
         }
         return toModelResult(exec.result);
       } catch (e) {
-        return fail(
-          e instanceof Error ? e.message : String(e),
-          "INTERNAL",
-        );
+        return fail(e instanceof Error ? e.message : String(e), "INTERNAL");
       }
     },
   };
@@ -278,7 +287,11 @@ export function createAgentTerminalSessionTools(
       }
       const rec = (input ?? {}) as Record<string, unknown>;
       const sessionId = rec.sessionId;
-      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 256) {
+      if (
+        typeof sessionId !== "string" ||
+        sessionId.length === 0 ||
+        sessionId.length > 256
+      ) {
         return fail("sessionId is required", "INVALID");
       }
       const view = manager.agentSessionStatus(sessionId, taskId);
@@ -316,7 +329,11 @@ export function createAgentTerminalSessionTools(
       }
       const rec = (input ?? {}) as Record<string, unknown>;
       const sessionId = rec.sessionId;
-      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 256) {
+      if (
+        typeof sessionId !== "string" ||
+        sessionId.length === 0 ||
+        sessionId.length > 256
+      ) {
         return fail("sessionId is required", "INVALID");
       }
       const stopped = manager.stopAgentSessionCommand(sessionId, taskId);
@@ -357,7 +374,11 @@ export function createAgentTerminalSessionTools(
       }
       const rec = (input ?? {}) as Record<string, unknown>;
       const sessionId = rec.sessionId;
-      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 256) {
+      if (
+        typeof sessionId !== "string" ||
+        sessionId.length === 0 ||
+        sessionId.length > 256
+      ) {
         return fail("sessionId is required", "INVALID");
       }
       const closed = manager.closeAgentSession(sessionId, taskId);

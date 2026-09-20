@@ -110,9 +110,12 @@ describe("lifecycle: CliRunner per-run subscription released", () => {
 
 describe("lifecycle: TaskScheduler start/stop cycles", () => {
   it("repeated start → stop → cancelAll leaves no timer", async () => {
-    const scheduler = new TaskScheduler(async () => ({ exitCode: 0, output: "ok" }), {
-      tickIntervalMs: 50,
-    });
+    const scheduler = new TaskScheduler(
+      async () => ({ exitCode: 0, output: "ok" }),
+      {
+        tickIntervalMs: 50,
+      },
+    );
     for (let i = 0; i < 5; i++) {
       scheduler.start();
       scheduler.start(); // idempotent

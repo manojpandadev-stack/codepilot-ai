@@ -17,6 +17,13 @@
 // Tools
 // ============================================================================
 
+/**
+ * Stable identity of the single agent owned by one runtime instance.
+ * Single source of truth for the dispatcher, event correlation, and run
+ * metrics (runtime.js re-exports it).
+ */
+export const NATIVE_AGENT_ID = "codepilot-agent";
+
 /** JSON-schema object describing a tool's input. */
 export type JsonSchemaObject = Record<string, unknown>;
 
@@ -121,7 +128,26 @@ export interface TextBlock {
   text: string;
 }
 
-export type WireBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+/**
+ * Image block inside a user message.
+ *
+ * `dataBase64` carries validated, metadata-stripped bytes for the live
+ * request. `fileRef` is a task-scoped relative filename (`images/<id>.bin`)
+ * used by persistence instead of inline bytes — never an absolute path, so
+ * local filesystem layout never reaches the model. Exactly one of the two
+ * is set on any given block.
+ */
+export interface ImageBlock {
+  type: "image";
+  mime: string;
+  dataBase64?: string;
+  fileRef?: string;
+  /** Sanitized display name (never a path). */
+  name?: string;
+  sizeBytes?: number;
+}
+
+export type WireBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock;
 
 /**
  * Provider-protocol message: role + text OR block array. Tool results ride in
@@ -141,9 +167,18 @@ export interface AgentMessage {
 export type LlmStreamEvent =
   | { type: "text-delta"; text: string }
   | { type: "reasoning-delta"; text: string }
-  | { type: "tool-call"; toolCallId: string; toolName: string; inputText: string }
+  | {
+      type: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      inputText: string;
+    }
   | { type: "usage"; usage: AgentUsage }
-  | { type: "finish"; reason: "complete" | "aborted" | "error"; error?: string };
+  | {
+      type: "finish";
+      reason: "complete" | "aborted" | "error";
+      error?: string;
+    };
 
 // ============================================================================
 // Model request/response

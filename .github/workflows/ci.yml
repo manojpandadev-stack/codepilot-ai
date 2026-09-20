@@ -132,4 +132,4 @@ jobs:
         run: pnpm -r typecheck
 
       - name: Check formatting
-        run: pnpm exec prettier --check "packages/*/src/**/*.ts" "apps/*/src/**/*.ts" "apps/*/webview/**/*.js"
+        run: pnpm exec prettier --check "packages/*/src/**/*.ts" "apps/*/src/**/*.ts" "apps/webview/src/**/*.{ts,tsx}"

@@ -166,8 +166,29 @@ describe("compaction tokens", () => {
   });
 
   it("sums the conversation", () => {
-    const conv = [entry("user", "a".repeat(40), 1), entry("assistant", "b".repeat(40), 2)];
+    const conv = [
+      entry("user", "a".repeat(40), 1),
+      entry("assistant", "b".repeat(40), 2),
+    ];
     expect(estimateConversationTokens(conv)).toBe(20);
+  });
+
+  it("counts image blocks by estimated tokens, not bytes", () => {
+    const e: Parameters<typeof estimateEntryTokens>[0] = {
+      role: "user",
+      timestampMs: 1,
+      blocks: [
+        {
+          type: "image",
+          mime: "image/png",
+          fileRef: "images/x.bin",
+          sizeBytes: 2048,
+        },
+        { type: "text", text: "hi" },
+      ],
+    };
+    // text "hi" → ceil(2/4) = 1, plus 512 + ceil(2048/1024) = 514.
+    expect(estimateEntryTokens(e)).toBe(1 + 514);
   });
 
   it("uses the documented chars-per-token constant", () => {
@@ -304,13 +325,15 @@ describe("summary validation", () => {
 
 describe("summarizer privacy guard", () => {
   it("blocks remote summarization in local mode", () => {
-    expect(() =>
-      assertSummarizerPrivacyAllowed("openrouter", "local"),
-    ).toThrow(PrivacyViolationError);
+    expect(() => assertSummarizerPrivacyAllowed("openrouter", "local")).toThrow(
+      PrivacyViolationError,
+    );
   });
 
   it("allows local providers in local mode", () => {
-    expect(() => assertSummarizerPrivacyAllowed("ollama", "local")).not.toThrow();
+    expect(() =>
+      assertSummarizerPrivacyAllowed("ollama", "local"),
+    ).not.toThrow();
   });
 
   it("allows remote providers with explicit cloud permission", () => {
@@ -327,8 +350,9 @@ describe("summarizer privacy guard", () => {
           providerId: "anthropic",
           modelId: "claude-3",
           privacyMode: "local",
-        apiKey: "sk-test",
-      }),
+          apiKey: "sk-test",
+        },
+      ),
     ).rejects.toThrow(PrivacyViolationError);
   });
 });
@@ -350,9 +374,7 @@ describe("conversation protocol validation", () => {
       },
       {
         role: "user" as const,
-        content: [
-          { type: "tool_result", tool_use_id: "tu1", content: "ok" },
-        ],
+        content: [{ type: "tool_result", tool_use_id: "tu1", content: "ok" }],
       },
       { role: "assistant" as const, content: "done" },
     ];
@@ -363,7 +385,9 @@ describe("conversation protocol validation", () => {
     const conv = [
       {
         role: "assistant" as const,
-        content: [{ type: "tool_use", id: "tu1", name: "terminal", input: "{}" }],
+        content: [
+          { type: "tool_use", id: "tu1", name: "terminal", input: "{}" },
+        ],
       },
       { role: "assistant" as const, content: "done" },
     ];
@@ -388,7 +412,9 @@ describe("conversation protocol validation", () => {
       },
       {
         role: "assistant" as const,
-        content: [{ type: "tool_use", id: "tu1", name: "terminal", input: "{}" }],
+        content: [
+          { type: "tool_use", id: "tu1", name: "terminal", input: "{}" },
+        ],
       },
     ];
     expect(validateConversationProtocol(conv).valid).toBe(false);
@@ -396,6 +422,36 @@ describe("conversation protocol validation", () => {
 
   it("rejects empty conversations", () => {
     expect(validateConversationProtocol([]).valid).toBe(false);
+  });
+
+  it("accepts image blocks on user messages", () => {
+    const conv = [
+      {
+        role: "user" as const,
+        content: [
+          { type: "image", mime: "image/png", fileRef: "images/x.bin" },
+          { type: "text", text: "what is this?" },
+        ],
+      },
+      { role: "assistant" as const, content: "a cat" },
+    ];
+    expect(validateConversationProtocol(conv).valid).toBe(true);
+  });
+
+  it("rejects image blocks on assistant messages", () => {
+    const conv = [
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "image", mime: "image/png", fileRef: "images/x.bin" },
+        ],
+      },
+    ];
+    const result = validateConversationProtocol(conv);
+    expect(result.valid).toBe(false);
+    expect(result.issues.map((i) => i.kind)).toContain(
+      "image-in-assistant-message",
+    );
   });
 });
 
@@ -417,7 +473,9 @@ describe("safe compaction boundary", () => {
     // use+result pair stay TOGETHER in the tail.
     const b = safeCompactionBoundary(conv, 2);
     expect(b).toBe(1); // tail starts at the assistant tool_use entry
-    const tail = conv.slice(b).map((m) => ({ role: m.role, content: m.blocks! }));
+    const tail = conv
+      .slice(b)
+      .map((m) => ({ role: m.role, content: m.blocks! }));
     expect(validateConversationProtocol(tail).valid).toBe(true);
   });
 
@@ -435,20 +493,14 @@ describe("safe compaction boundary", () => {
     // The proposed tail itself starts with a tool_result (its tool_use would
     // be summarized away) and stepping back would cross the conversation
     // start — no boundary keeps use+result together in the tail.
-    const conv = [
-      toolResultEntry(1, "tu1"),
-      toolResultEntry(2, "tu2"),
-    ];
+    const conv = [toolResultEntry(1, "tu1"), toolResultEntry(2, "tu2")];
     expect(safeCompactionBoundary(conv, 1)).toBe(-1);
   });
 
   it("keeps an orphaned head result summarizable (boundary at next non-result entry)", () => {
     // An orphaned tool_result in the HEAD is fine — the head is replaced by
     // the summary; only the TAIL must be protocol-valid on its own.
-    const conv = [
-      toolResultEntry(1, "tu1"),
-      entry("assistant", "a1", 2),
-    ];
+    const conv = [toolResultEntry(1, "tu1"), entry("assistant", "a1", 2)];
     expect(safeCompactionBoundary(conv, 1)).toBe(1);
   });
 
@@ -513,11 +565,18 @@ describe("CompactionEngine", () => {
     expect(outcome.ran).toBe(true);
     expect(outcome.mode).toBe("semantic");
     expect(outcome.artifact?.summary?.objective).toBe("Long refactor task");
-    expect(outcome.artifact?.summarizer).toEqual({ providerId: "ollama", modelId: "qwen3:8b" });
+    expect(outcome.artifact?.summarizer).toEqual({
+      providerId: "ollama",
+      modelId: "qwen3:8b",
+    });
     expect(outcome.summaryCost?.promptTokensEstimate).toBe(100);
     expect(outcome.compactedMessages?.[0]?.role).toBe("user");
-    expect(String(outcome.compactedMessages?.[0]?.content)).toContain("Objective:");
-    expect(validateConversationProtocol(outcome.compactedMessages as never).valid).toBe(true);
+    expect(String(outcome.compactedMessages?.[0]?.content)).toContain(
+      "Objective:",
+    );
+    expect(
+      validateConversationProtocol(outcome.compactedMessages as never).valid,
+    ).toBe(true);
   });
 
   it("9. summarizer failure falls back to bounded truncation (history safe)", async () => {
@@ -535,11 +594,7 @@ describe("CompactionEngine", () => {
 
   it("10. below threshold → skipped", async () => {
     const t = await store.create("small");
-    await store.upsertConversationEntry(
-      t.id,
-      "k1",
-      entry("user", "hello", 1),
-    );
+    await store.upsertConversationEntry(t.id, "k1", entry("user", "hello", 1));
     const engine = makeEngine(store);
     const outcome = await engine.compactIfNeeded(t.id, "ollama", "qwen3:8b");
     expect(outcome.ran).toBe(false);
@@ -594,7 +649,9 @@ describe("CompactionEngine", () => {
     const composed = engine.composeFromTask(task!);
     expect(composed).not.toBeNull();
     expect(composed![0]!.role).toBe("user");
-    expect(composed![0]!.content).toContain("summary of the earlier conversation");
+    expect(composed![0]!.content).toContain(
+      "summary of the earlier conversation",
+    );
     // And the composed shape must be protocol-valid:
     expect(validateConversationProtocol(composed as never).valid).toBe(true);
   });
@@ -604,7 +661,11 @@ describe("CompactionEngine", () => {
     const engine = makeEngine(store, {
       resolveSummarizerConfig: async () => null,
     });
-    const outcome = await engine.compactIfNeeded(taskId, "ollama", "q3:8b-model");
+    const outcome = await engine.compactIfNeeded(
+      taskId,
+      "ollama",
+      "q3:8b-model",
+    );
     const task = await store.get(taskId);
     const dump = JSON.stringify({
       a: task?.compactions,

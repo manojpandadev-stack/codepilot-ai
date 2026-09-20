@@ -25,10 +25,7 @@
  */
 
 import type { TaskStore, PersistedTask } from "@codepilot/agent-runtime";
-import type {
-  Checkpoint,
-  TrackedChange,
-} from "@codepilot/changeset-engine";
+import type { Checkpoint, TrackedChange } from "@codepilot/changeset-engine";
 import { computeDiff } from "@codepilot/changeset-engine";
 
 // ============================================================================
@@ -66,7 +63,14 @@ export interface TimelineEvent {
   timestampMs: number;
   /** Derived phase label (see mapping docs on buildTimeline). */
   phase: string;
-  kind: "created" | "prompt" | "response" | "system" | "tool" | "checkpoint" | "status";
+  kind:
+    | "created"
+    | "prompt"
+    | "response"
+    | "system"
+    | "tool"
+    | "checkpoint"
+    | "status";
   summary: string;
 }
 
@@ -143,7 +147,8 @@ export interface TaskFilter {
   limit?: number;
 }
 
-export type CompareVerdict = "SAME" | "BETTER" | "WORSE" | "DIFFERENT" | "UNKNOWN";
+export type CompareVerdict =
+  "SAME" | "BETTER" | "WORSE" | "DIFFERENT" | "UNKNOWN";
 
 export interface CompareRow {
   metric: string;
@@ -256,19 +261,27 @@ export function buildResumePrompt(ctx: ResumeContext): string {
     .slice(-HISTORY_TURNS * 2)
     .map((m) => `[${m.role}] ${clean(m.content, 400)}`)
     .join("\n");
-  const lastAssistant = [...ctx.messages].reverse().find((m) => m.role === "assistant");
+  const lastAssistant = [...ctx.messages]
+    .reverse()
+    .find((m) => m.role === "assistant");
   const parts = [
     `Resume task: ${clean(ctx.title, 200)}`,
-    history ? `Previous conversation (most recent last):\n${history}` : undefined,
+    history
+      ? `Previous conversation (most recent last):\n${history}`
+      : undefined,
     lastAssistant
       ? `Last assistant response ended with: "${clean(lastAssistant.content, 200)}". Continue from where the task left off. Do not repeat completed work.`
       : "Continue the task.",
   ];
   if (ctx.filesChanged.length > 0) {
-    parts.push(`Files already changed (do not redo): ${ctx.filesChanged.slice(0, 20).join(", ")}`);
+    parts.push(
+      `Files already changed (do not redo): ${ctx.filesChanged.slice(0, 20).join(", ")}`,
+    );
   }
   if (ctx.checkpointsAvailable > 0) {
-    parts.push(`${ctx.checkpointsAvailable} checkpoint(s) are available for restore if needed.`);
+    parts.push(
+      `${ctx.checkpointsAvailable} checkpoint(s) are available for restore if needed.`,
+    );
   }
   return parts.filter(Boolean).join("\n\n");
 }
@@ -311,7 +324,8 @@ function readCounters(task: PersistedTask): AgentStateCounters {
           {
             name: r.name.slice(0, 64),
             count: typeof r.count === "number" ? r.count : 0,
-            totalDurationMs: typeof r.totalDurationMs === "number" ? r.totalDurationMs : 0,
+            totalDurationMs:
+              typeof r.totalDurationMs === "number" ? r.totalDurationMs : 0,
           },
         ];
       })
@@ -320,14 +334,26 @@ function readCounters(task: PersistedTask): AgentStateCounters {
     ...(typeof c.sessionId === "string" ? { sessionId: c.sessionId } : {}),
     ...(typeof c.mode === "string" ? { mode: c.mode } : {}),
     ...(tools ? { toolCalls: tools } : {}),
-    ...(typeof c.toolCallCount === "number" ? { toolCallCount: c.toolCallCount } : {}),
+    ...(typeof c.toolCallCount === "number"
+      ? { toolCallCount: c.toolCallCount }
+      : {}),
     ...(typeof c.retries === "number" ? { retries: c.retries } : {}),
     ...(Array.isArray(c.filesChanged)
-      ? { filesChanged: c.filesChanged.filter((f): f is string => typeof f === "string").slice(0, 100) }
+      ? {
+          filesChanged: c.filesChanged
+            .filter((f): f is string => typeof f === "string")
+            .slice(0, 100),
+        }
       : {}),
-    ...(typeof c.inputTokens === "number" ? { inputTokens: c.inputTokens } : {}),
-    ...(typeof c.outputTokens === "number" ? { outputTokens: c.outputTokens } : {}),
-    ...(typeof c.lastError === "string" ? { lastError: c.lastError.slice(0, 500) } : {}),
+    ...(typeof c.inputTokens === "number"
+      ? { inputTokens: c.inputTokens }
+      : {}),
+    ...(typeof c.outputTokens === "number"
+      ? { outputTokens: c.outputTokens }
+      : {}),
+    ...(typeof c.lastError === "string"
+      ? { lastError: c.lastError.slice(0, 500) }
+      : {}),
   };
 }
 
@@ -353,7 +379,10 @@ export class TaskHistoryService {
   // ---- List (backend filtering; bounded) --------------------------------------
 
   async list(filter: TaskFilter = {}): Promise<TaskSummary[]> {
-    const limit = Math.max(1, Math.min(MAX_LIST, Math.floor(filter.limit ?? MAX_LIST)));
+    const limit = Math.max(
+      1,
+      Math.min(MAX_LIST, Math.floor(filter.limit ?? MAX_LIST)),
+    );
     const records = await this.deps.taskStore.list();
     const q = (filter.query ?? "").trim().toLowerCase();
     const out: TaskSummary[] = [];
@@ -369,10 +398,13 @@ export class TaskHistoryService {
       if (filter.completedOnly && summary.status !== "completed") continue;
       if (filter.hasCheckpoints && summary.checkpointCount === 0) continue;
       if (filter.hasFiles && summary.filesChangedCount === 0) continue;
-      if (filter.fromMs !== undefined && summary.createdAtMs < filter.fromMs) continue;
-      if (filter.toMs !== undefined && summary.createdAtMs > filter.toMs) continue;
+      if (filter.fromMs !== undefined && summary.createdAtMs < filter.fromMs)
+        continue;
+      if (filter.toMs !== undefined && summary.createdAtMs > filter.toMs)
+        continue;
       if (q) {
-        const hay = `${summary.title} ${summary.promptExcerpt} ${summary.id}`.toLowerCase();
+        const hay =
+          `${summary.title} ${summary.promptExcerpt} ${summary.id}`.toLowerCase();
         if (!hay.includes(q)) continue;
       }
       out.push(summary);
@@ -385,8 +417,11 @@ export class TaskHistoryService {
 
   async details(
     taskId: unknown,
-  ): Promise<{ ok: true; details: TaskDetails } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(taskId)) return { ok: false, errors: ["invalid task id"] };
+  ): Promise<
+    { ok: true; details: TaskDetails } | { ok: false; errors: string[] }
+  > {
+    if (!isValidTaskId(taskId))
+      return { ok: false, errors: ["invalid task id"] };
     const record = await this.deps.taskStore.get(taskId);
     if (!record || this.isTeamRecord(record)) {
       return { ok: false, errors: [`unknown task: ${taskId}`] };
@@ -394,7 +429,10 @@ export class TaskHistoryService {
     const summary = this.toSummary(record);
     const checkpoints = this.checkpointsFor(record);
     const files = this.fileSummaryFor(record);
-    const timeline = this.buildTimeline(record, checkpoints.map((c) => ({ id: c.checkpointId, timestamp: c.timestamp })));
+    const timeline = this.buildTimeline(
+      record,
+      checkpoints.map((c) => ({ id: c.checkpointId, timestamp: c.timestamp })),
+    );
     const messages = record.messages.slice(-MAX_MESSAGES).map((m) => ({
       role: m.role,
       excerpt: clean(m.content, MESSAGE_EXCERPT),
@@ -404,7 +442,8 @@ export class TaskHistoryService {
     const live = this.liveFor(record.id);
     const tools = live?.toolCalls ?? counters.toolCalls ?? [];
     const errors = [...messageErrors(record)];
-    if (counters.lastError && !errors.includes(counters.lastError)) errors.push(counters.lastError);
+    if (counters.lastError && !errors.includes(counters.lastError))
+      errors.push(counters.lastError);
     if (live?.error && !errors.includes(live.error)) errors.push(live.error);
     const details: TaskDetails = {
       ...summary,
@@ -435,8 +474,15 @@ export class TaskHistoryService {
         messageCount: record.messages.length,
       },
     };
-    if (summary.status === "interrupted" || (live == null && summary.status === "running")) {
-      details.interruption = this.interruptionInfo(record, checkpoints.length, files);
+    if (
+      summary.status === "interrupted" ||
+      (live == null && summary.status === "running")
+    ) {
+      details.interruption = this.interruptionInfo(
+        record,
+        checkpoints.length,
+        files,
+      );
     }
     return { ok: true, details };
   }
@@ -445,8 +491,12 @@ export class TaskHistoryService {
 
   async checkpointsForTask(
     taskId: unknown,
-  ): Promise<{ ok: true; checkpoints: TaskCheckpointView[] } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(taskId)) return { ok: false, errors: ["invalid task id"] };
+  ): Promise<
+    | { ok: true; checkpoints: TaskCheckpointView[] }
+    | { ok: false; errors: string[] }
+  > {
+    if (!isValidTaskId(taskId))
+      return { ok: false, errors: ["invalid task id"] };
     const record = await this.deps.taskStore.get(taskId);
     if (!record || this.isTeamRecord(record)) {
       return { ok: false, errors: [`unknown task: ${taskId}`] };
@@ -461,19 +511,26 @@ export class TaskHistoryService {
   async checkCheckpointOwnership(
     taskId: unknown,
     checkpointId: unknown,
-  ): Promise<{ ok: true; checkpointId: string } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(taskId)) return { ok: false, errors: ["invalid task id"] };
-    if (!isValidCheckpointId(checkpointId)) return { ok: false, errors: ["invalid checkpoint id"] };
+  ): Promise<
+    { ok: true; checkpointId: string } | { ok: false; errors: string[] }
+  > {
+    if (!isValidTaskId(taskId))
+      return { ok: false, errors: ["invalid task id"] };
+    if (!isValidCheckpointId(checkpointId))
+      return { ok: false, errors: ["invalid checkpoint id"] };
     const record = await this.deps.taskStore.get(taskId);
     if (!record || this.isTeamRecord(record)) {
       return { ok: false, errors: [`unknown task: ${taskId}`] };
     }
     const checkpoint = this.deps.getCheckpoint(checkpointId);
-    if (!checkpoint) return { ok: false, errors: [`unknown checkpoint: ${checkpointId}`] };
+    if (!checkpoint)
+      return { ok: false, errors: [`unknown checkpoint: ${checkpointId}`] };
     if (!this.candidateIds(record).includes(checkpoint.taskId)) {
       return {
         ok: false,
-        errors: [`checkpoint ${checkpointId} does not belong to task ${taskId} (cross-task rejected)`],
+        errors: [
+          `checkpoint ${checkpointId} does not belong to task ${taskId} (cross-task rejected)`,
+        ],
       };
     }
     return { ok: true, checkpointId };
@@ -487,8 +544,10 @@ export class TaskHistoryService {
   ):
     | { ok: true; compare: CheckpointCompareView }
     | { ok: false; errors: string[] } {
-    if (!isValidCheckpointId(aId)) return { ok: false, errors: ["invalid checkpoint id (a)"] };
-    if (!isValidCheckpointId(bId)) return { ok: false, errors: ["invalid checkpoint id (b)"] };
+    if (!isValidCheckpointId(aId))
+      return { ok: false, errors: ["invalid checkpoint id (a)"] };
+    if (!isValidCheckpointId(bId))
+      return { ok: false, errors: ["invalid checkpoint id (b)"] };
     const a = this.deps.getCheckpoint(aId);
     const b = this.deps.getCheckpoint(bId);
     if (!a) return { ok: false, errors: [`unknown checkpoint: ${aId}`] };
@@ -519,7 +578,9 @@ export class TaskHistoryService {
       const fb = mapB.get(p);
       if (!fb) {
         removed.push(p);
-      } else if ((fa.hash ?? fa.content ?? null) === (fb.hash ?? fb.content ?? null)) {
+      } else if (
+        (fa.hash ?? fa.content ?? null) === (fb.hash ?? fb.content ?? null)
+      ) {
         unchanged += 1;
       } else {
         modified.push(p);
@@ -533,14 +594,22 @@ export class TaskHistoryService {
     const hashToRemoved = new Map<string, string>();
     for (const p of removed) {
       const f = mapA.get(p);
-      const h = f?.hash ?? (f?.content !== undefined ? `c:${f.content.length}:${f.content.slice(0, 64)}` : undefined);
+      const h =
+        f?.hash ??
+        (f?.content !== undefined
+          ? `c:${f.content.length}:${f.content.slice(0, 64)}`
+          : undefined);
       if (h) hashToRemoved.set(h, p);
     }
     const addedSet = new Set(added);
     const removedSet = new Set(removed);
     for (const p of [...added]) {
       const f = mapB.get(p);
-      const h = f?.hash ?? (f?.content !== undefined ? `c:${f.content.length}:${f.content.slice(0, 64)}` : undefined);
+      const h =
+        f?.hash ??
+        (f?.content !== undefined
+          ? `c:${f.content.length}:${f.content.slice(0, 64)}`
+          : undefined);
       const from = h ? hashToRemoved.get(h) : undefined;
       if (h && from && addedSet.has(p) && removedSet.has(from)) {
         renamed.push({ from, to: p });
@@ -556,7 +625,12 @@ export class TaskHistoryService {
     const diffs: CheckpointFileDiff[] = [];
     let bytes = 0;
     let truncated = false;
-    const diffPaths = [...finalModified, ...renamed.map((r) => r.to), ...finalAdded.slice(0, 5), ...finalRemoved.slice(0, 5)];
+    const diffPaths = [
+      ...finalModified,
+      ...renamed.map((r) => r.to),
+      ...finalAdded.slice(0, 5),
+      ...finalRemoved.slice(0, 5),
+    ];
     for (const p of diffPaths.slice(0, MAX_COMPARE_FILES)) {
       const isRename = renamed.find((r) => r.to === p);
       const oldPath = isRename?.from;
@@ -571,7 +645,13 @@ export class TaskHistoryService {
         diffs.push({
           path: p,
           ...(oldPath ? { oldPath } : {}),
-          operation: isRename ? "renamed" : fa && !fa.existed ? "added" : fb && !fb.existed ? "removed" : "modified",
+          operation: isRename
+            ? "renamed"
+            : fa && !fa.existed
+              ? "added"
+              : fb && !fb.existed
+                ? "removed"
+                : "modified",
           additions: 0,
           deletions: 0,
           binary: true,
@@ -584,7 +664,13 @@ export class TaskHistoryService {
         diffs.push({
           path: p,
           ...(oldPath ? { oldPath } : {}),
-          operation: isRename ? "renamed" : fa && !fa.existed ? "added" : fb && !fb.existed ? "removed" : "modified",
+          operation: isRename
+            ? "renamed"
+            : fa && !fa.existed
+              ? "added"
+              : fb && !fb.existed
+                ? "removed"
+                : "modified",
           additions: 0,
           deletions: 0,
           binary: false,
@@ -606,7 +692,12 @@ export class TaskHistoryService {
       diffs.push({
         path: p,
         ...(oldPath ? { oldPath } : {}),
-        operation: result.operation === "created" ? "added" : result.operation === "deleted" ? "removed" : result.operation,
+        operation:
+          result.operation === "created"
+            ? "added"
+            : result.operation === "deleted"
+              ? "removed"
+              : result.operation,
         additions: result.additions,
         deletions: result.deletions,
         binary: false,
@@ -635,110 +726,132 @@ export class TaskHistoryService {
   async compareRuns(
     aId: unknown,
     bId: unknown,
-  ): Promise<{ ok: true; rows: CompareRow[] } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(aId)) return { ok: false, errors: ["invalid task id (a)"] };
-    if (!isValidTaskId(bId)) return { ok: false, errors: ["invalid task id (b)"] };
+  ): Promise<
+    { ok: true; rows: CompareRow[] } | { ok: false; errors: string[] }
+  > {
+    if (!isValidTaskId(aId))
+      return { ok: false, errors: ["invalid task id (a)"] };
+    if (!isValidTaskId(bId))
+      return { ok: false, errors: ["invalid task id (b)"] };
     const records = await this.deps.taskStore.list();
     const ra = records.find((r) => r.id === aId);
     const rb = records.find((r) => r.id === bId);
-    if (!ra || this.isTeamRecord(ra)) return { ok: false, errors: [`unknown task: ${aId}`] };
-    if (!rb || this.isTeamRecord(rb)) return { ok: false, errors: [`unknown task: ${bId}`] };
-      const sa = this.toSummary(ra);
-      const sb = this.toSummary(rb);
-      const rows: CompareRow[] = [
-        {
-          metric: "status",
-          a: sa.status,
-          b: sb.status,
-          verdict: statusVerdict(sa.status, sb.status),
-          note: "completed outranks failed/cancelled/interrupted",
-        },
-        {
-          metric: "duration",
-          a: formatDuration(sa.durationMs),
-          b: formatDuration(sb.durationMs),
-          verdict:
-            sa.durationMs !== undefined && sb.durationMs !== undefined
-              ? sa.status === "completed" && sb.status === "completed"
-                ? sa.durationMs === sb.durationMs
-                  ? "SAME"
-                  : sa.durationMs < sb.durationMs
-                    ? "BETTER"
-                    : "WORSE"
-                : "DIFFERENT"
-              : "UNKNOWN",
-          note: "shorter is better only when both completed",
-        },
-        {
-          metric: "provider",
-          a: sa.provider ?? "unknown",
-          b: sb.provider ?? "unknown",
-          verdict: sa.provider === sb.provider ? "SAME" : "DIFFERENT",
-        },
-        {
-          metric: "model",
-          a: sa.model ?? "unknown",
-          b: sb.model ?? "unknown",
-          verdict: sa.model === sb.model ? "SAME" : "DIFFERENT",
-        },
-        {
-          metric: "tool calls",
-          a: String(sa.toolCallCount),
-          b: String(sb.toolCallCount),
-          verdict:
-            sa.status === "completed" && sb.status === "completed"
-              ? sa.toolCallCount === sb.toolCallCount
+    if (!ra || this.isTeamRecord(ra))
+      return { ok: false, errors: [`unknown task: ${aId}`] };
+    if (!rb || this.isTeamRecord(rb))
+      return { ok: false, errors: [`unknown task: ${bId}`] };
+    const sa = this.toSummary(ra);
+    const sb = this.toSummary(rb);
+    const rows: CompareRow[] = [
+      {
+        metric: "status",
+        a: sa.status,
+        b: sb.status,
+        verdict: statusVerdict(sa.status, sb.status),
+        note: "completed outranks failed/cancelled/interrupted",
+      },
+      {
+        metric: "duration",
+        a: formatDuration(sa.durationMs),
+        b: formatDuration(sb.durationMs),
+        verdict:
+          sa.durationMs !== undefined && sb.durationMs !== undefined
+            ? sa.status === "completed" && sb.status === "completed"
+              ? sa.durationMs === sb.durationMs
                 ? "SAME"
-                : sa.toolCallCount < sb.toolCallCount
+                : sa.durationMs < sb.durationMs
                   ? "BETTER"
                   : "WORSE"
-              : "DIFFERENT",
-          note: "fewer calls = more efficient (completed runs only)",
-        },
-        {
-          metric: "retries",
-          a: String(sa.retryCount),
-          b: String(sb.retryCount),
-          verdict:
-            sa.retryCount === sb.retryCount ? "SAME" : sa.retryCount < sb.retryCount ? "BETTER" : "WORSE",
-        },
-        {
-          metric: "files changed",
-          a: String(sa.filesChangedCount),
-          b: String(sb.filesChangedCount),
-          verdict: sa.filesChangedCount === sb.filesChangedCount ? "SAME" : "DIFFERENT",
-          note: "count difference is neutral, not a quality signal",
-        },
-        {
-          metric: "errors",
-          a: sa.hasErrors ? "yes" : "no",
-          b: sb.hasErrors ? "yes" : "no",
-          verdict:
-            sa.hasErrors === sb.hasErrors ? "SAME" : !sa.hasErrors ? "BETTER" : "WORSE",
-        },
-        {
-          metric: "result quality",
-          a: "unmeasured",
-          b: "unmeasured",
-          verdict: "UNKNOWN",
-          note: "outcome quality cannot be measured objectively — inspect both results",
-        },
-      ];
-      return { ok: true, rows };
+              : "DIFFERENT"
+            : "UNKNOWN",
+        note: "shorter is better only when both completed",
+      },
+      {
+        metric: "provider",
+        a: sa.provider ?? "unknown",
+        b: sb.provider ?? "unknown",
+        verdict: sa.provider === sb.provider ? "SAME" : "DIFFERENT",
+      },
+      {
+        metric: "model",
+        a: sa.model ?? "unknown",
+        b: sb.model ?? "unknown",
+        verdict: sa.model === sb.model ? "SAME" : "DIFFERENT",
+      },
+      {
+        metric: "tool calls",
+        a: String(sa.toolCallCount),
+        b: String(sb.toolCallCount),
+        verdict:
+          sa.status === "completed" && sb.status === "completed"
+            ? sa.toolCallCount === sb.toolCallCount
+              ? "SAME"
+              : sa.toolCallCount < sb.toolCallCount
+                ? "BETTER"
+                : "WORSE"
+            : "DIFFERENT",
+        note: "fewer calls = more efficient (completed runs only)",
+      },
+      {
+        metric: "retries",
+        a: String(sa.retryCount),
+        b: String(sb.retryCount),
+        verdict:
+          sa.retryCount === sb.retryCount
+            ? "SAME"
+            : sa.retryCount < sb.retryCount
+              ? "BETTER"
+              : "WORSE",
+      },
+      {
+        metric: "files changed",
+        a: String(sa.filesChangedCount),
+        b: String(sb.filesChangedCount),
+        verdict:
+          sa.filesChangedCount === sb.filesChangedCount ? "SAME" : "DIFFERENT",
+        note: "count difference is neutral, not a quality signal",
+      },
+      {
+        metric: "errors",
+        a: sa.hasErrors ? "yes" : "no",
+        b: sb.hasErrors ? "yes" : "no",
+        verdict:
+          sa.hasErrors === sb.hasErrors
+            ? "SAME"
+            : !sa.hasErrors
+              ? "BETTER"
+              : "WORSE",
+      },
+      {
+        metric: "result quality",
+        a: "unmeasured",
+        b: "unmeasured",
+        verdict: "UNKNOWN",
+        note: "outcome quality cannot be measured objectively — inspect both results",
+      },
+    ];
+    return { ok: true, rows };
   }
 
   // ---- Resume / restart / discard helpers -----------------------------------------------------
 
   async resumeContext(
     taskId: unknown,
-  ): Promise<{ ok: true; context: ResumeContext; taskId: string } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(taskId)) return { ok: false, errors: ["invalid task id"] };
+  ): Promise<
+    | { ok: true; context: ResumeContext; taskId: string }
+    | { ok: false; errors: string[] }
+  > {
+    if (!isValidTaskId(taskId))
+      return { ok: false, errors: ["invalid task id"] };
     const record = await this.deps.taskStore.get(taskId);
     if (!record || this.isTeamRecord(record)) {
       return { ok: false, errors: [`unknown task: ${taskId}`] };
     }
     if (record.status === "completed" || record.status === "archived") {
-      return { ok: false, errors: [`task is ${record.status} — nothing to resume`] };
+      return {
+        ok: false,
+        errors: [`task is ${record.status} — nothing to resume`],
+      };
     }
     const files = this.fileSummaryFor(record);
     const filesChanged = [
@@ -752,7 +865,10 @@ export class TaskHistoryService {
       taskId,
       context: {
         title: record.title,
-        messages: record.messages.map((m) => ({ role: m.role, content: m.content })),
+        messages: record.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
         checkpointsAvailable: this.checkpointsFor(record).length,
         filesChanged: [...new Set(filesChanged)],
       },
@@ -761,14 +877,19 @@ export class TaskHistoryService {
 
   async restartPrompt(
     taskId: unknown,
-  ): Promise<{ ok: true; prompt: string; mode?: string } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(taskId)) return { ok: false, errors: ["invalid task id"] };
+  ): Promise<
+    | { ok: true; prompt: string; mode?: string }
+    | { ok: false; errors: string[] }
+  > {
+    if (!isValidTaskId(taskId))
+      return { ok: false, errors: ["invalid task id"] };
     const record = await this.deps.taskStore.get(taskId);
     if (!record || this.isTeamRecord(record)) {
       return { ok: false, errors: [`unknown task: ${taskId}`] };
     }
     const prompt = firstUserPrompt(record);
-    if (!prompt.trim()) return { ok: false, errors: ["task has no prompt to restart from"] };
+    if (!prompt.trim())
+      return { ok: false, errors: ["task has no prompt to restart from"] };
     const counters = readCounters(record);
     return {
       ok: true,
@@ -781,9 +902,13 @@ export class TaskHistoryService {
     taskId: unknown,
     options?: { activeTaskId?: string | null },
   ): Promise<{ ok: true } | { ok: false; errors: string[] }> {
-    if (!isValidTaskId(taskId)) return { ok: false, errors: ["invalid task id"] };
+    if (!isValidTaskId(taskId))
+      return { ok: false, errors: ["invalid task id"] };
     if (options?.activeTaskId === taskId) {
-      return { ok: false, errors: ["task is currently running — stop it first"] };
+      return {
+        ok: false,
+        errors: ["task is currently running — stop it first"],
+      };
     }
     const record = await this.deps.taskStore.get(taskId);
     if (!record || this.isTeamRecord(record)) {
@@ -801,7 +926,11 @@ export class TaskHistoryService {
 
   private isTeamRecord(record: PersistedTask): boolean {
     const s = record.agentState;
-    return !!s && typeof s === "object" && (s as Record<string, unknown>).kind === "team";
+    return (
+      !!s &&
+      typeof s === "object" &&
+      (s as Record<string, unknown>).kind === "team"
+    );
   }
 
   /** M5 + checkpoint correlation ids for one task (never secrets). */
@@ -874,15 +1003,24 @@ export class TaskHistoryService {
         additions: c.diff?.additions ?? 0,
         deletions: c.diff?.deletions ?? 0,
         binary: c.diff?.binary ?? false,
-        ...(c.diff?.unifiedDiff ? { diffExcerpt: c.diff.unifiedDiff.slice(0, DIFF_EXCERPT_CHARS) } : {}),
+        ...(c.diff?.unifiedDiff
+          ? { diffExcerpt: c.diff.unifiedDiff.slice(0, DIFF_EXCERPT_CHARS) }
+          : {}),
       };
       summary.totalAdditions += entry.additions;
       summary.totalDeletions += entry.deletions;
-      if (c.kind === "create") summary.created.push({ ...entry, changeType: "created" as const });
-      else if (c.kind === "delete") summary.deleted.push({ ...entry, changeType: "deleted" as const });
+      if (c.kind === "create")
+        summary.created.push({ ...entry, changeType: "created" as const });
+      else if (c.kind === "delete")
+        summary.deleted.push({ ...entry, changeType: "deleted" as const });
       else if (c.kind === "rename" || c.kind === "move") {
-        summary.renamed.push({ ...entry, changeType: c.kind === "rename" ? ("renamed" as const) : ("moved" as const) });
-      } else summary.modified.push({ ...entry, changeType: "modified" as const });
+        summary.renamed.push({
+          ...entry,
+          changeType:
+            c.kind === "rename" ? ("renamed" as const) : ("moved" as const),
+        });
+      } else
+        summary.modified.push({ ...entry, changeType: "modified" as const });
     }
     return summary;
   }
@@ -895,11 +1033,16 @@ export class TaskHistoryService {
     const result = lastAssistantResult(record);
     const errors = messageErrors(record);
     const durationMs =
-      record.status === "completed" || record.status === "failed" || record.status === "cancelled" || record.status === "interrupted"
+      record.status === "completed" ||
+      record.status === "failed" ||
+      record.status === "cancelled" ||
+      record.status === "interrupted"
         ? Math.max(0, record.updatedAtMs - record.createdAtMs)
         : undefined;
     const toolCallCount =
-      counters.toolCallCount ?? counters.toolCalls?.reduce((n, t) => n + t.count, 0) ?? 0;
+      counters.toolCallCount ??
+      counters.toolCalls?.reduce((n, t) => n + t.count, 0) ??
+      0;
     const filesChanged = counters.filesChanged ?? record.touchedFiles ?? [];
     // File count prefers the M5 ledger truth; falls back to counters/touched.
     let filesChangedCount = filesChanged.length;
@@ -936,13 +1079,18 @@ export class TaskHistoryService {
     };
   }
 
-  private modelInfo(record: PersistedTask): { provider?: string; model?: string } {
+  private modelInfo(record: PersistedTask): {
+    provider?: string;
+    model?: string;
+  } {
     const mc = record.modelConfig;
     if (!mc || typeof mc !== "object") return {};
     const provider = (mc as Record<string, unknown>).providerId;
     const model = (mc as Record<string, unknown>).modelId;
     return {
-      ...(typeof provider === "string" ? { provider: provider.slice(0, 64) } : {}),
+      ...(typeof provider === "string"
+        ? { provider: provider.slice(0, 64) }
+        : {}),
       ...(typeof model === "string" ? { model: model.slice(0, 64) } : {}),
     };
   }
@@ -960,7 +1108,12 @@ export class TaskHistoryService {
     checkpoints: Array<{ id: string; timestamp: number }>,
   ): TimelineEvent[] {
     const events: TimelineEvent[] = [
-      { timestampMs: record.createdAtMs, phase: "created", kind: "created", summary: "Task created" },
+      {
+        timestampMs: record.createdAtMs,
+        phase: "created",
+        kind: "created",
+        summary: "Task created",
+      },
     ];
     for (const m of record.messages) {
       if (m.role === "user") {
@@ -1043,25 +1196,40 @@ export class TaskHistoryService {
     return {
       interruptedAtMs: record.updatedAtMs,
       lastPhase,
-      ...(lastAssistant ? { lastAssistantExcerpt: clean(lastAssistant, 300) } : {}),
+      ...(lastAssistant
+        ? { lastAssistantExcerpt: clean(lastAssistant, 300) }
+        : {}),
       pendingSummary: lastAssistant
         ? "Assistant produced output before interruption; remaining work is whatever the prompt requested beyond that output."
         : "No assistant output recorded; the original prompt is still pending.",
       filesChanged: [...new Set(changed)].slice(0, 40),
       checkpointsAvailable: checkpointCount,
-      ...(errors[0] ?? counters.lastError ? { error: errors[0] ?? counters.lastError } : {}),
+      ...((errors[0] ?? counters.lastError)
+        ? { error: errors[0] ?? counters.lastError }
+        : {}),
     };
   }
 }
 
 function filesCount(files: TaskFileSummary): number {
-  return files.created.length + files.modified.length + files.deleted.length + files.renamed.length;
+  return (
+    files.created.length +
+    files.modified.length +
+    files.deleted.length +
+    files.renamed.length
+  );
 }
 
 function statusVerdict(a: string, b: string): CompareVerdict {
   if (a === b) return "SAME";
   const rank = (s: string): number =>
-    s === "completed" ? 3 : s === "failed" ? 1 : s === "cancelled" || s === "interrupted" ? 0 : 2;
+    s === "completed"
+      ? 3
+      : s === "failed"
+        ? 1
+        : s === "cancelled" || s === "interrupted"
+          ? 0
+          : 2;
   const ra = rank(a);
   const rb = rank(b);
   if (ra === rb) return "DIFFERENT";

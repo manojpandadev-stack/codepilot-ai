@@ -169,13 +169,21 @@ export class RulesEngine {
     // Skills: project dir only (global skills via home dir).
     if (home) {
       this.collectSkills(
-        { source: "global", dir: path.join(home, ".codepilot", "skills"), base: "~" },
+        {
+          source: "global",
+          dir: path.join(home, ".codepilot", "skills"),
+          base: "~",
+        },
         skills,
         skipped,
       );
     }
     this.collectSkills(
-      { source: "project", dir: path.join(this.host.root, ".codepilot", "skills"), base: "" },
+      {
+        source: "project",
+        dir: path.join(this.host.root, ".codepilot", "skills"),
+        base: "",
+      },
       skills,
       skipped,
     );

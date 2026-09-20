@@ -98,7 +98,10 @@ describe("OllamaLlmProvider — inactivity timeout", () => {
       "complete",
     );
     const text = events
-      .filter((e): e is Extract<LlmStreamEvent, { type: "text-delta" }> => e.type === "text-delta")
+      .filter(
+        (e): e is Extract<LlmStreamEvent, { type: "text-delta" }> =>
+          e.type === "text-delta",
+      )
       .map((e) => e.text)
       .join("");
     expect(text).toContain("chunk3");
@@ -114,7 +117,10 @@ describe("OllamaLlmProvider — inactivity timeout", () => {
         streamController = controller;
         controller.enqueue(
           enc.encode(
-            ndjsonLine({ message: { role: "assistant", content: "start" }, done: false }),
+            ndjsonLine({
+              message: { role: "assistant", content: "start" },
+              done: false,
+            }),
           ),
         );
       },

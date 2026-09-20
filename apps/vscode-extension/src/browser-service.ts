@@ -21,15 +21,26 @@ import {
   createBrowserTools,
   type BrowserToolConfig,
 } from "@codepilot/browser-engine";
-import { ToolRegistry, ToolPermissionManager, ToolAuditLogger, ToolExecutionService } from "@codepilot/tool-engine";
-import type { M4PermissionPipeline, ToolDefinition } from "@codepilot/tool-engine";
+import {
+  ToolRegistry,
+  ToolPermissionManager,
+  ToolAuditLogger,
+  ToolExecutionService,
+} from "@codepilot/tool-engine";
+import type {
+  M4PermissionPipeline,
+  ToolDefinition,
+} from "@codepilot/tool-engine";
 import type { AgentTool } from "@codepilot/agent-runtime";
 
 // ============================================================================
 // Channel discovery
 // ============================================================================
 
-const CHANNEL_CANDIDATES: Array<{ channel: "chrome" | "msedge"; paths: string[] }> = [
+const CHANNEL_CANDIDATES: Array<{
+  channel: "chrome" | "msedge";
+  paths: string[];
+}> = [
   {
     channel: "chrome",
     paths: [
@@ -144,27 +155,40 @@ export class ExtensionBrowserService {
           });
           const duration = Date.now() - started;
           if (result.status === "completed") {
-            this.options.observability.increment("codepilot_browser_tool_calls_total", {
-              tool: t.id,
-              status: "success",
-            });
-            this.options.observability.observeMs("codepilot_browser_tool_duration_ms", duration);
+            this.options.observability.increment(
+              "codepilot_browser_tool_calls_total",
+              {
+                tool: t.id,
+                status: "success",
+              },
+            );
+            this.options.observability.observeMs(
+              "codepilot_browser_tool_duration_ms",
+              duration,
+            );
             return { ok: true, ...(result.output as Record<string, unknown>) };
           }
           const denied = result.status === "denied";
-          this.options.observability.increment("codepilot_browser_tool_calls_total", {
-            tool: t.id,
-            status: denied ? "denied" : "error",
-          });
+          this.options.observability.increment(
+            "codepilot_browser_tool_calls_total",
+            {
+              tool: t.id,
+              status: denied ? "denied" : "error",
+            },
+          );
           return {
             ok: false,
-            error: result.error?.message ?? `browser tool ${t.id} ${result.status}`,
+            error:
+              result.error?.message ?? `browser tool ${t.id} ${result.status}`,
           };
         } catch (err) {
-          this.options.observability.increment("codepilot_browser_tool_calls_total", {
-            tool: t.id,
-            status: "error",
-          });
+          this.options.observability.increment(
+            "codepilot_browser_tool_calls_total",
+            {
+              tool: t.id,
+              status: "error",
+            },
+          );
           return {
             ok: false,
             error: err instanceof Error ? err.message : String(err),
@@ -209,7 +233,9 @@ export function getBrowserService(): ExtensionBrowserService | null {
  * browser is available — callers surface a clear "browser unavailable"
  * message instead of pretending the capability exists.
  */
-export function ensureBrowserService(options: BrowserHostOptions): ExtensionBrowserService | null {
+export function ensureBrowserService(
+  options: BrowserHostOptions,
+): ExtensionBrowserService | null {
   if (instance) return instance;
   if (!discoverBrowserChannel()) {
     return null;

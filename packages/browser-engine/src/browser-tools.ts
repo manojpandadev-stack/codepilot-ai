@@ -16,10 +16,18 @@
  * - ctx.signal is honored on every operation.
  */
 
-import type { ToolDefinition, ToolContext, ToolErrorCode } from "@codepilot/tool-engine";
+import type {
+  ToolDefinition,
+  ToolContext,
+  ToolErrorCode,
+} from "@codepilot/tool-engine";
 import { toolError, redactSecrets } from "@codepilot/tool-engine";
 import type { BrowserService } from "./browser-service.js";
-import { safeTargetOf, hostnameOf, isForbiddenIPLiteral } from "./url-policy.js";
+import {
+  safeTargetOf,
+  hostnameOf,
+  isForbiddenIPLiteral,
+} from "./url-policy.js";
 
 // ============================================================================
 // Shared input validation
@@ -29,13 +37,10 @@ const MAX_SELECTOR_LEN = 500;
 const MAX_URL_LEN = 2048;
 const MAX_TEXT_LEN = 100_000;
 
-function err(
-  code: ToolErrorCode,
-  message: string,
-  executionId: string,
-) {
+function err(code: ToolErrorCode, message: string, executionId: string) {
   return toolError(code, message, executionId, {
-    recoverable: code === "TIMEOUT" || code === "VALIDATION" || code === "INTERNAL",
+    recoverable:
+      code === "TIMEOUT" || code === "VALIDATION" || code === "INTERNAL",
     retryable: code === "TIMEOUT",
     cancelled: code === "CANCELLED",
     timedOut: code === "TIMEOUT",
@@ -54,10 +59,18 @@ function requireString(
 ): string {
   const v = asString(input[key]);
   if (v === null || v.trim().length === 0) {
-    throw err("VALIDATION", `Missing required string parameter '${key}'`, executionId);
+    throw err(
+      "VALIDATION",
+      `Missing required string parameter '${key}'`,
+      executionId,
+    );
   }
   if (v.length > maxLen) {
-    throw err("VALIDATION", `Parameter '${key}' exceeds ${maxLen} characters`, executionId);
+    throw err(
+      "VALIDATION",
+      `Parameter '${key}' exceeds ${maxLen} characters`,
+      executionId,
+    );
   }
   return v;
 }
@@ -70,13 +83,25 @@ function requireNumber(
 ): number {
   const v = input[key];
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    throw err("VALIDATION", `Missing required numeric parameter '${key}'`, executionId);
+    throw err(
+      "VALIDATION",
+      `Missing required numeric parameter '${key}'`,
+      executionId,
+    );
   }
   if (opts.min !== undefined && v < opts.min) {
-    throw err("VALIDATION", `Parameter '${key}' must be >= ${opts.min}`, executionId);
+    throw err(
+      "VALIDATION",
+      `Parameter '${key}' must be >= ${opts.min}`,
+      executionId,
+    );
   }
   if (opts.max !== undefined && v > opts.max) {
-    throw err("VALIDATION", `Parameter '${key}' must be <= ${opts.max}`, executionId);
+    throw err(
+      "VALIDATION",
+      `Parameter '${key}' must be <= ${opts.max}`,
+      executionId,
+    );
   }
   return v;
 }
@@ -100,7 +125,9 @@ function permission(
   return { level, requiresApproval, rationale };
 }
 
-export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] {
+export function createBrowserTools(
+  config: BrowserToolConfig,
+): ToolDefinition[] {
   const { service } = config;
   const selectorPolicy =
     config.selectorPolicy ??
@@ -124,11 +151,7 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     category: "analysis",
     version: "1.0.0",
     capabilities: ["network", "cancellable"],
-    permission: permission(
-      "network",
-      false,
-      "Navigate to a public web page",
-    ),
+    permission: permission("network", false, "Navigate to a public web page"),
     idempotent: true,
     inputSchema: {
       type: "object",
@@ -141,7 +164,8 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     validate(input, _cwd) {
       const url = asString(input.url);
       if (!url) return err("VALIDATION", "url must be a string", "validate");
-      if (url.length > MAX_URL_LEN) return err("VALIDATION", "url too long", "validate");
+      if (url.length > MAX_URL_LEN)
+        return err("VALIDATION", "url too long", "validate");
       const policyHost = safeTargetOf(url);
       if (policyHost === "(invalid url)") {
         return err("VALIDATION", "url is not a valid URL", "validate");
@@ -152,14 +176,23 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
       // happens in BrowserService (fail-closed).
       const literal = isForbiddenIPLiteral(hostnameOf(url) ?? "");
       if (literal.forbidden) {
-        return err("PATH_SECURITY", `blocked by SSRF policy: ${literal.reason}`, "validate");
+        return err(
+          "PATH_SECURITY",
+          `blocked by SSRF policy: ${literal.reason}`,
+          "validate",
+        );
       }
       return null;
     },
     async execute(input, ctx) {
       const executionId = ctx.executionId;
       try {
-        const url = requireString(input as Record<string, unknown>, "url", MAX_URL_LEN, executionId);
+        const url = requireString(
+          input as Record<string, unknown>,
+          "url",
+          MAX_URL_LEN,
+          executionId,
+        );
         const result = await service.navigate(
           ctx.taskId ?? "no-task",
           resolveSessionId(ctx),
@@ -198,10 +231,19 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     capabilities: ["network", "cancellable"],
     permission: permission("network", false, "Browser history back"),
     idempotent: true,
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
     async execute(_input, ctx) {
-      const result = await service.goBack(ctx.taskId ?? "no-task", resolveSessionId(ctx), ctx.signal);
-      if (!result.ok) throw err("INTERNAL", result.error ?? "back failed", ctx.executionId);
+      const result = await service.goBack(
+        ctx.taskId ?? "no-task",
+        resolveSessionId(ctx),
+        ctx.signal,
+      );
+      if (!result.ok)
+        throw err("INTERNAL", result.error ?? "back failed", ctx.executionId);
       return { ok: true, url: result.url, title: result.title };
     },
   };
@@ -240,14 +282,18 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     inputSchema: {
       type: "object",
       properties: {
-        selector: { type: "string", description: "CSS selector of the element to click" },
+        selector: {
+          type: "string",
+          description: "CSS selector of the element to click",
+        },
       },
       required: ["selector"],
       additionalProperties: false,
     },
     validate(input) {
       const selector = asString(input.selector);
-      if (!selector) return err("VALIDATION", "selector must be a string", "validate");
+      if (!selector)
+        return err("VALIDATION", "selector must be a string", "validate");
       if (selectorPolicy(selector) === null) {
         return err("VALIDATION", "selector rejected by policy", "validate");
       }
@@ -255,10 +301,24 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     },
     async execute(input, ctx) {
       try {
-        const selector = requireString(input as Record<string, unknown>, "selector", MAX_SELECTOR_LEN, ctx.executionId);
-        const result = await service.click(ctx.taskId ?? "no-task", resolveSessionId(ctx), selector, ctx.signal);
+        const selector = requireString(
+          input as Record<string, unknown>,
+          "selector",
+          MAX_SELECTOR_LEN,
+          ctx.executionId,
+        );
+        const result = await service.click(
+          ctx.taskId ?? "no-task",
+          resolveSessionId(ctx),
+          selector,
+          ctx.signal,
+        );
         if (!result.ok) {
-          throw err(result.error?.includes("cancelled") ? "CANCELLED" : "INTERNAL", result.error ?? "click failed", ctx.executionId);
+          throw err(
+            result.error?.includes("cancelled") ? "CANCELLED" : "INTERNAL",
+            result.error ?? "click failed",
+            ctx.executionId,
+          );
         }
         return { ok: true };
       } catch (e) {
@@ -288,7 +348,10 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     inputSchema: {
       type: "object",
       properties: {
-        selector: { type: "string", description: "CSS selector of the input element" },
+        selector: {
+          type: "string",
+          description: "CSS selector of the input element",
+        },
         text: { type: "string", description: "Text to enter (never logged)" },
         submit: { type: "boolean", description: "Press Enter afterwards" },
       },
@@ -298,14 +361,34 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     async execute(input, ctx) {
       try {
         const rec = input as Record<string, unknown>;
-        const selector = requireString(rec, "selector", MAX_SELECTOR_LEN, ctx.executionId);
+        const selector = requireString(
+          rec,
+          "selector",
+          MAX_SELECTOR_LEN,
+          ctx.executionId,
+        );
         const text = requireString(rec, "text", MAX_TEXT_LEN, ctx.executionId);
-        const fillResult = await service.fill(ctx.taskId ?? "no-task", resolveSessionId(ctx), selector, text, ctx.signal);
+        const fillResult = await service.fill(
+          ctx.taskId ?? "no-task",
+          resolveSessionId(ctx),
+          selector,
+          text,
+          ctx.signal,
+        );
         if (!fillResult.ok) {
-          throw err("INTERNAL", fillResult.error ?? "fill failed", ctx.executionId);
+          throw err(
+            "INTERNAL",
+            fillResult.error ?? "fill failed",
+            ctx.executionId,
+          );
         }
         if (input.submit === true) {
-          await service.press(ctx.taskId ?? "no-task", resolveSessionId(ctx), "Enter", ctx.signal);
+          await service.press(
+            ctx.taskId ?? "no-task",
+            resolveSessionId(ctx),
+            "Enter",
+            ctx.signal,
+          );
         }
         return { ok: true };
       } catch (e) {
@@ -326,19 +409,40 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     category: "analysis",
     version: "1.0.0",
     capabilities: ["network", "cancellable"],
-    permission: permission("network", true, "Key press may submit forms or trigger actions"),
+    permission: permission(
+      "network",
+      true,
+      "Key press may submit forms or trigger actions",
+    ),
     idempotent: false,
     inputSchema: {
       type: "object",
-      properties: { key: { type: "string", description: "Key name, e.g. Enter" } },
+      properties: {
+        key: { type: "string", description: "Key name, e.g. Enter" },
+      },
       required: ["key"],
       additionalProperties: false,
     },
     async execute(input, ctx) {
       try {
-        const key = requireString(input as Record<string, unknown>, "key", 64, ctx.executionId);
-        const result = await service.press(ctx.taskId ?? "no-task", resolveSessionId(ctx), key, ctx.signal);
-        if (!result.ok) throw err("INTERNAL", result.error ?? "press failed", ctx.executionId);
+        const key = requireString(
+          input as Record<string, unknown>,
+          "key",
+          64,
+          ctx.executionId,
+        );
+        const result = await service.press(
+          ctx.taskId ?? "no-task",
+          resolveSessionId(ctx),
+          key,
+          ctx.signal,
+        );
+        if (!result.ok)
+          throw err(
+            "INTERNAL",
+            result.error ?? "press failed",
+            ctx.executionId,
+          );
         return { ok: true };
       } catch (e) {
         if (isToolError(e)) throw e;
@@ -360,17 +464,30 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
       type: "object",
       properties: {
         deltaX: { type: "number", description: "Horizontal pixels" },
-        deltaY: { type: "number", description: "Vertical pixels (positive = down)" },
+        deltaY: {
+          type: "number",
+          description: "Vertical pixels (positive = down)",
+        },
       },
       required: ["deltaY"],
       additionalProperties: false,
     },
     async execute(input, ctx) {
       const rec = input as Record<string, unknown>;
-      const deltaY = requireNumber(rec, "deltaY", ctx.executionId, { min: -50_000, max: 50_000 });
+      const deltaY = requireNumber(rec, "deltaY", ctx.executionId, {
+        min: -50_000,
+        max: 50_000,
+      });
       const deltaX = typeof rec.deltaX === "number" ? rec.deltaX : 0;
-      const result = await service.scroll(ctx.taskId ?? "no-task", resolveSessionId(ctx), deltaX, deltaY, ctx.signal);
-      if (!result.ok) throw err("INTERNAL", result.error ?? "scroll failed", ctx.executionId);
+      const result = await service.scroll(
+        ctx.taskId ?? "no-task",
+        resolveSessionId(ctx),
+        deltaX,
+        deltaY,
+        ctx.signal,
+      );
+      if (!result.ok)
+        throw err("INTERNAL", result.error ?? "scroll failed", ctx.executionId);
       return { ok: true };
     },
   };
@@ -388,7 +505,10 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
       type: "object",
       properties: {
         selector: { type: "string", description: "CSS selector to wait for" },
-        ms: { type: "number", description: "Max milliseconds to wait (<= 10000)" },
+        ms: {
+          type: "number",
+          description: "Max milliseconds to wait (<= 10000)",
+        },
       },
       additionalProperties: false,
     },
@@ -405,7 +525,8 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
         sel ?? Math.min(ms ?? 5000, 10_000),
         ctx.signal,
       );
-      if (!result.ok) throw err("TIMEOUT", result.error ?? "wait failed", ctx.executionId);
+      if (!result.ok)
+        throw err("TIMEOUT", result.error ?? "wait failed", ctx.executionId);
       return { ok: true };
     },
   };
@@ -423,9 +544,17 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     capabilities: ["cancellable"],
     permission: permission("read", false, "Read the current page content"),
     idempotent: true,
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
     async execute(_input, ctx) {
-      const snap = await service.inspect(ctx.taskId ?? "no-task", resolveSessionId(ctx), ctx.signal);
+      const snap = await service.inspect(
+        ctx.taskId ?? "no-task",
+        resolveSessionId(ctx),
+        ctx.signal,
+      );
       if ("ok" in snap && snap.ok === false) {
         throw err("INTERNAL", snap.error, ctx.executionId);
       }
@@ -453,9 +582,17 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     capabilities: ["cancellable"],
     permission: permission("read", false, "Screenshot the current page"),
     idempotent: true,
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
     async execute(_input, ctx) {
-      const shot = await service.screenshot(ctx.taskId ?? "no-task", resolveSessionId(ctx), ctx.signal);
+      const shot = await service.screenshot(
+        ctx.taskId ?? "no-task",
+        resolveSessionId(ctx),
+        ctx.signal,
+      );
       if (!shot.ok) throw err("INTERNAL", shot.error, ctx.executionId);
       return { ok: true, imageBase64: shot.base64 };
     },
@@ -472,7 +609,11 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
     capabilities: [],
     permission: permission("read", false, "Close the browser session"),
     idempotent: true,
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
     async execute(_input, ctx) {
       await service.closeSession(ctx.taskId ?? "no-task");
       return { ok: true };
@@ -501,10 +642,7 @@ export function createBrowserTools(config: BrowserToolConfig): ToolDefinition[] 
 
 function isToolError(e: unknown): boolean {
   return (
-    e !== null &&
-    typeof e === "object" &&
-    "code" in e &&
-    "executionId" in e
+    e !== null && typeof e === "object" && "code" in e && "executionId" in e
   );
 }
 

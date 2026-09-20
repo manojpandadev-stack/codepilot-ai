@@ -57,7 +57,9 @@ interface WireEvent {
   error?: { message?: string };
 }
 
-export function toAnthropicMessages(messages: AgentMessage[]): Array<Record<string, unknown>> {
+export function toAnthropicMessages(
+  messages: AgentMessage[],
+): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const msg of messages) {
     if (typeof msg.content === "string") {
@@ -68,18 +70,42 @@ export function toAnthropicMessages(messages: AgentMessage[]): Array<Record<stri
       const blocks: Array<Record<string, unknown>> = [];
       for (const b of msg.content) {
         if (b.type === "text") blocks.push({ type: "text", text: b.text });
-        else if (b.type === "tool_use") {
-          blocks.push({ type: "tool_use", id: b.id, name: b.name, input: b.input });
+        else if (b.type === "image") {
+          throw new Error("image blocks are only supported in user messages");
+        } else if (b.type === "tool_use") {
+          blocks.push({
+            type: "tool_use",
+            id: b.id,
+            name: b.name,
+            input: b.input,
+          });
         }
       }
       if (blocks.length > 0) out.push({ role: "assistant", content: blocks });
       continue;
     }
-    // user: text + tool_result blocks (tool_result blocks are top-level user content)
+    // user: text + image + tool_result blocks (tool_result blocks are top-level user content).
+    // Text is always emitted before images (deterministic ordering).
     const blocks: Array<Record<string, unknown>> = [];
     for (const b of msg.content) {
       if (b.type === "text") blocks.push({ type: "text", text: b.text });
-      else if (b.type === "tool_result") {
+    }
+    for (const b of msg.content) {
+      if (b.type === "image") {
+        if (typeof b.dataBase64 !== "string" || b.dataBase64.length === 0) {
+          throw new Error(
+            "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+          );
+        }
+        blocks.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: b.mime ?? "image/png",
+            data: b.dataBase64,
+          },
+        });
+      } else if (b.type === "tool_result") {
         blocks.push({
           type: "tool_result",
           tool_use_id: b.tool_use_id,
@@ -103,7 +129,10 @@ export class AnthropicLlmProvider implements LlmProvider {
 
   constructor(options: AnthropicLlmOptions) {
     this.apiKey = options.apiKey;
-    this.baseUrl = (options.baseUrl ?? ANTHROPIC_DEFAULT_BASE).replace(/\/+$/, "");
+    this.baseUrl = (options.baseUrl ?? ANTHROPIC_DEFAULT_BASE).replace(
+      /\/+$/,
+      "",
+    );
     this.version = options.version ?? "2023-06-01";
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 180_000;
@@ -117,7 +146,9 @@ export class AnthropicLlmProvider implements LlmProvider {
       stream: true,
       messages: toAnthropicMessages(request.messages),
       ...(request.systemPrompt ? { system: request.systemPrompt } : {}),
-      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.temperature !== undefined
+        ? { temperature: request.temperature }
+        : {}),
       ...(tools.length > 0
         ? {
             tools: tools.map((tool: AgentTool) => ({
@@ -153,18 +184,28 @@ export class AnthropicLlmProvider implements LlmProvider {
         yield { type: "finish", reason: "aborted" };
         return;
       }
-      throw new LlmError(this.id, `request failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new LlmError(
+        this.id,
+        `request failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     if (!response.ok || !response.body) {
       cleanup();
       const detail = await response.text().catch(() => "");
-      throw new LlmError(this.id, `messages failed ${response.status}: ${detail.slice(0, 300)}`, {
-        status: response.status,
-      });
+      throw new LlmError(
+        this.id,
+        `messages failed ${response.status}: ${detail.slice(0, 300)}`,
+        {
+          status: response.status,
+        },
+      );
     }
 
     // Tool-call assembly state.
-    const openTools = new Map<number, { id: string; name: string; json: string }>();
+    const openTools = new Map<
+      number,
+      { id: string; name: string; json: string }
+    >();
     let inputTokens = 0;
     let outputTokens = 0;
     let abortRequested = false;
@@ -208,7 +249,10 @@ export class AnthropicLlmProvider implements LlmProvider {
               inputTokens = evt.message?.usage?.input_tokens ?? inputTokens;
               break;
             case "content_block_start":
-              if (evt.content_block?.type === "tool_use" && evt.content_block.id) {
+              if (
+                evt.content_block?.type === "tool_use" &&
+                evt.content_block.id
+              ) {
                 openTools.set(evt.index ?? openTools.size, {
                   id: evt.content_block.id,
                   name: evt.content_block.name ?? "",
@@ -219,9 +263,15 @@ export class AnthropicLlmProvider implements LlmProvider {
             case "content_block_delta":
               if (evt.delta?.type === "text_delta" && evt.delta.text) {
                 yield { type: "text-delta", text: evt.delta.text };
-              } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
+              } else if (
+                evt.delta?.type === "thinking_delta" &&
+                evt.delta.thinking
+              ) {
                 yield { type: "reasoning-delta", text: evt.delta.thinking };
-              } else if (evt.delta?.type === "input_json_delta" && evt.delta.partial_json) {
+              } else if (
+                evt.delta?.type === "input_json_delta" &&
+                evt.delta.partial_json
+              ) {
                 const open = openTools.get(evt.index ?? 0);
                 if (open) open.json += evt.delta.partial_json;
               }
@@ -275,7 +325,10 @@ export class AnthropicLlmProvider implements LlmProvider {
           },
         };
       }
-      yield { type: "finish", reason: abortRequested ? "aborted" : finishReason };
+      yield {
+        type: "finish",
+        reason: abortRequested ? "aborted" : finishReason,
+      };
     } catch (err) {
       if (request.signal?.aborted) {
         yield { type: "finish", reason: "aborted" };

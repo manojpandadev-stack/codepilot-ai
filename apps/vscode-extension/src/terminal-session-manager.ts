@@ -193,7 +193,18 @@ export type AgentSessionStartResult =
 
 export type AgentSessionExecResult =
   | { ok: true; result: AgentSessionCommandResult }
-  | { ok: false; error: string; code: "NOT_FOUND" | "FORBIDDEN" | "M4_DENIED" | "CLOSED" | "INVALID" | "BUSY" | "LIMIT" };
+  | {
+      ok: false;
+      error: string;
+      code:
+        | "NOT_FOUND"
+        | "FORBIDDEN"
+        | "M4_DENIED"
+        | "CLOSED"
+        | "INVALID"
+        | "BUSY"
+        | "LIMIT";
+    };
 
 /**
  * Pre-computed M4 decision for one agent session command. The extension's
@@ -229,7 +240,13 @@ export class TerminalSessionManager {
   private auditHook:
     | ((entry: {
         sessionId: string;
-        phase: "requested" | "decision" | "started" | "completed" | "failed" | "cancelled";
+        phase:
+          | "requested"
+          | "decision"
+          | "started"
+          | "completed"
+          | "failed"
+          | "cancelled";
         command: string;
         status?: string;
         exitCode?: number | null;
@@ -261,9 +278,7 @@ export class TerminalSessionManager {
   }
 
   /** Wire the host lifecycle audit hook (command-level, never per-chunk). */
-  setAuditHook(
-    hook: TerminalSessionManager["auditHook"],
-  ): void {
+  setAuditHook(hook: TerminalSessionManager["auditHook"]): void {
     this.auditHook = hook;
   }
 
@@ -532,7 +547,13 @@ export class TerminalSessionManager {
     session: TerminalSession,
     final: Extract<
       TerminalStreamEvent,
-      { type: "terminal.exit" | "terminal.cancelled" | "terminal.timeout" | "terminal.error" }
+      {
+        type:
+          | "terminal.exit"
+          | "terminal.cancelled"
+          | "terminal.timeout"
+          | "terminal.error";
+      }
     >,
   ): void {
     const snap = session.snapshot();
@@ -543,7 +564,9 @@ export class TerminalSessionManager {
     };
     const out = tail(snap.stdout);
     const errOut = tail(snap.stderr);
-    const startedAt = this.sessionMeta.get(session.id)?.startedAt ?? Date.now() - ((final as { durationMs?: number }).durationMs ?? 0);
+    const startedAt =
+      this.sessionMeta.get(session.id)?.startedAt ??
+      Date.now() - ((final as { durationMs?: number }).durationMs ?? 0);
     const record: SessionCommandRecord = {
       sessionId: session.id,
       command: this.sessionMeta.get(session.id)?.command ?? "",
@@ -557,7 +580,8 @@ export class TerminalSessionManager {
       stdoutTail: out.text,
       stderrTail: errOut.text,
       outputTruncated:
-        out.truncated || errOut.truncated ||
+        out.truncated ||
+        errOut.truncated ||
         snap.stdout.length > this.maxHistoryBytes ||
         snap.stderr.length > this.maxHistoryBytes,
     };
@@ -586,7 +610,8 @@ export class TerminalSessionManager {
     const now = Date.now();
     if (this.decisionTokens.size > 0) {
       for (const [key, t] of this.decisionTokens) {
-        if (now - t.issuedAt > DECISION_TOKEN_TTL_MS) this.decisionTokens.delete(key);
+        if (now - t.issuedAt > DECISION_TOKEN_TTL_MS)
+          this.decisionTokens.delete(key);
       }
     }
     this.decisionTokens.set(this.tokenKey(token.command), token);
@@ -616,11 +641,17 @@ export class TerminalSessionManager {
     taskId: string;
     cwd?: string;
   }): AgentSessionStartResult {
-    if (typeof options.taskId !== "string" || options.taskId.trim().length === 0) {
+    if (
+      typeof options.taskId !== "string" ||
+      options.taskId.trim().length === 0
+    ) {
       return { ok: false, error: "taskId is required" };
     }
     if (this.agentSessions.size >= MAX_AGENT_SESSIONS) {
-      return { ok: false, error: `Agent session limit reached (${MAX_AGENT_SESSIONS} concurrent)` };
+      return {
+        ok: false,
+        error: `Agent session limit reached (${MAX_AGENT_SESSIONS} concurrent)`,
+      };
     }
     const sessionId = `agent-ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.agentSessions.set(sessionId, {
@@ -639,7 +670,12 @@ export class TerminalSessionManager {
       phase: "requested",
       command: "(agent session created)",
     });
-    return { ok: true, sessionId, taskId: options.taskId, createdAt: Date.now() };
+    return {
+      ok: true,
+      sessionId,
+      taskId: options.taskId,
+      createdAt: Date.now(),
+    };
   }
 
   /** Look up a container and enforce ownership. Deny-closed. */
@@ -648,7 +684,11 @@ export class TerminalSessionManager {
     taskId: unknown,
   ):
     | { ok: true; container: AgentSessionContainer }
-    | { ok: false; error: string; code: "NOT_FOUND" | "FORBIDDEN" | "INVALID" } {
+    | {
+        ok: false;
+        error: string;
+        code: "NOT_FOUND" | "FORBIDDEN" | "INVALID";
+      } {
     if (typeof sessionId !== "string" || sessionId.length === 0) {
       return { ok: false, error: "sessionId is required", code: "INVALID" };
     }
@@ -657,7 +697,11 @@ export class TerminalSessionManager {
     }
     const container = this.agentSessions.get(sessionId);
     if (!container) {
-      return { ok: false, error: `unknown session: ${sessionId}`, code: "NOT_FOUND" };
+      return {
+        ok: false,
+        error: `unknown session: ${sessionId}`,
+        code: "NOT_FOUND",
+      };
     }
     if (container.taskId !== taskId) {
       return {
@@ -702,10 +746,18 @@ export class TerminalSessionManager {
       return { ok: false, error: "command is required", code: "INVALID" };
     }
     if (options.command.length > 4096) {
-      return { ok: false, error: "command too long (max 4096 chars)", code: "INVALID" };
+      return {
+        ok: false,
+        error: "command too long (max 4096 chars)",
+        code: "INVALID",
+      };
     }
     if (this.sessions.size >= MAX_SESSIONS) {
-      return { ok: false, error: `Session limit reached (${MAX_SESSIONS} concurrent)`, code: "LIMIT" };
+      return {
+        ok: false,
+        error: `Session limit reached (${MAX_SESSIONS} concurrent)`,
+        code: "LIMIT",
+      };
     }
 
     // commandId/index are assigned at RUN time (inside enqueue), not at
@@ -844,7 +896,9 @@ export class TerminalSessionManager {
       const snap = commandSession.snapshot();
       const max = this.maxHistoryBytes;
       const tail = (text: string): { text: string; truncated: boolean } =>
-        text.length <= max ? { text, truncated: false } : { text: text.slice(-max), truncated: true };
+        text.length <= max
+          ? { text, truncated: false }
+          : { text: text.slice(-max), truncated: true };
       const out = tail(snap.stdout);
       const errOut = tail(snap.stderr);
       // Explicit indicator when output was bounded — never silent.

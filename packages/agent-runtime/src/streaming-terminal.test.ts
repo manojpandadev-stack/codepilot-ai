@@ -28,6 +28,20 @@ afterEach(() => {
 
 const NODE = process.execPath;
 
+/**
+ * Shell command that runs a Node one-liner, in the syntax of the HOST shell.
+ * The `bash` tool resolves the platform default shell (PowerShell on win32,
+ * POSIX bash/zsh elsewhere), so the harness — like a real model — must emit
+ * syntax for that shell: PowerShell's call operator (`& "..."`) on Windows,
+ * plain quoting on POSIX.
+ */
+function nodeScriptCommand(script: string): string {
+  if (process.platform === "win32") {
+    return `& "${NODE}" -e "${script}"`;
+  }
+  return `"${NODE}" -e "${script}"`;
+}
+
 function makeRuntime(): CodePilotRuntime {
   return new CodePilotRuntime({
     workspaceRoot: process.cwd(),
@@ -44,14 +58,13 @@ function bashTurn(script: string): {
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
 } {
   // Shell command strings, exactly as the model emits them per the tool
-  // schema (the `& "..."` form keeps spaced install paths working under
-  // PowerShell, which reads the script from stdin).
+  // schema — host-shell syntax (see nodeScriptCommand above).
   return {
     texts: [],
     toolCalls: [
       {
         name: "bash",
-        args: { command: `& "${NODE}" -e "${script}"` },
+        args: { command: nodeScriptCommand(script) },
       },
     ],
   };
@@ -70,10 +83,7 @@ function outputsOf(seen: AgentEvent[]) {
 
 describe("runtime streaming terminal", () => {
   it("routes bash tool calls through the streaming executor", async () => {
-    stubOllamaFetch([
-      bashTurn("console.log('RT-1')"),
-      { texts: ["done"] },
-    ]);
+    stubOllamaFetch([bashTurn("console.log('RT-1')"), { texts: ["done"] }]);
     const runtime = makeRuntime();
     const seen: AgentEvent[] = [];
     runtime.subscribe((event) => {
@@ -122,18 +132,24 @@ describe("runtime streaming terminal", () => {
     expect(firstOutputAt).toBeGreaterThanOrEqual(0);
     expect(completedAt).toBeGreaterThan(firstOutputAt);
     // Monotonic per-execution sequence.
-    const seqs = outputs.map((o) => (o.type === "terminal_output" ? o.seq : -1));
+    const seqs = outputs.map((o) =>
+      o.type === "terminal_output" ? o.seq : -1,
+    );
     for (let i = 1; i < seqs.length; i += 1) {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]!);
     }
     // Final contract kept: combined output reaches tool_completed.
     const completed = seen.find((e) => e.type === "tool_completed");
-    expect(completed?.type === "tool_completed" && String(completed.output)).toContain("RT-3");
+    expect(
+      completed?.type === "tool_completed" && String(completed.output),
+    ).toContain("RT-3");
   });
 
   it("labels stderr chunks and keeps per-stream order", async () => {
     stubOllamaFetch([
-      bashTurn("console.log('OUT-1');console.error('ERR-1');console.log('OUT-2');"),
+      bashTurn(
+        "console.log('OUT-1');console.error('ERR-1');console.log('OUT-2');",
+      ),
       { texts: ["done"] },
     ]);
     const runtime = makeRuntime();
@@ -161,11 +177,11 @@ describe("runtime streaming terminal", () => {
   });
 
   it("surfaces executor failure as tool_failed with streamed prefix", async () => {
-    // A failing shell: node prints a marker, then PowerShell exits 4.
-    // (The stdin bootstrap normalizes in-script process exits, so the
-    // shell-level `exit` carries the asserted code.)
+    // A failing shell: node prints a marker, then the shell exits 4.
+    // (On win32 the stdin bootstrap normalizes in-script process exits, so
+    // the shell-level `exit` carries the asserted code.)
     stubOllamaFetch([
-      rawBashTurn(`& "${NODE}" -e "console.log('before-fail')"; exit 4`),
+      rawBashTurn(`${nodeScriptCommand("console.log('before-fail')")}; exit 4`),
       { texts: ["done"] },
     ]);
     const runtime = makeRuntime();

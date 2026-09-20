@@ -16,6 +16,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { describeImage } from "@codepilot/shared";
 import type { TaskStore } from "./m12-task-store.js";
 import type {
   PersistedConversationMessage,
@@ -56,7 +57,18 @@ function shrinkSegmentForSummary(
   return segment.map((m) => {
     if (typeof m.content === "string") return m;
     const blocks: WireBlock[] = m.content.map((b): WireBlock => {
-      if (b.type !== "tool_result") return b;
+      if (b.type !== "tool_result") {
+        // Image blocks cannot be summarized as pixels: replace with a
+        // textual marker so token accounting stays honest. All other
+        // blocks pass through untouched.
+        if (b.type === "image") {
+          return {
+            type: "text",
+            text: describeImage(b.mime, b.sizeBytes ?? 0),
+          };
+        }
+        return b;
+      }
       if (b.content.length <= MAX_TOOL_RESULT_IN_SUMMARY_SOURCE) return b;
       const head = b.content.slice(0, 700);
       const tail = b.content.slice(-400);
@@ -65,7 +77,11 @@ function shrinkSegmentForSummary(
         content: `${head}\n…[bounded ${b.content.length} chars]…\n${tail}`,
       };
     });
-    return { role: m.role, content: blocks, ...(m.ts !== undefined ? { ts: m.ts } : {}) };
+    return {
+      role: m.role,
+      content: blocks,
+      ...(m.ts !== undefined ? { ts: m.ts } : {}),
+    };
   });
 }
 
@@ -74,7 +90,10 @@ export interface CompactionEngineOptions {
   /** Resolve the summarizer call config for the ACTIVE provider/model. */
   resolveSummarizerConfig: () => Promise<SummarizerConfig | null>;
   /** Model/provider context-window lookups (host → catalogue/discovery). */
-  lookupModelContextWindow?: (providerId: string, modelId: string) => number | undefined;
+  lookupModelContextWindow?: (
+    providerId: string,
+    modelId: string,
+  ) => number | undefined;
   lookupProviderContextWindow?: (providerId: string) => number | undefined;
   /**
    * TEST HOOK ONLY: overrides the one-shot summarizer call. Production
@@ -97,14 +116,23 @@ export interface CompactionOutcome {
   /** Present when compaction ran: the summary message + tail wire shape. */
   compactedMessages?: ResumeWireMessage[];
   /** Token estimates for cost/observability (semantic mode). */
-  summaryCost?: { promptTokensEstimate: number; outputTokensEstimate: number; latencyMs: number };
+  summaryCost?: {
+    promptTokensEstimate: number;
+    outputTokensEstimate: number;
+    latencyMs: number;
+  };
 }
 
 function boundaryHash(taskId: string, toTs: number): string {
-  return createHash("sha256").update(`${taskId}:${toTs}`).digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(`${taskId}:${toTs}`)
+    .digest("hex")
+    .slice(0, 16);
 }
 
-function renderSummaryText(s: NonNullable<CompactionArtifact["summary"]>): string {
+function renderSummaryText(
+  s: NonNullable<CompactionArtifact["summary"]>,
+): string {
   const lines: string[] = [];
   lines.push(`## Conversation summary (compacted context)`);
   lines.push(`**Objective:** ${s.objective}`);
@@ -133,7 +161,11 @@ function foldSummaries(
   prior: NonNullable<SummaryLike>,
   next: NonNullable<SummaryLike>,
 ): NonNullable<SummaryLike> {
-  const merge = (a: string[] | undefined, b: string[] | undefined, cap: number): string[] => {
+  const merge = (
+    a: string[] | undefined,
+    b: string[] | undefined,
+    cap: number,
+  ): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
     for (const item of [...(b ?? []), ...(a ?? [])]) {
@@ -151,15 +183,21 @@ function foldSummaries(
     completedWork: merge(prior.completedWork, next.completedWork, 14),
     filesChanged: merge(prior.filesChanged, next.filesChanged, 20),
     decisions: merge(prior.decisions, next.decisions, 10),
-    importantFindings: merge(prior.importantFindings, next.importantFindings, 14),
+    importantFindings: merge(
+      prior.importantFindings,
+      next.importantFindings,
+      14,
+    ),
     errors: merge(prior.errors, next.errors, 8),
     tests: merge(prior.tests, next.tests, 8),
-    pendingWork: next.pendingWork?.length ? next.pendingWork : prior.pendingWork ?? [],
+    pendingWork: next.pendingWork?.length
+      ? next.pendingWork
+      : (prior.pendingWork ?? []),
     toolState: merge(prior.toolState, next.toolState, 8),
     checkpoints: merge(prior.checkpoints, next.checkpoints, 10),
     resumeInstructions: next.resumeInstructions?.length
       ? next.resumeInstructions
-      : prior.resumeInstructions ?? [],
+      : (prior.resumeInstructions ?? []),
   };
 }
 
@@ -198,7 +236,11 @@ export class CompactionEngine {
     const store = this.options.store;
     const task = await store.get(taskId);
     if (!task?.conversation || task.conversation.length === 0) {
-      return { ran: false, mode: "skipped", reason: "no conversation to compact" };
+      return {
+        ran: false,
+        mode: "skipped",
+        reason: "no conversation to compact",
+      };
     }
 
     const pressure = this.evaluate(task.conversation, providerId, modelId);
@@ -236,7 +278,10 @@ export class CompactionEngine {
         reason: "boundary already compacted (artifact reused)",
         pressure,
         artifact: existing,
-        compactedMessages: this.composeCompactedMessages(existing, task.conversation),
+        compactedMessages: this.composeCompactedMessages(
+          existing,
+          task.conversation,
+        ),
       };
     }
 
@@ -281,7 +326,10 @@ export class CompactionEngine {
           remainingMessageCount: total - toIndex,
           summary: result.summary,
           summaryText,
-          summarizer: { providerId: result.providerId, modelId: result.modelId },
+          summarizer: {
+            providerId: result.providerId,
+            modelId: result.modelId,
+          },
           tokensBefore,
           tokensAfter: tailTokens + Math.ceil(summaryText.length / 4),
           mode: "semantic",
@@ -295,7 +343,10 @@ export class CompactionEngine {
           artifact,
           reason: artifact.reason,
           pressure,
-          compactedMessages: this.composeCompactedMessages(artifact, task.conversation),
+          compactedMessages: this.composeCompactedMessages(
+            artifact,
+            task.conversation,
+          ),
           summaryCost: {
             promptTokensEstimate: result.promptTokensEstimate,
             outputTokensEstimate: result.outputTokensEstimate,
@@ -335,7 +386,10 @@ export class CompactionEngine {
       artifact,
       reason: artifact.reason,
       pressure,
-      compactedMessages: this.composeCompactedMessages(artifact, task.conversation),
+      compactedMessages: this.composeCompactedMessages(
+        artifact,
+        task.conversation,
+      ),
     };
   }
 
@@ -369,7 +423,10 @@ export class CompactionEngine {
     if (!artifact.summaryText) return [];
     const boundary = artifact.sourceRange.toIndex;
     const tail = conversation.slice(boundary);
-    const tailWire = buildInitialMessages({ ...conversation, conversation: tail } as never);
+    const tailWire = buildInitialMessages({
+      ...conversation,
+      conversation: tail,
+    } as never);
     const summaryMessage: ResumeWireMessage = {
       role: "user",
       content: `${artifact.summaryText}\n\n(The above is a faithful summary of the earlier conversation; the original full history is preserved. Continue the task.)`,

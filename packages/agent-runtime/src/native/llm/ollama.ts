@@ -15,7 +15,7 @@
  *   (`prompt_eval_count`/`eval_count`) → usage.
  */
 
-import type { AgentMessage, AgentTool } from "../types.js";
+import type { AgentMessage, AgentTool, ImageBlock } from "../types.js";
 import {
   LlmError,
   type LlmProvider,
@@ -49,22 +49,42 @@ export interface OllamaChatLine {
 }
 
 /** Translate CodePilot wire messages into Ollama chat messages. */
-export function toOllamaMessages(
-  messages: AgentMessage[],
-): Array<{ role: "user" | "assistant" | "tool"; content: string; tool_calls?: unknown[] }> {
-  const out: Array<{ role: "user" | "assistant" | "tool"; content: string; tool_calls?: unknown[] }> = [];
+export function toOllamaMessages(messages: AgentMessage[]): Array<{
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: unknown[];
+  images?: string[];
+}> {
+  const out: Array<{
+    role: "user" | "assistant" | "tool";
+    content: string;
+    tool_calls?: unknown[];
+    images?: string[];
+  }> = [];
   for (const msg of messages) {
     if (typeof msg.content === "string") {
       out.push({ role: msg.role, content: msg.content });
       continue;
     }
     if (msg.role === "assistant") {
+      if (msg.content.some((b) => b.type === "image")) {
+        throw new Error("image blocks are only supported in user messages");
+      }
       const text = msg.content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")
         .map((b) => b.text)
         .join("");
       const toolCalls = msg.content
-        .filter((b): b is { type: "tool_use"; id: string; name: string; input: Record<string, unknown> } => b.type === "tool_use")
+        .filter(
+          (
+            b,
+          ): b is {
+            type: "tool_use";
+            id: string;
+            name: string;
+            input: Record<string, unknown>;
+          } => b.type === "tool_use",
+        )
         .map((b) => ({ function: { name: b.name, arguments: b.input } }));
       out.push({
         role: "assistant",
@@ -73,18 +93,36 @@ export function toOllamaMessages(
       });
       continue;
     }
-    // user message: text blocks + tool_result blocks → role:"tool" messages
+    // user message: text blocks + tool_result blocks → role:"tool" messages.
+    // Image blocks ride as Ollama `images: [base64]` on the user message.
+    // Blocks carrying only a persistence `fileRef` (no inline bytes) are
+    // rejected loudly — silently dropping user content is never acceptable.
     const text = msg.content
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text)
       .join("\n");
-    if (text.length > 0) out.push({ role: "user", content: text });
+    const images = msg.content
+      .filter((b): b is ImageBlock => b.type === "image")
+      .map((b) => {
+        if (typeof b.dataBase64 !== "string" || b.dataBase64.length === 0) {
+          throw new Error(
+            "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+          );
+        }
+        return b.dataBase64;
+      });
+    if (text.length > 0 || images.length > 0) {
+      out.push({
+        role: "user",
+        content: text,
+        ...(images.length > 0 ? { images } : {}),
+      });
+    }
     for (const block of msg.content) {
       if (block.type === "tool_result") {
         out.push({
           role: "tool",
-          content:
-            (block.is_error ? "[error] " : "") + block.content,
+          content: (block.is_error ? "[error] " : "") + block.content,
         });
       }
     }
@@ -118,9 +156,13 @@ export class OllamaLlmProvider implements LlmProvider {
   async listInstalledModels(): Promise<Array<{ name: string; size?: number }>> {
     const res = await this.fetchImpl(`${this.baseUrl}/api/tags`);
     if (!res.ok) {
-      throw new LlmError(this.id, `tags request failed: ${res.status}`, { status: res.status });
+      throw new LlmError(this.id, `tags request failed: ${res.status}`, {
+        status: res.status,
+      });
     }
-    const body = (await res.json()) as { models?: Array<{ name: string; size?: number }> };
+    const body = (await res.json()) as {
+      models?: Array<{ name: string; size?: number }>;
+    };
     return body.models ?? [];
   }
 
@@ -135,9 +177,7 @@ export class OllamaLlmProvider implements LlmProvider {
         ...toOllamaMessages(request.messages),
       ],
       stream: true,
-      ...(tools.length > 0
-        ? { tools: tools.map(ollamaToolSpec) }
-        : {}),
+      ...(tools.length > 0 ? { tools: tools.map(ollamaToolSpec) } : {}),
       ...(request.temperature !== undefined
         ? { options: { temperature: request.temperature } }
         : {}),
@@ -312,7 +352,9 @@ function ollamaToolSpec(tool: AgentTool): Record<string, unknown> {
   };
 }
 
-function normalizeOllamaToolCall(call: OllamaToolCallWire): LlmToolCall | undefined {
+function normalizeOllamaToolCall(
+  call: OllamaToolCallWire,
+): LlmToolCall | undefined {
   if (!call?.function?.name) return undefined;
   const args = call.function.arguments;
   const argumentsText =

@@ -86,7 +86,9 @@ function splitSections(lines: string[]): FileSection[] | { error: string } {
     if (!current) {
       // Content before any file header (e.g. blank line) — ignore blanks.
       if (line.trim().length === 0) continue;
-      return { error: `Unexpected content before file header: "${line.slice(0, 80)}"` };
+      return {
+        error: `Unexpected content before file header: "${line.slice(0, 80)}"`,
+      };
     }
     current.lines.push(line);
   }
@@ -101,10 +103,12 @@ function splitSections(lines: string[]): FileSection[] | { error: string } {
  * region; removed lines are dropped, added lines inserted.
  */
 export type HunkApplyResult =
-  | { ok: true; value: string }
-  | { ok: false; error: string };
+  { ok: true; value: string } | { ok: false; error: string };
 
-export function applyHunks(content: string, hunkLines: string[]): HunkApplyResult {
+export function applyHunks(
+  content: string,
+  hunkLines: string[],
+): HunkApplyResult {
   const lines = content.split("\n");
   // Group into hunks: each begins at an @@ marker (or at the first +/-/space run).
   const hunks: string[][] = [];
@@ -176,11 +180,7 @@ export function applyHunks(content: string, hunkLines: string[]): HunkApplyResul
         replacement.push(l.slice(1));
       }
     }
-    working = [
-      ...working.slice(0, at),
-      ...replacement,
-      ...working.slice(w),
-    ];
+    working = [...working.slice(0, at), ...replacement, ...working.slice(w)];
   }
   return { ok: true, value: working.join("\n") };
 }
@@ -227,7 +227,10 @@ export async function computePatchChanges(
     if (section.op === "delete") {
       const original = readFile(absolutePath);
       if (original === undefined) {
-        return { ok: false, error: `File to delete not found: ${relativePath}` };
+        return {
+          ok: false,
+          error: `File to delete not found: ${relativePath}`,
+        };
       }
       changes.push({
         path: absolutePath,

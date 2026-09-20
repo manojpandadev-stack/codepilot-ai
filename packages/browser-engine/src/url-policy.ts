@@ -17,7 +17,8 @@
  *   4. Domain allow/deny lists (suffix match) for policy-based control.
  */
 
-import { promises as dnsPromises } from "node:dns";import * as net from "node:net";
+import { promises as dnsPromises } from "node:dns";
+import * as net from "node:net";
 
 // Context-engine's strict classifier. It is unexported from the barrel (the
 // M13 module imports it internally), so we import from the module path via
@@ -108,7 +109,10 @@ export async function validateTargetUrl(
   const literal = isForbiddenIPLiteral(rawHost);
   if (literal.forbidden) {
     // Metadata IPs and friends are rejected regardless of lists.
-    if (options.allowPrivateNetworks && /loopback|private|link-local/.test(literal.reason)) {
+    if (
+      options.allowPrivateNetworks &&
+      /loopback|private|link-local/.test(literal.reason)
+    ) {
       // fall through — explicitly permitted private networks
     } else {
       return {
@@ -137,7 +141,11 @@ export async function validateTargetUrl(
   // Hostname: strip decorations (trailing dot, brackets, zone ids).
   const host = stripIpDecorations(rawHost).toLowerCase();
   if (!host || host.length === 0) {
-    return { verdict: "blocked-invalid", reason: "empty hostname", host: rawHost };
+    return {
+      verdict: "blocked-invalid",
+      reason: "empty hostname",
+      host: rawHost,
+    };
   }
 
   // 4. Domain lists.
@@ -187,7 +195,11 @@ export async function validateTargetUrl(
         host,
       };
     }
-    return { verdict: "blocked-dns", reason: `DNS resolution failed for ${host}`, host };
+    return {
+      verdict: "blocked-dns",
+      reason: `DNS resolution failed for ${host}`,
+      host,
+    };
   }
   if (!addresses || addresses.length === 0) {
     return { verdict: "blocked-dns", reason: `no addresses for ${host}`, host };
