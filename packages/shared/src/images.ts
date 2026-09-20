@@ -134,13 +134,18 @@ export function validateImageAttachment(input: {
     bytes = input.bytes;
   } else if (
     typeof Buffer !== "undefined" &&
-    typeof (Buffer as unknown as { isBuffer?: unknown }).isBuffer === "function" &&
+    typeof (Buffer as unknown as { isBuffer?: unknown }).isBuffer ===
+      "function" &&
     (Buffer as unknown as { isBuffer: (v: unknown) => boolean }).isBuffer(
       input.bytes,
     )
   ) {
     bytes = new Uint8Array(
-      input.bytes as unknown as { buffer: ArrayBuffer; byteOffset: number; length: number },
+      input.bytes as unknown as {
+        buffer: ArrayBuffer;
+        byteOffset: number;
+        length: number;
+      },
     );
   }
   if (!bytes) return { error: "image requires base64 or bytes" };
@@ -154,7 +159,11 @@ export function validateImageAttachment(input: {
   if (!mime || !IMAGE_MIME_ALLOWLIST.includes(mime)) {
     return { error: "unsupported image format (png, jpeg, webp, gif only)" };
   }
-  return { mime, bytes: stripImageMetadata(bytes, mime), name: sanitizeImageName(input.name) };
+  return {
+    mime,
+    bytes: stripImageMetadata(bytes, mime),
+    name: sanitizeImageName(input.name),
+  };
 }
 
 /**
@@ -165,7 +174,10 @@ export function validateImageAttachment(input: {
 export function sanitizeImageName(name: unknown): string {
   if (typeof name !== "string") return "image";
   const base = name.split(/[\\/]/).pop() ?? "";
-  const clean = base.replace(/[^\w\-. ]/g, "").replace(/^\.+/g, "").trim();
+  const clean = base
+    .replace(/[^\w\-. ]/g, "")
+    .replace(/^\.+/g, "")
+    .trim();
   if (!clean) return "image";
   return clean.slice(0, 128);
 }
@@ -184,7 +196,10 @@ export function sanitizeImageName(name: unknown): string {
  * callers already validated magic bytes, and stripping is best-effort
  * hygiene, never a validity gate).
  */
-export function stripImageMetadata(bytes: Uint8Array, mime: string): Uint8Array {
+export function stripImageMetadata(
+  bytes: Uint8Array,
+  mime: string,
+): Uint8Array {
   try {
     switch (mime) {
       case "image/jpeg":
@@ -229,8 +244,7 @@ function stripJpeg(bytes: Uint8Array): Uint8Array {
     const len = (bytes[i + 2]! << 8) | bytes[i + 3]!;
     if (len < 2 || i + 2 + len > bytes.length) break;
     // Drop APPn (0xE0-0xEF: EXIF/XMP/JFIF) and COM (0xFE).
-    const drop =
-      (marker >= 0xe0 && marker <= 0xef) || marker === 0xfe;
+    const drop = (marker >= 0xe0 && marker <= 0xef) || marker === 0xfe;
     if (!drop) {
       for (let j = i; j < i + 2 + len; j++) out.push(bytes[j]!);
     }
@@ -244,7 +258,16 @@ function stripJpeg(bytes: Uint8Array): Uint8Array {
 
 function stripPng(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 8) return bytes;
-  const KEEP = new Set(["IHDR", "PLTE", "tRNS", "IDAT", "IEND", "acTL", "fcTL", "fdAT"]);
+  const KEEP = new Set([
+    "IHDR",
+    "PLTE",
+    "tRNS",
+    "IDAT",
+    "IEND",
+    "acTL",
+    "fcTL",
+    "fdAT",
+  ]);
   const out: number[] = [];
   for (let j = 0; j < 8; j++) out.push(bytes[j]!);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -353,7 +376,15 @@ function stripGif(bytes: Uint8Array): Uint8Array {
 
 function stripWebp(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 12) return bytes;
-  const KEEP = new Set(["VP8 ", "VP8L", "VP8X", "ALPH", "ANIM", "ANMF", "ICCP"]);
+  const KEEP = new Set([
+    "VP8 ",
+    "VP8L",
+    "VP8X",
+    "ALPH",
+    "ANIM",
+    "ANMF",
+    "ICCP",
+  ]);
   const out: number[] = [];
   for (let j = 0; j < 12; j++) out.push(bytes[j]!);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

@@ -382,7 +382,9 @@ describe("streaming shell helpers", () => {
       expect(argv.stdin).toBe("echo hi");
     } else {
       expect(argv.command).toBe("bash");
-      expect(argv.args).toEqual(["-c", "echo hi"]);
+      // Contract: POSIX non-sh/dash shells spawn as login shells (-l) so the
+      // user's profile environment is inherited; sh/dash take plain -c.
+      expect(argv.args).toEqual(["-l", "-c", "echo hi"]);
       expect(argv.stdin).toBeUndefined();
     }
   });
