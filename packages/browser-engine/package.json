@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@codepilot/context-engine": "workspace:*",
+    "@codepilot/shared": "workspace:*",
     "@codepilot/tool-engine": "workspace:*",
     "playwright-core": "^1.63.0"
   },

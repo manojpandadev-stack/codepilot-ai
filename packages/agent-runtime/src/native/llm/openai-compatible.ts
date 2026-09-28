@@ -32,7 +32,17 @@ export interface OpenAiCompatibleOptions {
   /** Extra headers (e.g. OpenRouter attribution). Never logged. */
   headers?: Record<string, string>;
   fetchImpl?: typeof fetch;
+  /** Steady-stream INACTIVITY window (ms): aborts when no bytes arrive for
+   *  this long after the first chunk. Silence is the failure signal, not
+   *  duration — a wall-clock cap kills healthy slow generations. */
   timeoutMs?: number;
+  /**
+   * Inactivity window (ms) allowed before the FIRST stream chunk. Local
+   * runtimes behind this adapter (e.g. LM Studio on CPU) can be legitimately
+   * silent for minutes during model load + prompt prefill before the first
+   * byte. Defaults to 900_000 (15m) when unset.
+   */
+  firstTokenTimeoutMs?: number;
 }
 
 interface WireToolCallFragment {
@@ -158,6 +168,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   private readonly headers?: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly firstTokenTimeoutMs: number;
 
   constructor(id: string, options: OpenAiCompatibleOptions) {
     this.id = id;
@@ -166,6 +177,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     this.headers = options.headers;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 180_000;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 900_000;
   }
 
   async *stream(request: LlmRequest): AsyncIterable<LlmStreamEvent> {
@@ -203,7 +215,18 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     const onAbort = () => controller.abort();
     request.signal?.addEventListener("abort", onAbort, { once: true });
     if (request.signal?.aborted) controller.abort();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    // Two-phase inactivity timer (see OllamaLlmProvider): a generous window
+    // for the silent model-load/prefill phase before the first byte, then the
+    // steady-stream window re-armed on every received chunk. Never a
+    // wall-clock cap — that kills healthy slow generations.
+    let timedOut = false;
+    let firstChunkSeen = false;
+    const armTimeout = (ms: number): ReturnType<typeof setTimeout> =>
+      setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, ms);
+    let timeout = armTimeout(this.firstTokenTimeoutMs);
 
     let response: Response;
     try {
@@ -222,6 +245,12 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       if (request.signal?.aborted) {
         yield { type: "finish", reason: "aborted" };
         return;
+      }
+      if (timedOut) {
+        throw new LlmError(
+          this.id,
+          `chat request timed out after ${firstChunkSeen ? this.timeoutMs : this.firstTokenTimeoutMs}ms of inactivity${firstChunkSeen ? "" : " before the first stream chunk (local model load or prompt prefill still running; raise firstTokenTimeoutMs for very large CPU prompts)"}`,
+        );
       }
       throw new LlmError(
         this.id,
@@ -261,6 +290,9 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       while (!finished) {
         const { value, done } = await reader.read();
         if (done) break;
+        firstChunkSeen = true;
+        clearTimeout(timeout);
+        timeout = armTimeout(this.timeoutMs);
         buffer += decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = buffer.indexOf("\n")) >= 0) {

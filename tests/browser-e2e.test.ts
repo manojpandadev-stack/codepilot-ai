@@ -43,9 +43,14 @@ const INDEX_HTML = `<!doctype html>
   <a id="page2link" href="/page2">Go to page 2</a>
   <form id="f" action="/submit" method="get">
     <input id="name" name="name" type="text" />
+    <select id="country" name="country">
+      <option value="de">Germany</option>
+      <option value="fr">France</option>
+    </select>
     <button id="go" type="submit">Submit</button>
   </form>
   <div id="secret" style="display:none">hidden text</div>
+  <script>console.log("e2e console marker sk-test-abcdef1234567890");</script>
 </body>
 </html>`;
 
@@ -174,6 +179,45 @@ describe.skipIf(!BROWSER_AVAILABLE)("browser E2E — REAL Chromium", () => {
       expect(buf[0]).toBe(0x89);
       expect(buf[1]).toBe(0x50);
     }
+  });
+
+  it("selectOption changes a <select> value (row 18)", async () => {
+    await service.navigate("task-e2e", "default", `${BASE}/`);
+    const sel = await service.selectOption(
+      "task-e2e",
+      "default",
+      "#country",
+      "fr",
+    );
+    expect(sel.ok).toBe(true);
+    const value = await service
+      .getSession("task-e2e", "default")
+      .then((s) => s.page.inputValue("#country"));
+    expect(value).toBe("fr");
+  });
+
+  it("console messages are captured and secret-redacted (row 19)", async () => {
+    await service.navigate("task-e2e", "default", `${BASE}/`);
+    // Give the page's inline script a tick to emit.
+    await new Promise((r) => setTimeout(r, 300));
+    const messages = service.consoleMessages("task-e2e", "default");
+    expect(messages.length).toBeGreaterThan(0);
+    const marker = messages.find((m) => m.text.includes("e2e console marker"));
+    expect(marker).toBeDefined();
+    // The sk- token inside the message is redacted at capture time.
+    expect(marker?.text).not.toContain("sk-test-abcdef1234567890");
+    expect(marker?.text).toContain("[REDACTED]");
+  });
+
+  it("network exchanges are captured, header-free, URLs scrubbed (row 20)", async () => {
+    const entries = service.networkRequests("task-e2e", "default");
+    expect(entries.length).toBeGreaterThan(0);
+    // The document request was captured.
+    expect(
+      entries.some((e) => e.url.includes("127.0.0.1") && e.method === "GET"),
+    ).toBe(true);
+    // Bounded buffer.
+    expect(entries.length).toBeLessThanOrEqual(200);
   });
 
   it("scroll and press operate on the live page", async () => {

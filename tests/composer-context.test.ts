@@ -13,10 +13,14 @@ import {
 import {
   createEmptyComposerContext,
   addFileEntriesToContext,
+  addDiffToContext,
+  addTerminalToContext,
   addFolderEntriesToContext,
+  addImagesToContext,
   setProblemsInContext,
   setSelectionInContext,
   removeContextEntry,
+  hasAnyContext,
   contextToChips,
   buildChatSendPayload,
   buildRetryPayload,
@@ -218,6 +222,47 @@ describe("Context architecture", () => {
   });
 });
 
+describe("Image context", () => {
+  const dataUrl =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  it("attaches images as structured metadata with thumbnail chips", () => {
+    let ctx = createEmptyComposerContext();
+    ctx = addImagesToContext(ctx, [{ name: "shot.png", dataUrl }]);
+    expect(hasAnyContext(ctx)).toBe(true);
+    const chips = contextToChips(ctx);
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.kind).toBe("image");
+    expect(chips[0]?.preview).toBe(dataUrl);
+    const payload = buildChatSendPayload("look", "act", ctx);
+    expect(payload.text).toBe("look");
+    expect(payload.text).not.toContain("base64");
+    expect(payload.context?.images).toHaveLength(1);
+    expect(payload.context?.images?.[0]).toMatchObject({ name: "shot.png" });
+  });
+
+  it("dedupes identical payloads and skips empties", () => {
+    let ctx = createEmptyComposerContext();
+    ctx = addImagesToContext(ctx, [
+      { name: "a.png", dataUrl },
+      { name: "a.png", dataUrl },
+      { name: "empty", dataUrl: "" },
+    ]);
+    expect(ctx.images).toHaveLength(1);
+  });
+
+  it("removing an image chip clears it without touching text", () => {
+    let ctx = createEmptyComposerContext();
+    ctx = addImagesToContext(ctx, [{ name: "a.png", dataUrl }]);
+    ctx = addFileEntriesToContext(ctx, [{ relativePath: "a.ts" }]);
+    const id = ctx.images?.[0]?.id ?? "";
+    ctx = removeContextEntry(ctx, id);
+    expect(ctx.images).toHaveLength(0);
+    expect(ctx.files).toHaveLength(1);
+    expect(hasAnyContext(ctx)).toBe(true);
+  });
+});
+
 // ============================================================================
 // PART 11/12/16 — Self-healing status
 // ============================================================================
@@ -276,5 +321,70 @@ describe("Self-healing status", () => {
     expect(text).toContain("Validation failed (exit 1)");
     expect(text).toContain("Command: mvn test");
     expect(text).toContain("GreetingServiceTest.testGreet");
+  });
+});
+
+
+// ------------------------------------- @diff / @terminal chips (Phases 6-7)
+describe("Diff and terminal context", () => {
+  it("adds one chip per diff scope and dedupes re-attaches", () => {
+    let ctx = createEmptyComposerContext();
+    expect(ctx.diffs).toEqual([]);
+    ctx = addDiffToContext(ctx, "working");
+    expect(ctx.diffs).toHaveLength(1);
+    expect(ctx.diffs![0]!.scope).toBe("working");
+    // Re-attaching the same scope is a no-op.
+    const again = addDiffToContext(ctx, "working");
+    expect(again.diffs).toHaveLength(1);
+    // The other scope is a distinct chip.
+    const staged = addDiffToContext(ctx, "staged");
+    expect(staged.diffs).toHaveLength(2);
+    expect(staged.diffs![1]!.scope).toBe("staged");
+  });
+
+  it("adds the terminal chip once and dedupes", () => {
+    let ctx = createEmptyComposerContext();
+    expect(ctx.terminals).toEqual([]);
+    ctx = addTerminalToContext(ctx);
+    expect(ctx.terminals).toHaveLength(1);
+    expect(addTerminalToContext(ctx).terminals).toHaveLength(1);
+  });
+
+  it("removes diff/terminal chips by id without touching message text", () => {
+    let ctx = createEmptyComposerContext();
+    ctx = addDiffToContext(ctx, "working");
+    ctx = addTerminalToContext(ctx);
+    const chips = contextToChips(ctx);
+    const diffChip = chips.find((c) => c.kind === "diff");
+    const termChip = chips.find((c) => c.kind === "terminal");
+    expect(diffChip).toBeDefined();
+    expect(termChip).toBeDefined();
+    expect(diffChip!.label).toContain("working tree");
+    expect(termChip!.label).toContain("Terminal");
+
+    const afterDiff = removeContextEntry(ctx, diffChip!.id);
+    expect(afterDiff.diffs).toHaveLength(0);
+    expect(afterDiff.terminals).toHaveLength(1);
+    const afterTerm = removeContextEntry(afterDiff, termChip!.id);
+    expect(afterTerm.terminals).toHaveLength(0);
+  });
+
+  it("buildChatSendPayload carries diffs/terminals as structured metadata", () => {
+    let ctx = createEmptyComposerContext();
+    ctx = addDiffToContext(ctx, "staged");
+    ctx = addTerminalToContext(ctx);
+    const payload = buildChatSendPayload("hello", "act", ctx, "req-1");
+    expect(payload.text).toBe("hello");
+    expect((payload.context as { diffs?: unknown[] }).diffs).toHaveLength(1);
+    expect((payload.context as { terminals?: unknown[] }).terminals).toHaveLength(1);
+    expect(hasAnyContext(ctx)).toBe(true);
+  });
+
+  it("empty context payload omits diffs/terminals entirely", () => {
+    const ctx = createEmptyComposerContext();
+    expect(hasAnyContext(ctx)).toBe(false);
+    const payload = buildChatSendPayload("plain", "act", ctx);
+    expect(payload.context.diffs).toBeUndefined();
+    expect(payload.context.terminals).toBeUndefined();
   });
 });

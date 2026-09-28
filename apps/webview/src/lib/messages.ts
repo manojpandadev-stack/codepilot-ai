@@ -42,6 +42,45 @@ export function isActiveChange(change: FileChange): boolean {
   return ACTIVE_STATUSES.includes(change.status);
 }
 
+/** Payload sent by the host's ChangeSetManager `onStatusChange` callback. */
+export interface DiffStatusPayload {
+  changeId?: string;
+  filePath?: string;
+  status?: string;
+  conflictInfo?: { reason?: string };
+}
+
+const KNOWN_CHANGE_STATUSES: readonly string[] = [
+  "added",
+  "modified",
+  "deleted",
+  "applied",
+  "rolled_back",
+];
+
+/**
+ * Reconcile an authoritative host `diff/status` push into the local change
+ * list (previously dropped, so host-side status transitions — applied,
+ * rolled back, conflicts — never reached the Changes tab). Matches by
+ * changeId when present, else by filePath. Unknown status values are
+ * ignored (fail-safe: the local list is never corrupted by new hosts).
+ */
+export function reconcileDiffStatus(
+  changes: FileChange[],
+  payload: DiffStatusPayload | null | undefined,
+): FileChange[] {
+  if (!payload || typeof payload.status !== "string") return changes;
+  if (!KNOWN_CHANGE_STATUSES.includes(payload.status)) return changes;
+  const nextStatus = payload.status as ChangeStatus;
+  return changes.map((change) => {
+    const matches =
+      payload.changeId !== undefined
+        ? change.changeId === payload.changeId
+        : payload.filePath !== undefined && change.path === payload.filePath;
+    return matches ? { ...change, status: nextStatus } : change;
+  });
+}
+
 /**
  * Count additions/deletions from a unified diff body.
  * Header lines (+++/---) are excluded; hunk headers (@@) count as neither.
@@ -130,13 +169,70 @@ export interface ModelInfoLite {
   name: string;
   provider: string;
   contextWindow?: number;
+  /**
+   * Tool-calling tri-state from the CodePilot catalogue. "unknown" means
+   * UNVERIFIED — the UI must never render it as supported (a model that
+   * answers tool requests in prose cannot drive tools).
+   */
+  toolCalling?: "true" | "false" | "unknown";
 }
 
-/** A provider and its live connection state (from host "provider/list"). */
+/** Human-readable label for the tool-calling tri-state (PART 3/13). */
+export function toolCallingLabel(
+  support: "true" | "false" | "unknown" | undefined,
+): { symbol: string; text: string; tone: "success" | "muted" | "danger" } {
+  if (support === "true") return { symbol: "\u2713", text: "Supported", tone: "success" };
+  if (support === "false") return { symbol: "\u2715", text: "Not supported", tone: "danger" };
+  return { symbol: "?", text: "Unknown", tone: "muted" };
+}
+
+/**
+ * A provider and its honest connection state (from host "provider/list").
+ *
+ * BUG 1: the host no longer derives `connected` from credential presence —
+ * every entry carries a host-verified ConnectionState produced ONLY by an
+ * actual probe of that provider's own endpoint. `connected` remains as a
+ * derived convenience flag (true ONLY for state "connected") for callers
+ * predating the typed model.
+ */
 export interface ProviderInfo {
   id: string;
   name: string;
+  /** Host-verified connection state ("API key exists" is "configured", never "connected"). */
+  state?:
+    | "configured"
+    | "checking"
+    | "connected"
+    | "unavailable"
+    | "auth-required"
+    | "auth-invalid"
+    | "rate-limited"
+    | "no-endpoint"
+    | "unverified";
+  /** Secret-free probe detail (HTTP status / network error). */
+  detail?: string;
+  latencyMs?: number;
+  /** Host time of the probe (ISO-8601), when probed. */
+  checkedAt?: string;
+  /** Derived: true ONLY for a positive host-side probe. */
   connected: boolean;
+}
+
+/** Host "provider/list" payload — typed entries + the selected provider's verdict. */
+export interface ProviderListPayload {
+  providers: ProviderInfo[];
+  selectedProviderId?: string;
+  /** Authoritative fresh verdict for the SELECTED provider (header input). */
+  selectedState?: ProviderInfo;
+}
+
+/** Map a legacy `{connected}` entry to the typed state (test/compat shim). */
+export function providerStateOf(entry: {
+  state?: ProviderInfo["state"];
+  connected?: boolean;
+}): NonNullable<ProviderInfo["state"]> {
+  if (entry.state) return entry.state;
+  return entry.connected ? "connected" : "unavailable";
 }
 
 /** Normalize a host payload that may be a bare array or { models }/wrapper. */
@@ -144,15 +240,44 @@ export function normalizeModelList(payload: unknown): ModelInfoLite[] {
   const raw = Array.isArray(payload)
     ? payload
     : (payload as { models?: unknown } | null)?.models;
-  return Array.isArray(raw) ? (raw as ModelInfoLite[]) : [];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((m) => {
+    const entry = m as Partial<ModelInfoLite>;
+    // Coerce the tri-state defensively: anything but the exact literals is
+    // "unknown" — an absent or malformed value must never read as truth.
+    const toolCalling =
+      entry.toolCalling === "true" || entry.toolCalling === "false"
+        ? entry.toolCalling
+        : "unknown";
+    return { ...(m as ModelInfoLite), toolCalling };
+  });
 }
 
-/** Normalize a host payload that may be a bare array or { providers } wrapper. */
+/**
+ * Normalize a host payload that may be a bare array or { providers } wrapper.
+ *
+ * BUG 1: host entries carry the typed ConnectionState and no `connected`
+ * flag; the derived flag is computed here (true ONLY for state
+ * "connected") so every consumer sees a consistent shape. Legacy entries
+ * with only `connected: boolean` keep working via providerStateOf.
+ */
 export function normalizeProviderList(payload: unknown): ProviderInfo[] {
   const raw = Array.isArray(payload)
     ? payload
     : (payload as { providers?: unknown } | null)?.providers;
-  return Array.isArray(raw) ? (raw as ProviderInfo[]) : [];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (e): e is Record<string, unknown> =>
+        !!e &&
+        typeof e === "object" &&
+        typeof (e as { id?: unknown }).id === "string",
+    )
+    .map((e) => {
+      const entry = e as unknown as ProviderInfo;
+      const state = providerStateOf(entry);
+      return { ...entry, state, connected: state === "connected" };
+    });
 }
 
 // ============================================================================
@@ -318,6 +443,18 @@ export interface ConnectionSummaryInput {
   credentialConfigured?: boolean;
   /** Number of models available for the selected provider. */
   modelCount: number;
+  /**
+   * Host-reported per-provider connection states (`provider/list`). Every
+   * entry is an honest host-verified state — credential presence is
+   * "configured", never "connected". When an entry for the selected
+   * provider exists, its authoritative verdict wins.
+   */
+  liveConnections?: ProviderInfo[];
+  /**
+   * Fresh verdict for the SELECTED provider (host `provider/list`
+   * selectedState) — wins over any entry in liveConnections.
+   */
+  selectedState?: ProviderInfo;
 }
 
 /**
@@ -334,8 +471,60 @@ export function connectionSummary(input: ConnectionSummaryInput): {
 } {
   const name = input.catalog?.displayName ?? (input.selectedProviderId || "—");
   const isLocal =
-    input.catalog?.category === "local" || input.catalog?.id === "ollama";
+    input.catalog?.category === "local" ||
+    input.selectedProviderId === "ollama" ||
+    input.catalog?.id === "ollama";
   const scope = isLocal ? "LOCAL" : "CLOUD";
+
+  // 0. The SELECTED provider's fresh host verdict is authoritative when
+  // present (BUG 1). Typed ConnectionState drives every label; `connected`
+  // is true ONLY for a positive host-side probe — never credential presence.
+  const live =
+    input.selectedState ??
+    input.liveConnections?.find((c) => c.id === input.selectedProviderId);
+  if (live) {
+    const st = live.state ?? (live.connected ? "connected" : "unavailable");
+    const connected = st === "connected";
+    if (connected) {
+      return {
+        connected: true,
+        label: `${name} · Connected${
+          live.latencyMs !== undefined ? ` (${live.latencyMs}ms)` : ""
+        }`,
+      };
+    }
+    if (st === "checking") {
+      return { connected: false, label: `${name} — checking…` };
+    }
+    if (st === "auth-invalid" || st === "auth-required") {
+      return {
+        connected: false,
+        label:
+          st === "auth-invalid"
+            ? `${name}: API key rejected`
+            : `${name}: API key required`,
+      };
+    }
+    if (st === "rate-limited") {
+      return { connected: false, label: `${name}: rate limited` };
+    }
+    if (st === "no-endpoint") {
+      return { connected: false, label: `${name}: no endpoint configured` };
+    }
+    if (st === "configured" || st === "unverified") {
+      return {
+        connected: false,
+        label: `${scope} · ${name} — configured, not verified`,
+      };
+    }
+    // "unavailable" + any future state: honest failure direction.
+    return {
+      connected: false,
+      label: isLocal
+        ? `${name} unavailable — start ${name} and refresh`
+        : `${name} unavailable`,
+    };
+  }
 
   // 1. Hard host verdict wins (live probe).
   if (input.health?.state === "connected") {
@@ -381,6 +570,40 @@ export function connectionSummary(input: ConnectionSummaryInput): {
 
   // 5. Probed but not clearly up/down (auth-invalid, rate-limited, …).
   return { connected: false, label: `${name} — check connection` };
+}
+
+/**
+ * CHAT UX (BUG 5): derive the chat status label from the ACTUAL runtime
+ * state carried by agent/status events. No fabricated progress percentages:
+ * running+message → the runtime's own message ("Thinking…", "Executing tool…"),
+ * running without one → "Generating…" (real stream deltas flip it there),
+ * completed → "Completed" with the runtime's real token counts,
+ * anything not running → "Idle" (a failed/stopped turn can never leave a
+ * spinner up).
+ */
+export function chatStatusLabel(
+  payload: {
+    status?: string;
+    message?: string;
+    usage?: { inputTokens?: number; outputTokens?: number };
+  } | null,
+  /** Present for call-site compatibility; a non-running turn is always "Idle". */
+  _isRunning: boolean,
+): string {
+  const status = payload?.status;
+  if (status === "running") {
+    return payload?.message ?? "Generating…";
+  }
+  if (status === "completed") {
+    const u = payload?.usage;
+    return u ? `Completed · ${u.inputTokens}→${u.outputTokens} tok` : "Completed";
+  }
+  if (status === "idle" && payload?.message) {
+    // Host-stopped turns carry a real message ("Agent stopped.").
+    return payload.message;
+  }
+  // Not running (idle/failed/unknown): honest idle state.
+  return "Idle";
 }
 
 /**
@@ -576,7 +799,14 @@ export interface ToolRegistryEntry {
 // ============================================================================
 
 export type ComposerChipKind =
-  "file" | "folder" | "url" | "problems" | "selection" | "image";
+  | "file"
+  | "folder"
+  | "url"
+  | "problems"
+  | "selection"
+  | "image"
+  | "diff"
+  | "terminal";
 
 /** A single removable chip shown above the composer textarea. */
 export interface ComposerChip {
@@ -606,6 +836,8 @@ export function createEmptyComposerContext(): ComposerCtx {
     diagnostics: null,
     selection: null,
     images: [],
+    diffs: [],
+    terminals: [],
   };
 }
 
@@ -689,6 +921,26 @@ export function addUrlToContext(ctx: ComposerCtx, url: string): ComposerCtx {
   };
 }
 
+/** Attach a @diff chip (working tree or staged). One chip per scope. */
+export function addDiffToContext(
+  ctx: ComposerCtx,
+  scope: "working" | "staged",
+): ComposerCtx {
+  const next = [...(ctx.diffs ?? [])];
+  if (next.some((d) => d.scope === scope)) return ctx;
+  next.push({ id: nextChipId("diff"), scope });
+  return { ...ctx, diffs: next };
+}
+
+/** Attach the @terminal chip (recent host-side command history). */
+export function addTerminalToContext(ctx: ComposerCtx): ComposerCtx {
+  if ((ctx.terminals ?? []).some((t) => t.scope === "recent")) return ctx;
+  return {
+    ...ctx,
+    terminals: [...(ctx.terminals ?? []), { id: nextChipId("terminal"), scope: "recent" }],
+  };
+}
+
 export function setProblemsInContext(
   ctx: ComposerCtx,
   diagnostics: import("@codepilot/shared").DiagnosticsContextPayload | null,
@@ -712,6 +964,8 @@ export function removeContextEntry(ctx: ComposerCtx, id: string): ComposerCtx {
     diagnostics: id === "problems" ? null : (ctx.diagnostics ?? null),
     selection: id === "selection" ? null : (ctx.selection ?? null),
     images: (ctx.images ?? []).filter((img) => img.id !== id),
+    diffs: (ctx.diffs ?? []).filter((d) => d.id !== id),
+    terminals: (ctx.terminals ?? []).filter((t) => t.id !== id),
   };
 }
 
@@ -722,7 +976,9 @@ export function hasAnyContext(ctx: ComposerCtx): boolean {
     ctx.urls.length > 0 ||
     !!ctx.diagnostics ||
     !!ctx.selection ||
-    (ctx.images ?? []).length > 0
+    (ctx.images ?? []).length > 0 ||
+    (ctx.diffs ?? []).length > 0 ||
+    (ctx.terminals ?? []).length > 0
   );
 }
 
@@ -780,6 +1036,22 @@ export function contextToChips(ctx: ComposerCtx): ComposerChip[] {
       preview: img.data.slice(0, 8_000_000),
     });
   }
+  for (const d of ctx.diffs ?? []) {
+    chips.push({
+      id: d.id,
+      kind: "diff",
+      label: d.scope === "staged" ? "🔀 Diff: staged" : "🔀 Diff: working tree",
+      ref: d.scope,
+    });
+  }
+  for (const t of ctx.terminals ?? []) {
+    chips.push({
+      id: t.id,
+      kind: "terminal",
+      label: "⏺ Terminal output (recent)",
+      ref: t.scope,
+    });
+  }
   return chips;
 }
 
@@ -812,6 +1084,8 @@ export function buildChatSendPayload(
   if (ctx.diagnostics) context.diagnostics = ctx.diagnostics;
   if (ctx.selection) context.selection = ctx.selection;
   if ((ctx.images ?? []).length > 0) context.images = ctx.images;
+  if ((ctx.diffs ?? []).length > 0) context.diffs = ctx.diffs;
+  if ((ctx.terminals ?? []).length > 0) context.terminals = ctx.terminals;
   return requestId
     ? { text, mode, context, requestId }
     : { text, mode, context };
@@ -2047,6 +2321,11 @@ export interface TaskSummary {
   checkpointCount: number;
   hasErrors: boolean;
   resultExcerpt?: string;
+  /** Token usage recorded for this task (host agentState counters). */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Catalogue-ESTIMATED USD cost — absent when pricing was unavailable. */
+  estimatedCostUsd?: number;
 }
 
 export interface TimelineEvent {
@@ -2095,6 +2374,8 @@ export interface TaskCheckpointView {
 export interface TaskDetails extends TaskSummary {
   timeline: TimelineEvent[];
   files: TaskFileSummary;
+  /** Structured execution plan (Phase 2), when the task has one. */
+  plan?: PlanView;
   checkpoints: TaskCheckpointView[];
   messages: Array<{ role: string; excerpt: string; timestampMs: number }>;
   tools: TaskToolSummary[];
@@ -2249,6 +2530,14 @@ export function normalizeTaskSummary(item: unknown): TaskSummary | null {
       typeof t.resultExcerpt === "string"
         ? t.resultExcerpt.slice(0, 500)
         : undefined,
+    inputTokens: num(t.inputTokens),
+    outputTokens: num(t.outputTokens),
+    estimatedCostUsd:
+      typeof t.estimatedCostUsd === "number" &&
+      Number.isFinite(t.estimatedCostUsd) &&
+      t.estimatedCostUsd >= 0
+        ? t.estimatedCostUsd
+        : undefined,
   };
 }
 
@@ -2266,6 +2555,91 @@ export function normalizeTaskHistoryList(payload: unknown): TaskSummary[] {
 }
 
 /** Normalize a history/details_result payload (bounded). */
+/** A structured execution plan step as rendered by the WebView (Phase 2). */
+export interface PlanStepView {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "completed" | "failed";
+  dependsOn: string[];
+  affectedFiles: string[];
+  attempts: number;
+  note?: string;
+  error?: string;
+}
+
+/** A structured execution plan (Phase 2) — host-pushed via plan/updated. */
+export interface PlanView {
+  version: number;
+  id: string;
+  objective: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  steps: PlanStepView[];
+  currentStepId?: string;
+}
+
+const PLAN_STEP_STATUSES = [
+  "pending",
+  "running",
+  "completed",
+  "failed",
+] as const;
+
+/**
+ * Validate a `plan/updated` payload (or a bare plan object). Malformed or
+ * oversized plans return null and are never rendered — the WebView treats
+ * the host as untrusted input, exactly like every other message payload.
+ */
+export function normalizeTaskPlan(payload: unknown): PlanView | null {
+  const raw =
+    payload && typeof payload === "object" && "plan" in payload
+      ? (payload as { plan: unknown }).plan
+      : payload;
+  if (!raw || typeof raw !== "object") return null;
+  const p = raw as Record<string, unknown>;
+  if (typeof p.objective !== "string" || !Array.isArray(p.steps)) return null;
+  if (p.steps.length === 0 || p.steps.length > 50) return null;
+  if (p.objective.length > 1000) return null;
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v
+          .filter((x): x is string => typeof x === "string")
+          .map((x) => x.slice(0, 300))
+          .slice(0, 20)
+      : [];
+  const steps: PlanStepView[] = [];
+  for (const s of p.steps) {
+    if (!s || typeof s !== "object") return null;
+    const st = s as Record<string, unknown>;
+    if (typeof st.id !== "string" || typeof st.title !== "string") return null;
+    const status = PLAN_STEP_STATUSES.find((x) => x === st.status);
+    if (!status) return null;
+    steps.push({
+      id: st.id.slice(0, 64),
+      title: st.title.slice(0, 400),
+      status,
+      dependsOn: strArr(st.dependsOn),
+      affectedFiles: strArr(st.affectedFiles),
+      attempts: typeof st.attempts === "number" ? st.attempts : 0,
+      ...(typeof st.note === "string" ? { note: st.note.slice(0, 500) } : {}),
+      ...(typeof st.lastError === "string"
+        ? { error: st.lastError.slice(0, 500) }
+        : {}),
+    });
+  }
+  return {
+    version: typeof p.version === "number" ? p.version : 1,
+    id: typeof p.id === "string" ? p.id.slice(0, 64) : "plan",
+    objective: p.objective.slice(0, 1000),
+    createdAtMs: typeof p.createdAtMs === "number" ? p.createdAtMs : 0,
+    updatedAtMs: typeof p.updatedAtMs === "number" ? p.updatedAtMs : 0,
+    steps,
+    ...(typeof p.currentStepId === "string"
+      ? { currentStepId: p.currentStepId.slice(0, 64) }
+      : {}),
+  };
+}
+
 export function normalizeTaskDetails(payload: unknown): TaskDetails | null {
   if (!payload || typeof payload !== "object") return null;
   const d = (payload as { details?: unknown }).details;
@@ -2417,6 +2791,7 @@ export function normalizeTaskDetails(payload: unknown): TaskDetails | null {
   const num = (v: unknown): number =>
     typeof v === "number" && Number.isFinite(v) ? v : 0;
   const m = (r.metrics ?? {}) as Record<string, unknown>;
+  const plan = normalizeTaskPlan({ plan: r.plan });
   return {
     ...base,
     timeline,
@@ -2427,6 +2802,7 @@ export function normalizeTaskDetails(payload: unknown): TaskDetails | null {
     approvalsNote:
       typeof r.approvalsNote === "string" ? r.approvalsNote.slice(0, 500) : "",
     errors: strArray(r.errors).slice(0, 20),
+    ...(plan ? { plan } : {}),
     metrics: {
       toolCallCount: num(m.toolCallCount),
       retryCount: num(m.retryCount),
@@ -2599,6 +2975,7 @@ export function historyStatusMeta(status: string): {
       return { label: "FAILED", tone: "red" };
     case "cancelled":
     case "interrupted":
+    case "paused":
       return { label: status.toUpperCase(), tone: "orange" };
     case "archived":
       return { label: "ARCHIVED", tone: "gray" };
@@ -2740,6 +3117,7 @@ const KNOWN_DASHBOARD_STATUSES = new Set([
   "failed",
   "cancelled",
   "interrupted",
+  "paused",
   "archived",
 ]);
 
@@ -2812,6 +3190,20 @@ export function validateMetricsAction(
       (p.limit as number) > 200)
   ) {
     return { ok: false, error: "limit must be an integer 1-200" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Allowlist for outbound usage actions (Phase 3). Only the two ledger
+ * controls the WebView may ever request — mirrors validateMetricsAction.
+ */
+export function validateUsageAction(
+  action: string,
+  _payload?: unknown,
+): { ok: boolean; error?: string } {
+  if (action !== "usage/summary" && action !== "usage/clear") {
+    return { ok: false, error: `unknown usage action: ${action}` };
   }
   return { ok: true };
 }
@@ -3121,6 +3513,167 @@ export function normalizeDiagnosticSummary(
   };
 }
 
+// ============================================================================
+// Usage/cost summary (Phase 3) — WebView consumption of `usage/summary`
+// ----------------------------------------------------------------------------
+// The host's UsageLedger already rolls up real token counts and ESTIMATED
+// USD cost. This view model is the only thing that trusts that payload:
+// every field is bounded, and cost is honestly nullable — when
+// pricingCoverage is "none" the UI must say cost is unavailable, never
+// render $0.00 as if it were measured. Malformed payloads return null.
+// ============================================================================
+
+export interface UsageProviderRowView {
+  providerId: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** null when this provider has no published pricing. */
+  estimatedCostUsd: number | null;
+}
+
+export interface UsageSummaryView {
+  totalRequests: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  /** null when pricingCoverage === "none" — never invent a number. */
+  totalEstimatedCostUsd: number | null;
+  pricingCoverage: "full" | "partial" | "none";
+  byProvider: UsageProviderRowView[];
+}
+
+export interface UsageRecentRowView {
+  ts: number;
+  providerId: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** null when unpriced. */
+  estimatedCostUsd: number | null;
+  reason: string;
+}
+
+export interface UsageSummaryPayload {
+  summary: UsageSummaryView;
+  recent: UsageRecentRowView[];
+}
+
+/**
+ * Validate a `usage/summary` (or `usage/clear`) reply payload. Returns null
+ * for anything that is not a well-formed summary — the WebView keeps its
+ * previous state rather than rendering junk.
+ */
+export function normalizeUsageSummary(
+  payload: unknown,
+): UsageSummaryPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const s = (payload as { summary?: unknown }).summary;
+  if (!s || typeof s !== "object") return null;
+  const r = s as Record<string, unknown>;
+  if (
+    typeof r.totalRequests !== "number" ||
+    !Number.isFinite(r.totalRequests) ||
+    typeof r.totalInputTokens !== "number" ||
+    typeof r.totalOutputTokens !== "number"
+  ) {
+    return null;
+  }
+  const coverage =
+    r.pricingCoverage === "full" || r.pricingCoverage === "partial"
+      ? r.pricingCoverage
+      : r.pricingCoverage === "none"
+        ? "none"
+        : null;
+  if (coverage === null) return null;
+  const cost =
+    typeof r.totalEstimatedCostUsd === "number" &&
+    Number.isFinite(r.totalEstimatedCostUsd) &&
+    r.totalEstimatedCostUsd >= 0
+      ? r.totalEstimatedCostUsd
+      : null;
+  const providerRow = (x: unknown): UsageProviderRowView | null => {
+    if (!x || typeof x !== "object") return null;
+    const p = x as Record<string, unknown>;
+    if (typeof p.providerId !== "string") return null;
+    const rowCost =
+      typeof p.estimatedCostUsd === "number" &&
+      Number.isFinite(p.estimatedCostUsd) &&
+      p.estimatedCostUsd >= 0
+        ? p.estimatedCostUsd
+        : null;
+    return {
+      providerId: p.providerId.slice(0, 64),
+      requests: numOrZero(p.requests),
+      inputTokens: numOrZero(p.inputTokens),
+      outputTokens: numOrZero(p.outputTokens),
+      estimatedCostUsd: rowCost,
+    };
+  };
+  const byProvider = Array.isArray(r.byProvider)
+    ? (r.byProvider as unknown[])
+        .flatMap((x) => {
+          const row = providerRow(x);
+          return row ? [row] : [];
+        })
+        .slice(0, 20)
+    : [];
+  const recentRaw = (payload as { recent?: unknown }).recent;
+  const recentRow = (x: unknown): UsageRecentRowView | null => {
+    if (!x || typeof x !== "object") return null;
+    const p = x as Record<string, unknown>;
+    if (typeof p.ts !== "number" || typeof p.providerId !== "string")
+      return null;
+    const rowCost =
+      typeof p.estimatedCostUsd === "number" &&
+      Number.isFinite(p.estimatedCostUsd) &&
+      p.estimatedCostUsd >= 0
+        ? p.estimatedCostUsd
+        : null;
+    return {
+      ts: p.ts,
+      providerId: p.providerId.slice(0, 64),
+      modelId: typeof p.modelId === "string" ? p.modelId.slice(0, 128) : "",
+      inputTokens: numOrZero(p.inputTokens),
+      outputTokens: numOrZero(p.outputTokens),
+      estimatedCostUsd: rowCost,
+      reason: typeof p.reason === "string" ? p.reason.slice(0, 32) : "agent",
+    };
+  };
+  const recent = Array.isArray(recentRaw)
+    ? (recentRaw as unknown[])
+        .flatMap((x) => {
+          const row = recentRow(x);
+          return row ? [row] : [];
+        })
+        .slice(0, 20)
+    : [];
+  return {
+    summary: {
+      totalRequests: Math.max(0, Math.round(r.totalRequests)),
+      totalInputTokens: Math.max(0, Math.round(r.totalInputTokens)),
+      totalOutputTokens: Math.max(0, Math.round(r.totalOutputTokens)),
+      // HONESTY: with no pricing data the summary's $0 is really "unknown".
+      totalEstimatedCostUsd: coverage === "none" ? null : cost,
+      pricingCoverage: coverage,
+      byProvider,
+    },
+    recent,
+  };
+}
+
+/** Format estimated cost for display — honest about coverage. */
+export function formatUsageCost(
+  s: UsageSummaryView,
+): { text: string; tone: "est" | "partial" | "none" } {
+  if (s.pricingCoverage === "none" || s.totalEstimatedCostUsd === null) {
+    return { text: "cost unavailable (no pricing)", tone: "none" };
+  }
+  const text = `$${s.totalEstimatedCostUsd.toFixed(4)}`;
+  return s.pricingCoverage === "partial"
+    ? { text: `≈ ${text} (partial)`, tone: "partial" }
+    : { text: `≈ ${text} (est.)`, tone: "est" };
+}
+
 /** Format a metric value for display (null → Unavailable). */
 export function formatMetricValue(m: DashboardMetricValue): string {
   if (m.value === null) return "Unavailable";
@@ -3131,7 +3684,6 @@ export function formatMetricValue(m: DashboardMetricValue): string {
   }
   return m.value >= 1000 ? m.value.toLocaleString("en-US") : String(m.value);
 }
-
 /** Display metadata for metric availability tones. */
 export function metricAvailabilityTone(
   m: DashboardMetricValue,
@@ -3447,6 +3999,90 @@ export function terminalCompletionDetail(
         ? text
         : `${text.slice(0, MAX_TERMINAL_DETAIL_CHARS)}\n…[output truncated]…`,
   };
+}
+
+/**
+ * Collision-resistant UI element id (prefix + time + random tail). Bare
+ * `Date.now()` ids collide when two messages are created in the same
+ * millisecond (e.g. an assistant reply followed by an error), producing
+ * duplicate React keys and broken reconciliation.
+ */
+export function createStableId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Structural minimum of the webview ToolEvent for the pure helper below. */
+export interface ToolEventLike {
+  id: string;
+  name: string;
+  status: "started" | "completed" | "error";
+}
+
+/**
+ * Idempotent reducer for `tool/started` events: a duplicate or replayed
+ * event must never create a second card with the same React key, and a
+ * late-started event must not resurrect a card that already completed.
+ * First observation of an id appends; repeats update the existing entry.
+ */
+export function appendToolEvent<T extends ToolEventLike>(
+  events: T[],
+  event: T,
+): T[] {
+  const index = events.findIndex((e) => e.id === event.id);
+  if (index === -1) return [...events, event];
+  const existing = events[index]!;
+  if (existing.status === "completed" && event.status === "started") {
+    return events;
+  }
+  const next = events.slice();
+  next[index] = { ...existing, ...event };
+  return next;
+}
+
+// ============================================================================
+// Tools / Skills / Teams UI state classification (pure, unit-tested)
+// ============================================================================
+
+/** Distinguishable registry states — "0 tools" only ever means empty+ready. */
+export type ToolRegistryState =
+  | "loading"
+  | "runtime-not-ready"
+  | "available"
+  | "error";
+
+/**
+ * Classify a `tools/list_result` payload. The host signals a not-yet-created
+ * runtime with `runtimeReady: false` and an empty list; a ready runtime with
+ * zero tools is a DIFFERENT (legitimate) state; an `error` field is a
+ * registry failure. Never map failure onto empty, or not-ready onto "0".
+ */
+export function classifyToolRegistryState(
+  payload: unknown,
+): { state: ToolRegistryState; tools: ReturnType<typeof normalizeToolList> } {
+  const p = (payload ?? {}) as {
+    tools?: unknown;
+    runtimeReady?: unknown;
+    error?: unknown;
+  };
+  if (p.error !== undefined) {
+    return { state: "error", tools: [] };
+  }
+  const tools = normalizeToolList(p);
+  if (p.runtimeReady === false) {
+    return { state: "runtime-not-ready", tools: [] };
+  }
+  return { state: "available", tools };
+}
+
+/**
+ * True when a skills/team panel must render the FAILURE state rather than
+ * the EMPTY state (error present AND no data ever loaded).
+ */
+export function isLoadFailureState(
+  error: string | null | undefined,
+  itemCount: number,
+): boolean {
+  return Boolean(error && error.length > 0) && itemCount === 0;
 }
 
 // ============================================================================

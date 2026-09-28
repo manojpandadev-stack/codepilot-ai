@@ -7,3 +7,5 @@ allowBuilds:
   esbuild: true
   keytar: false
   protobufjs: true
+minimumReleaseAgeExclude:
+  - '@modelcontextprotocol/sdk@1.30.1'

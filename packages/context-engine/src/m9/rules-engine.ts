@@ -106,7 +106,7 @@ export interface RulesEngineHost {
 }
 
 export class RulesEngine {
-  private cache: Map<string, { mtimeMs: number; result: RulesLoadResult }> =
+  private cache: Map<string, { fingerprint: string; result: RulesLoadResult }> =
     new Map();
   private readonly options: Required<RulesOptions>;
   /** Per-skill enabled state. True = active/injected into prompt. */
@@ -124,7 +124,7 @@ export class RulesEngine {
     const cacheKey = `${this.host.root}|${this.host.home ?? ""}`;
     const cached = this.cache.get(cacheKey);
     const fingerprint = this.scanFingerprint();
-    if (cached && cached.mtimeMs === fingerprint) {
+    if (cached && cached.fingerprint === fingerprint) {
       return cached.result;
     }
 
@@ -223,7 +223,7 @@ export class RulesEngine {
       // Active skill names — skills whose isSkillActive(name) returns true.
       activeSkillNames,
     };
-    this.cache.set(cacheKey, { mtimeMs: fingerprint, result });
+    this.cache.set(cacheKey, { fingerprint, result });
     return result;
   }
 
@@ -300,9 +300,14 @@ export class RulesEngine {
   // Internals
   // ------------------------------------------------------------------------
 
-  private scanFingerprint(): number {
-    // Cheap invalidation: highest mtime across convention directories.
+  private scanFingerprint(): string {
+    // Cheap invalidation: latest mtime AND total bytes across convention
+    // directories. Size is folded in because filesystem timestamp granularity
+    // can be coarse (a rewrite landing inside the same tick would otherwise
+    // serve stale rules); mtime still covers same-size edits, so both signals
+    // are kept and compared together.
     let latest = 0;
+    let totalBytes = 0;
     const dirs = [
       path.join(this.host.root, ".codepilot"),
       path.join(this.host.root, ".clinerules"),
@@ -312,20 +317,21 @@ export class RulesEngine {
       try {
         const stat = fs.statSync(dir);
         latest = Math.max(latest, stat.mtimeMs);
-        this.walkMtimes(dir, stat.mtimeMs, (t) => {
+        this.walkStats(dir, stat.mtimeMs, (t, size) => {
           latest = Math.max(latest, t);
+          totalBytes += size;
         });
       } catch {
         // absent
       }
     }
-    return latest;
+    return `${latest}:${totalBytes}`;
   }
 
-  private walkMtimes(
+  private walkStats(
     dir: string,
     depthBudget: number,
-    visit: (t: number) => void,
+    visit: (mtimeMs: number, size: number) => void,
   ): void {
     if (depthBudget <= 0) return;
     let entries;
@@ -338,9 +344,9 @@ export class RulesEngine {
       const full = path.join(dir, entry.name);
       try {
         const stat = fs.statSync(entry.isDirectory() ? full : full);
-        visit(stat.mtimeMs);
+        visit(stat.mtimeMs, stat.size);
         if (entry.isDirectory()) {
-          this.walkMtimes(full, depthBudget - 1, visit);
+          this.walkStats(full, depthBudget - 1, visit);
         }
       } catch {
         // skip unreadable

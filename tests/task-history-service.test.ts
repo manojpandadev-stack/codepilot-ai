@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { TaskStore } from "../packages/agent-runtime/src/m12-task-store";
+import { createTaskPlan } from "../packages/agent-runtime/src/task-plan";
 import { FileMutationService } from "../packages/changeset-engine/src/m5/file-mutation";
 import { CheckpointManager } from "../packages/changeset-engine/src/m5/checkpoint-manager";
 import {
@@ -62,7 +63,13 @@ afterEach(() => {
 async function seedTask(overrides: {
   title?: string;
   prompt?: string;
-  status?: "running" | "completed" | "failed" | "interrupted" | "cancelled";
+  status?:
+    | "running"
+    | "completed"
+    | "failed"
+    | "interrupted"
+    | "cancelled"
+    | "paused";
   mode?: string;
   provider?: string;
   model?: string;
@@ -465,5 +472,93 @@ describe("TaskHistoryService lifecycle determinism", () => {
       await service.compareRuns(id, id);
     }
     expect(JSON.stringify(await service.details(id))).toBe(first);
+  });
+});
+
+
+// ------------------------------------- structured plan + paused visibility
+describe("TaskHistoryService — plan and paused", () => {
+  it("surfaces the structured plan, duration, and interruption for a paused task", async () => {
+    const id = await seedTask({
+      status: "paused",
+      assistantResult: "half done, user paused",
+    });
+    const plan = createTaskPlan(
+      {
+        objective: "Paused work continues",
+        steps: [{ title: "first" }, { title: "second" }],
+      },
+      Date.now(),
+    );
+    await store.update(id, { plan, lastStep: "task_paused" } as never);
+
+    const result = await service.details(id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const d = result.details;
+    expect(d.status).toBe("paused");
+    expect(d.plan?.objective).toBe("Paused work continues");
+    expect(d.plan?.steps.map((s) => s.title)).toEqual(["first", "second"]);
+    // Paused behaves like the other terminal-ish states for duration...
+    expect(typeof d.durationMs).toBe("number");
+    // ...and for the resume-oriented interruption block.
+    expect(d.interruption).toBeDefined();
+    expect(d.interruption!.lastPhase).toBe("response");
+  });
+
+  it("omits plan for tasks that never made one", async () => {
+    const id = await seedTask({ status: "completed" });
+    const result = await service.details(id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.details.plan).toBeUndefined();
+  });
+
+  it("summary exposes paused in the status filter path", async () => {
+    const id = await seedTask({ status: "paused" });
+    const list = await service.list();
+    const entry = list.find((t) => t.id === id);
+    expect(entry?.status).toBe("paused");
+    expect(typeof entry?.durationMs).toBe("number");
+  });
+});
+
+
+
+// ------------------------------------- per-task usage/cost (Phase 3)
+describe("TaskHistoryService — per-task usage and cost", () => {
+  it("surfaces tokens and estimated cost from agentState counters", async () => {
+    const id = await seedTask({
+      counters: { inputTokens: 1200, outputTokens: 340, estimatedCostUsd: 0.0042 },
+    });
+    const details = await service.details(id);
+    expect(details.ok).toBe(true);
+    if (!details.ok) return;
+    expect(details.details.inputTokens).toBe(1200);
+    expect(details.details.outputTokens).toBe(340);
+    expect(details.details.estimatedCostUsd).toBe(0.0042);
+    const row = (await service.list()).find((t) => t.id === id);
+    expect(row?.inputTokens).toBe(1200);
+    expect(row?.outputTokens).toBe(340);
+    expect(row?.estimatedCostUsd).toBe(0.0042);
+  });
+
+  it("drops a non-finite or negative cost — unavailable is never a number", async () => {
+    const id = await seedTask({
+      counters: { inputTokens: 10, outputTokens: 5, estimatedCostUsd: -3 },
+    });
+    const details = await service.details(id);
+    expect(details.ok).toBe(true);
+    if (!details.ok) return;
+    expect(details.details.estimatedCostUsd).toBeUndefined();
+    expect(details.details.inputTokens).toBe(10);
+  });
+
+  it("omits cost entirely when the ledger had no pricing", async () => {
+    const id = await seedTask({ counters: { inputTokens: 10, outputTokens: 5 } });
+    const details = await service.details(id);
+    expect(details.ok).toBe(true);
+    if (!details.ok) return;
+    expect(details.details.estimatedCostUsd).toBeUndefined();
   });
 });

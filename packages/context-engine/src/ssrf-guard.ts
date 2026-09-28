@@ -189,6 +189,18 @@ export function classifyIPv6(addr: string): IPClass | null {
       ) ?? "reserved"
     );
   }
+  // IPv4-translated prefix ::ffff:0:0/96 (RFC 4291 §2.5.5.2): groups are
+  // [0,0,0,0,0xffff,0,ipv4hi,ipv4lo] — the "::ffff:0:127.0.0.1" spelling that
+  // URL parsers canonicalize to "::ffff:0:7f00:1". The embedded IPv4 inherits
+  // its classification — a loopback/private embedded address must never be
+  // treated as global.
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0xffff && f === 0) {
+    return (
+      classifyIPv4(
+        `${(h6 >> 8) & 0xff}.${h6 & 0xff}.${(h7 >> 8) & 0xff}.${h7 & 0xff}`,
+      ) ?? "reserved"
+    );
+  }
   if (a === 0x2001 && b === 0x0db8) return "documentation";
   return "global";
 }

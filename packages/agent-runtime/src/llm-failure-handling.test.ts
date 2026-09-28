@@ -20,6 +20,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodePilotRuntime } from "./runtime.js";
 import { OllamaLlmProvider } from "./native/llm/ollama.js";
+import { createLlmProvider } from "./native/llm/registry.js";
 import type { OllamaChatLine } from "./native/llm/ollama.js";
 import type { LlmRequest, LlmStreamEvent } from "./native/llm/types.js";
 
@@ -219,5 +220,173 @@ describe("CodePilotRuntime — LLM failure must never settle as completed", () =
     expect(failed).toBe(1);
     // Two chat attempts were made (original + one retry), not three.
     expect(call).toBe(2);
+  });
+});
+
+describe("OllamaLlmProvider — first-token inactivity window (CPU prefill)", () => {
+  // Live-measured defect (qwen3:8b, CPU): a warm ~4k-token prefill emitted NO
+  // stream bytes for >420s. The steady-stream window (300s) was armed from
+  // request start, so a HEALTHY request was aborted mid-prefill — the UI
+  // showed nothing, the user pressed Stop, and the task recorded only
+  // run_interrupted. The window before the first chunk must be more generous
+  // than the steady-stream window; both must remain INACTIVITY windows.
+  it("keeps a long silent prefill alive until the first chunk arrives", async () => {
+    vi.useFakeTimers();
+    const enc = new TextEncoder();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+      },
+    });
+    const fetchImpl = vi.fn(
+      async () => new Response(stream, { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      timeoutMs: 3_000, // steady-stream window
+      firstTokenTimeoutMs: 10_000, // first-token window
+    });
+
+    const pending = eventsOf(provider, {});
+    const consume = (async () => {
+      const events: LlmStreamEvent[] = [];
+      for await (const evt of await pending) events.push(evt);
+      return events;
+    })();
+
+    // 9s of total silence: beyond the steady-stream window, inside the
+    // first-token window. The old code (steady window armed at t=0) aborts.
+    await vi.advanceTimersByTimeAsync(9_000);
+    streamController.enqueue(
+      enc.encode(
+        ndjsonLine({
+          message: { role: "assistant", content: "hi" },
+          done: false,
+        }),
+      ),
+    );
+    // Steady-stream window re-arms per chunk; finish the stream.
+    streamController.enqueue(
+      enc.encode(
+        ndjsonLine({ message: { role: "assistant", content: "" }, done: true }),
+      ),
+    );
+    streamController.close();
+    const events = await consume;
+
+    const finish = events.find((e) => e.type === "finish");
+    expect(finish?.type === "finish" ? finish.reason : undefined).toBe(
+      "complete",
+    );
+    expect(events.some((e) => e.type === "text-delta")).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("still aborts when silence exceeds the first-token window", async () => {
+    vi.useFakeTimers();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+      },
+    });
+    const fetchImpl = vi.fn(
+      async (
+        _input: unknown,
+        init?: { signal?: AbortSignal },
+      ): Promise<Response> => {
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            streamController.error(
+              new DOMException("This operation was aborted", "AbortError"),
+            ),
+          { once: true },
+        );
+        return new Response(stream, { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      timeoutMs: 3_000,
+      firstTokenTimeoutMs: 10_000,
+    });
+
+    const pending = eventsOf(provider, {});
+    await vi.advanceTimersByTimeAsync(20_000);
+    const events = await pending;
+    const finish = events.find((e) => e.type === "finish");
+    expect(finish?.type === "finish" ? finish.reason : undefined).toBe("error");
+    expect(
+      finish?.type === "finish" && finish.error ? finish.error : "",
+    ).toMatch(/before the first stream chunk/);
+  });
+
+  it("pins keep_alive so the model stays resident across turns", async () => {
+    // Live-measured defect: without keep_alive, Ollama unloads the model 5m
+    // after each turn; the next turn pays a 22-60s+ reload before prefill
+    // (21.9s cold vs 0.6s warm first chunk on qwen3:8b/CPU).
+    let capturedBody: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn(
+      async (_input: unknown, init?: { body?: string }) => {
+        capturedBody = JSON.parse(init?.body ?? "{}");
+        return okChatResponse([
+          { message: { role: "assistant", content: "ok" }, done: true },
+        ]);
+      },
+    ) as unknown as typeof fetch;
+
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+    });
+    await eventsOf(provider, {});
+
+    expect(capturedBody?.keep_alive).toBe("10m"); // default: keep warm
+    const custom = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      keepAlive: "0",
+    });
+    await eventsOf(custom, {});
+    expect(capturedBody?.keep_alive).toBe("0"); // opt-out honored
+  });
+
+  it("propagates firstTokenTimeoutMs and keepAlive through the registry config", async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn(
+      async (_input: unknown, init?: { body?: string }) => {
+        capturedBody = JSON.parse(init?.body ?? "{}");
+        return okChatResponse([
+          { message: { role: "assistant", content: "ok" }, done: true },
+        ]);
+      },
+    ) as unknown as typeof fetch;
+
+    const provider = createLlmProvider(
+      { providerId: "ollama", modelId: "qwen3:8b" },
+      {
+        fetchImpl,
+        configs: [
+          {
+            providerId: "ollama",
+            ollamaFirstTokenTimeoutMs: 60_000,
+            ollamaKeepAlive: "30m",
+          },
+        ],
+      },
+    );
+    for await (const _ of provider.stream({
+      providerId: "ollama",
+      modelId: "qwen3:8b",
+      messages: [{ role: "user", content: "hi" }],
+    } as LlmRequest)) {
+      // drain
+    }
+    expect(capturedBody?.keep_alive).toBe("30m");
   });
 });

@@ -92,6 +92,28 @@ interface FakeBrowserService {
     s: string,
     signal?: AbortSignal,
   ) => Promise<{ ok: true; base64: string } | { ok: false; error: string }>;
+  selectOption: (
+    t: string,
+    s: string,
+    selector: string,
+    value: string,
+    signal?: AbortSignal,
+  ) => Promise<{ ok: boolean; error?: string }>;
+  consoleMessages: (
+    t: string,
+    s: string,
+  ) => ReadonlyArray<{ type: string; text: string; timestamp: number }>;
+  networkRequests: (
+    t: string,
+    s: string,
+  ) => ReadonlyArray<{
+    method: string;
+    url: string;
+    status?: number;
+    contentType?: string;
+    durationMs: number;
+    timestamp: number;
+  }>;
   closeSession: (taskId: string, sessionId?: string) => Promise<void>;
 }
 
@@ -131,6 +153,33 @@ function makeFakeService() {
       links: ["https://x.test/a"],
     }),
     screenshot: async () => ({ ok: true, base64: "aGVsbG8=" }),
+    selectOption: async (
+      _t: string,
+      _s: string,
+      selector: string,
+      value: string,
+    ) => {
+      calls.push({ op: "select", args: [selector, value] });
+      return { ok: true };
+    },
+    consoleMessages: () => [
+      {
+        type: "error",
+        text: "token: [REDACTED] failed",
+        timestamp: 1,
+      },
+      { type: "log", text: "page loaded", timestamp: 2 },
+    ],
+    networkRequests: () => [
+      {
+        method: "GET",
+        url: "https://api.test/?token=[REDACTED]",
+        status: 200,
+        contentType: "application/json",
+        durationMs: 42,
+        timestamp: 1,
+      },
+    ],
     closeSession: async () => undefined,
   };
   return { service: service as unknown as BrowserService, calls };
@@ -175,7 +224,7 @@ function setup() {
 // ============================================================================
 
 describe("browser tools — registry", () => {
-  it("registers all 12 browser tools with unique ids", () => {
+  it("registers all 15 browser tools with unique ids", () => {
     const { tools } = setup();
     const ids = tools.map((t) => t.id);
     expect(ids).toEqual([
@@ -190,6 +239,9 @@ describe("browser tools — registry", () => {
       "browser_wait",
       "browser_extract",
       "browser_screenshot",
+      "browser_select",
+      "browser_console",
+      "browser_network",
       "browser_close",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
@@ -330,5 +382,138 @@ describe("browser tools — execution + M4", () => {
       { taskId: "no-such-task" },
     );
     expect(result.status).toBe("completed");
+  });
+});
+
+
+// ================================================================
+// Phase 13-16: browser_select / browser_console / browser_network /
+// screenshot → image pipeline
+// ================================================================
+describe("browser tools — select/console/network/screenshot (rows 18-21)", () => {
+  it("browser_select validates the selector and calls the service", async () => {
+    const { tools, calls } = setup();
+    const registry = new ToolRegistry();
+    for (const t of tools) registry.register(t);
+    const dir = mkdtempSync(join(tmpdir(), "browser-m4-"));
+    const m4 = new M4PermissionPipeline({
+      workspaceRoot: dir,
+      approvalTimeoutMs: 5_000,
+      autoApproveReads: true,
+      presentApproval: async (request) => {
+        m4.approvalManager.approve(
+          request.approvalId,
+          "single_execution",
+          "test approve",
+        );
+        return { decision: "allow" as const };
+      },
+    });
+    const exec = new ToolExecutionService(
+      registry,
+      new ToolPermissionManager(),
+      new ToolAuditLogger(),
+      { defaultTimeoutMs: 15_000 },
+      m4,
+    );
+    const r = await exec.execute(
+      "browser_select",
+      { selector: "select#country", value: "de" },
+      { taskId: "t1" },
+    );
+    expect(r.status).toBe("completed");
+    expect(calls).toContainEqual({
+      op: "select",
+      args: ["select#country", "de"],
+    });
+  });
+
+  it("browser_select requires approval and DENIES when the user denies", async () => {
+    const { exec, calls } = setup();
+    const r = await exec.execute(
+      "browser_select",
+      { selector: "select#country", value: "de" },
+      { taskId: "t1" },
+    );
+    expect(r.status).toBe("denied");
+    expect(calls.some((c) => c.op === "select")).toBe(false);
+  });
+
+  it("browser_console returns captured messages with secrets redacted", async () => {
+    const { exec } = setup();
+    const r = await exec.execute(
+      "browser_console",
+      {},
+      { taskId: "t1" },
+    );
+    expect(r.status).toBe("completed");
+    const payload = r.output as unknown as {
+      messages: Array<{ type: string; text: string }>;
+    };
+    expect(payload.messages).toHaveLength(2);
+    expect(payload.messages[0]?.text).not.toContain(
+      "sk-live-abcdef1234567890hello",
+    );
+    expect(payload.messages[0]?.text).toContain("[REDACTED]");
+  });
+
+  it("browser_network returns entries with credential-scrubbed URLs", async () => {
+    const { exec } = setup();
+    const r = await exec.execute(
+      "browser_network",
+      {},
+      { taskId: "t1" },
+    );
+    expect(r.status).toBe("completed");
+    const payload = r.output as unknown as {
+      entries: Array<{ method: string; url: string; status?: number }>;
+    };
+    expect(payload.entries).toHaveLength(1);
+    expect(payload.entries[0]?.url).not.toContain("secret-value-123");
+    expect(payload.entries[0]?.url).toContain("[REDACTED]");
+    expect(payload.entries[0]?.status).toBe(200);
+  });
+
+  it("browser_screenshot forwards bytes to the host image hook", async () => {
+    const { service } = makeFakeService();
+    const captured: Array<{
+      taskId: string;
+      image: { mime: string; name: string; sizeBytes: number; bytes: Buffer };
+    }> = [];
+    const tools = createBrowserTools({
+      service,
+      onImageCaptured: (taskId, image) => {
+        captured.push({ taskId, image });
+      },
+    });
+    const registry = new ToolRegistry();
+    for (const t of tools) registry.register(t);
+    const exec = new ToolExecutionService(
+      registry,
+      new ToolPermissionManager(),
+      new ToolAuditLogger(),
+      { defaultTimeoutMs: 60_000 },
+      makeM4(),
+    );
+    const r = await exec.execute(
+      "browser_screenshot",
+      {},
+      { taskId: "t1" },
+    );
+    expect(r.status).toBe("completed");
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.taskId).toBe("t1");
+    expect(captured[0]?.image.mime).toBe("image/png");
+    expect(captured[0]?.image.bytes.toString("base64")).toBe("aGVsbG8=");
+  });
+
+  it("browser_screenshot works without the host hook (no staging)", async () => {
+    const { exec } = setup();
+    const r = await exec.execute(
+      "browser_screenshot",
+      {},
+      { taskId: "t1" },
+    );
+    expect(r.status).toBe("completed");
   });
 });

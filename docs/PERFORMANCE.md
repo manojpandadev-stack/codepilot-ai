@@ -1,5 +1,11 @@
 # CodePilot Performance Benchmark
 
+> **Historical snapshot.** Sections referencing `ClineCore.create` below
+> describe the removed delegated-runtime design; today's latency path is the
+> native CodePilot runtime + native LLM providers. Retained unchanged as an
+> engineering record; current live local-model latency measurements live in
+> `tests/ollama-perf-live.test.ts`.
+
 > Status: **measured baseline** (this document) + reproducible harness.
 > No model inference is measured as CodePilot latency anywhere below.
 > Cline numeric comparison: **Not measured** (see §10).

@@ -34,6 +34,13 @@ export const BUILTIN_TOOL_DISPLAY_CONTRACT: readonly ToolDisplayEntry[] = [
     callableName: "read_files",
   },
   {
+    name: "inspect_symbols",
+    category: "read",
+    description:
+      "Structural outline of a workspace file (symbols with line ranges)",
+    callableName: "inspect_symbols",
+  },
+  {
     name: "search",
     category: "read",
     description: "Search file contents across the workspace",
@@ -49,30 +56,33 @@ export const BUILTIN_TOOL_DISPLAY_CONTRACT: readonly ToolDisplayEntry[] = [
   {
     name: "git_status",
     category: "git",
-    description:
-      "Show working-tree status (policy coverage; executed via the bash tool: git status, M4 approval)",
-    callableName: null,
+    description: "Show working-tree status (git status --short --branch)",
+    callableName: "git_status",
   },
   {
     name: "git_diff",
     category: "git",
-    description:
-      "Show unstaged/staged diffs (policy coverage; executed via the bash tool: git diff, M4 approval)",
-    callableName: null,
+    description: "Show unstaged/staged diffs, optionally scoped to a path",
+    callableName: "git_diff",
   },
   {
     name: "git_log",
     category: "git",
-    description:
-      "Show commit history (policy coverage; executed via the bash tool: git log, M4 approval)",
-    callableName: null,
+    description: "Show recent commit history (bounded git log)",
+    callableName: "git_log",
   },
   {
     name: "git_show",
     category: "git",
+    description: "Show a specific commit with its diff (validated revision)",
+    callableName: "git_show",
+  },
+  {
+    name: "read_tool_output",
+    category: "read",
     description:
-      "Show a specific commit (policy coverage; executed via the bash tool: git show, M4 approval)",
-    callableName: null,
+      "Retrieve persisted full output behind a truncated command result (outputRef)",
+    callableName: "read_tool_output",
   },
   {
     name: "write_file",
@@ -135,5 +145,12 @@ export const BUILTIN_TOOL_DISPLAY_CONTRACT: readonly ToolDisplayEntry[] = [
     category: "agent",
     description: "Ask the user a clarifying question with options",
     callableName: "ask_question",
+  },
+  {
+    name: "plan",
+    category: "agent",
+    description:
+      "Create or update the structured task plan (objective, ordered steps, progress)",
+    callableName: "plan",
   },
 ];

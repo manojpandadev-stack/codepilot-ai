@@ -31,9 +31,13 @@ Agent → Tool Request → PolicyEngine → Permission Decision → Execution
 | Tool             | Permission | Category |
 | ---------------- | ---------- | -------- |
 | `read_files`     | AUTO       | read     |
+| `inspect_symbols` | AUTO      | read     |
 | `search`         | AUTO       | read     |
 | `git_diff`       | AUTO       | read     |
 | `git_status`     | AUTO       | read     |
+| `git_log`        | AUTO       | read     |
+| `git_show`       | AUTO       | read     |
+| `read_tool_output` | AUTO     | read     |
 | `list_directory` | AUTO       | read     |
 | `write_file`     | APPROVAL   | write    |
 | `apply_patch`    | APPROVAL   | write    |

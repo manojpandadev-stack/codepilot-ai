@@ -33,10 +33,12 @@ export type {
   LlmCatalogModel,
   LlmCatalogField,
   LlmCatalogProvider,
+  LlmToolCallingSupport,
 } from "./catalogue.js";
 export {
   CODEPILOT_PROVIDER_CATALOG,
   modelSupportsVision,
+  modelToolCallingSupport,
 } from "./catalogue.js";
 export { OllamaProvider, OLLAMA_DEFAULT_BASE_URL } from "./providers/ollama.js";
 export { splitThinking } from "./providers/ollama.js";

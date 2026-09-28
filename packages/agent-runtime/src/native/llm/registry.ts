@@ -45,11 +45,51 @@ export interface LlmProviderConfig {
   apiKey?: string;
   /** Base URL override (required for unknown providers). */
   baseUrl?: string;
+  /**
+   * Ollama-only: inactivity window (ms) allowed before the first stream
+   * chunk. A local CPU prefill is legitimately silent for minutes before
+   * generation starts; the steady-stream inactivity window must not apply
+   * to that phase. Undefined → provider default (15m).
+   */
+  ollamaFirstTokenTimeoutMs?: number;
+  /**
+   * Ollama-only: model residency after a completed request (Go duration
+   * string, e.g. "10m"). Keeps the model warm across turns; "0" restores
+   * the server-default unload behavior. Undefined → "10m".
+   */
+  ollamaKeepAlive?: string;
+  /**
+   * Ollama-only: `num_ctx` context-window size (VS Code setting
+   * `codepilot.localAI.ollama.contextLength`). Undefined → omit from the
+   * request (server/model default).
+   */
+  ollamaContextLength?: number;
+  /**
+   * Ollama-only: `num_predict` max tokens (VS Code setting
+   * `codepilot.localAI.ollama.numPredict`). Undefined → omit from the
+   * request (server/model default).
+   */
+  ollamaNumPredict?: number;
+  /**
+   * Ollama-only: explicit `think` control for reasoning models. Three-state
+   * (undefined = server default, never a blind disable). The user is always
+   * shown real reasoning spans via agent/status "Thinking…".
+   */
+  ollamaThink?: boolean;
 }
 
 export interface CreateLlmProviderOptions {
   configs?: LlmProviderConfig[];
   fetchImpl?: typeof fetch;
+  /**
+   * BUG 5 — transport for the local Ollama provider. Default "fetch" keeps
+   * global fetch (undici) — the documented test/embedding seam. "node-http"
+   * swaps in the zero-transport-timeout adapter so undici's 300s HEADERS
+   * timeout cannot kill a slow local CPU prefill (measured, live qwen3:8b).
+   * An explicit fetchImpl wins over this option. Only the ollama branch
+   * honors it; cloud providers always use fetch.
+   */
+  transport?: "fetch" | "node-http";
 }
 
 const DEFAULT_ENDPOINTS: Record<string, string> = {
@@ -93,9 +133,34 @@ export function createLlmProvider(
       // OpenAI-compatible server — treat any baseUrl-bearing local id as
       // Ollama when it points at the Ollama port, else OpenAI-compatible.
       if (request.providerId === "ollama") {
+        // TRANSPORT SELECTION (BUG 5): default stays global fetch — the
+        // documented test/embedding seam (vi.stubGlobal("fetch")). An
+        // explicit fetchImpl always wins. `transport: "node-http"` (only
+        // honored without a fetchImpl) selects the zero-transport-timeout
+        // adapter, bypassing undici's 300s HEADERS timeout so a slow CPU
+        // prefill is governed ONLY by the provider's first-token inactivity
+        // window (measured, live qwen3:8b; see node-http-fetch.ts).
         return new OllamaLlmProvider({
           baseUrl: baseUrl ?? OLLAMA_DEFAULT_HOST,
-          fetchImpl,
+          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+          ...(options.transport && !options.fetchImpl
+            ? { transport: options.transport }
+            : {}),
+          ...(config?.ollamaFirstTokenTimeoutMs !== undefined
+            ? { firstTokenTimeoutMs: config.ollamaFirstTokenTimeoutMs }
+            : {}),
+          ...(config?.ollamaKeepAlive !== undefined
+            ? { keepAlive: config.ollamaKeepAlive }
+            : {}),
+          ...(config?.ollamaContextLength !== undefined
+            ? { numCtx: config.ollamaContextLength }
+            : {}),
+          ...(config?.ollamaNumPredict !== undefined
+            ? { numPredict: config.ollamaNumPredict }
+            : {}),
+          ...(config?.ollamaThink !== undefined
+            ? { think: config.ollamaThink }
+            : {}),
         });
       }
       if (!baseUrl) {

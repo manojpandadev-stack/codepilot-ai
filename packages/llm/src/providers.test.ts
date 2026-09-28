@@ -215,6 +215,51 @@ describe("OllamaProvider", () => {
         }),
     ).toThrow(/http/);
   });
+
+  it("sends image bytes via the top-level images field", async () => {
+    const captured: {
+      body: { messages?: Array<Record<string, unknown>> } | null;
+    } = { body: null };
+    const lines = [JSON.stringify({ done: true })];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        captured.body = JSON.parse((init as { body: string }).body) as {
+          messages?: Array<Record<string, unknown>>;
+        };
+        return new Response(lines.join("\n"), { status: 200 });
+      }),
+    );
+    const provider = new OllamaProvider({
+      providerId: "ollama",
+      modelId: "llava",
+    });
+    await collect(
+      provider.completeStream({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              {
+                type: "image",
+                mime: "image/png",
+                dataBase64: "aGVsbG8=",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const messages = captured.body?.messages as Array<Record<string, unknown>>;
+    const user = messages.find((m) => m.role === "user") as {
+      content: string;
+      images: string[];
+    };
+    expect(user.content).toContain("look");
+    expect(user.content).toContain("[image image/png]");
+    expect(user.images).toEqual(["aGVsbG8="]);
+  });
 });
 
 describe("OpenAICompatibleProvider", () => {
@@ -287,6 +332,97 @@ describe("OpenAICompatibleProvider", () => {
     expect(
       () => new OpenAICompatibleProvider({ providerId: "x", modelId: "m" }),
     ).toThrow(/baseUrl/);
+  });
+
+  it("sends image blocks as image_url content parts with real bytes", async () => {
+    const captured: {
+      body: { messages?: Array<Record<string, unknown>> } | null;
+    } = { body: null };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        captured.body = JSON.parse((init as { body: string }).body) as {
+          messages?: Array<Record<string, unknown>>;
+        };
+        return new Response("data: [DONE]", { status: 200 });
+      }),
+    );
+    const provider = new OpenAICompatibleProvider({
+      providerId: "openai-compatible",
+      modelId: "m",
+      baseUrl: "https://example.test/v1",
+    });
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
+    const { validateImageAttachment } = await import("./image-test-helper.js");
+    const validated = validateImageAttachment({
+      bytes,
+      claimedMime: "image/png",
+      name: "shot.png",
+    });
+    if ("error" in validated) throw new Error(validated.error);
+    await collect(
+      provider.completeStream({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              {
+                type: "image",
+                mime: validated.mime,
+                dataBase64: Buffer.from(validated.bytes).toString("base64"),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const messages = captured.body?.messages as Array<{
+      role: string;
+      content: unknown;
+    }>;
+    const user = messages.find((m) => m.role === "user");
+    expect(Array.isArray(user?.content)).toBe(true);
+    const parts = user?.content as Array<Record<string, unknown>>;
+    expect(parts[0]).toMatchObject({ type: "text", text: "look" });
+    const imagePart = parts[1] as {
+      type: string;
+      image_url: { url: string };
+    };
+    expect(imagePart.type).toBe("image_url");
+    expect(imagePart.image_url.url.startsWith("data:image/png;base64,")).toBe(
+      true,
+    );
+  });
+
+  it("fails closed for fileRef-only image blocks", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("data: [DONE]", { status: 200 })),
+    );
+    const provider = new OpenAICompatibleProvider({
+      providerId: "openai-compatible",
+      modelId: "m",
+      baseUrl: "https://example.test/v1",
+    });
+    await expect(
+      collect(
+        provider.completeStream({
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  mime: "image/png",
+                  dataBase64: "",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/no inline bytes/);
   });
 });
 

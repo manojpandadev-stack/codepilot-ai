@@ -50,7 +50,6 @@ codepilot-ai/
 │   ├── changeset-engine/          # ChangeSet lifecycle management
 │   ├── memory-engine/             # Three-layer memory system
 │   ├── rag-engine/                # Semantic search (future)
-│   ├── repository-engine/         # Repository indexing (future)
 │   └── event-engine/              # Event streaming (future)
 ├── services/
 │   └── control-plane/             # Java microservice
@@ -255,12 +254,18 @@ interface ModelProvider {
   healthCheck(): Promise<ProviderHealth>;
   listModels(): Promise<ModelInfo[]>;
   supportsTools(): boolean;
-  supportsVision(): boolean;
   supportsStreaming(): boolean;
 }
 ```
 
 **Current:** Ollama-specific discovery via `discoverOllamaModels()`.
+
+> **Update:** the shipped capability model is catalogue-driven — vision is
+> resolved per provider+model pair by `modelSupportsVision(providerId,
+modelId)` in `@codepilot/llm` (explicit model capability metadata →
+> `true`/`false`; otherwise local/unknown endpoints → `undefined`), not by a
+> per-provider `supportsVision()` boolean. See
+> `docs/PROVIDER_ARCHITECTURE.md` → "Vision capability resolution".
 
 ### 5.2 Agent Lifecycle State Machine
 

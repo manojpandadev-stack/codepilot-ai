@@ -126,3 +126,66 @@ describe("detectShell", () => {
     expect(shell.args).toContain("-c");
   });
 });
+
+
+describe("TerminalSession — interactive stdin (keepStdinOpen)", () => {
+  const ECHO_SCRIPT =
+    "process.stdin.setEncoding('utf8');" +
+    "process.stdin.on('data', (d) => {" +
+    "  const line = d.toString().trim();" +
+    "  if (line) process.stdout.write('ECHO:' + line + '\\n');" +
+    "});";
+
+  it("feeds a running process line by line and echoes output", async () => {
+    let out = "";
+    const session = new TerminalSession({
+      command: "node",
+      args: ["-e", ECHO_SCRIPT],
+      keepStdinOpen: true,
+    });
+    session.onOutput((text, stream) => {
+      if (stream === "stdout") out += text;
+    });
+    session.start();
+    try {
+      await waitFor(() => session.snapshot().status === "running");
+      expect(session.stdinOpen).toBe(true);
+      session.writeStdin("first");
+      await waitFor(() => out.includes("ECHO:first"));
+      session.writeStdin("second\n");
+      await waitFor(() => out.includes("ECHO:second"));
+    } finally {
+      session.kill();
+      await session.wait();
+    }
+    expect(out).toContain("ECHO:first");
+    expect(out).toContain("ECHO:second");
+  });
+
+  it("writeStdin throws once the session is no longer interactive", async () => {
+    const session = new TerminalSession({
+      command: "node",
+      args: ["-e", "process.stdin.resume();"],
+    }).start();
+    try {
+      await waitFor(() => session.snapshot().status === "running");
+      expect(session.stdinOpen).toBe(false);
+      expect(() => session.writeStdin("x")).toThrow(/no open stdin/);
+    } finally {
+      session.kill();
+      await session.wait();
+    }
+  });
+
+  it("writeStdin throws after the shell is killed", async () => {
+    const session = new TerminalSession({
+      command: "node",
+      args: ["-e", ECHO_SCRIPT],
+      keepStdinOpen: true,
+    }).start();
+    await waitFor(() => session.snapshot().status === "running");
+    session.kill();
+    await session.wait();
+    expect(() => session.writeStdin("late")).toThrow(/no open stdin/);
+  });
+});

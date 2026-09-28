@@ -44,6 +44,41 @@ const DEFAULT_AUTO_APPROVE: Partial<
   web_fetch: "allow",
 };
 
+/**
+ * Scoped grants expire after one hour. Bounded blast radius even for a
+ * session-scoped approval the host never revokes.
+ */
+export const GRANT_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Deterministic OPERATION FINGERPRINT for scoped grants.
+ *
+ * Binds a grant to the security-relevant execution scope of THE operation
+ * that was approved — action + normalized command + target paths + cwd —
+ * so approving `node --version` can never silently authorize a materially
+ * different `execute_command` later. Whitespace is normalized (a repeated
+ * `node   --version` is the same operation); unstable values (session ids,
+ * timestamps) are deliberately excluded. Unknown/empty metadata yields a
+ * fingerprint that can never collide with a command-bearing operation.
+ */
+export function operationFingerprintOf(context: {
+  action: PermissionAction;
+  metadata?: Record<string, unknown>;
+}): string {
+  const meta = context.metadata ?? {};
+  const norm = (v: unknown): string =>
+    typeof v === "string" ? v.trim().replace(/\s+/g, " ") : "";
+  const cwd = norm(meta.cwd).replace(/[\\/]+$/, "");
+  return JSON.stringify([
+    context.action,
+    norm(meta.command),
+    norm(meta.path),
+    norm(meta.oldPath),
+    norm(meta.newPath),
+    cwd,
+  ]);
+}
+
 export class PermissionPolicyEngine {
   private readonly riskEngine: RiskEngine;
   private readonly autoApprove: Partial<
@@ -57,6 +92,8 @@ export class PermissionPolicyEngine {
     sessionId?: string;
     taskId?: string;
     workspaceRoot?: string;
+    /** Operation fingerprint — grants without one are never reused. */
+    operationFingerprint?: string;
     grantedAt: number;
   }> = [];
   private enabled = true;
@@ -116,6 +153,14 @@ export class PermissionPolicyEngine {
 
   /**
    * Grant a scoped permission (e.g. "Allow for session").
+   *
+   * SECURITY: the grant is bound to an OPERATION FINGERPRINT (action +
+   * security-relevant metadata: command, paths, cwd) — never to the action
+   * alone. A grant for `node --version` must never authorize a materially
+   * different `execute_command`. Legacy action-only grants (fingerprint
+   * absent) are treated as UNBINDABLE: they can only match evaluations that
+   * carry the exact same absent fingerprint, which in practice means they
+   * authorize nothing new (fail closed).
    */
   grantScopedPermission(params: {
     id: string;
@@ -124,6 +169,8 @@ export class PermissionPolicyEngine {
     sessionId?: string;
     taskId?: string;
     workspaceRoot?: string;
+    /** Operation fingerprint — REQUIRED for command/path-scoped actions. */
+    operationFingerprint?: string;
   }): void {
     this.scopedPermissions.push({
       ...params,
@@ -277,20 +324,40 @@ export class PermissionPolicyEngine {
     return policy.actions.includes(context.action);
   }
 
+  /**
+   * SECURITY: a scoped grant matches ONLY when the operation fingerprint
+   * matches exactly (action + command/paths/cwd) in addition to the scope
+   * binding. Session binding is FAIL-CLOSED: a grant minted WITH a session
+   * id never matches an evaluation without one (and vice versa) — an
+   * unbindable grant is never reused. Grants expire after one hour.
+   */
   private findActiveScopedPermission(
     context: PermissionContext,
   ): (typeof this.scopedPermissions)[number] | undefined {
+    const now = Date.now();
+    const fingerprint = operationFingerprintOf(context);
     return this.scopedPermissions.find((p) => {
       if (p.action !== context.action) return false;
-      if (p.scope === "session" && p.sessionId !== context.sessionId)
-        return false;
-      if (
-        p.scope === "task" &&
-        (p.taskId !== context.taskId || p.sessionId !== context.sessionId)
-      )
-        return false;
-      if (p.scope === "workspace" && p.workspaceRoot !== context.workspaceRoot)
-        return false;
+      if (now - p.grantedAt > GRANT_TTL_MS) return false; // expiry
+      // Fingerprint binding (the core fix): no stored fingerprint → the
+      // grant cannot prove WHICH operation was approved → never reuse it.
+      if (!p.operationFingerprint) return false;
+      if (p.operationFingerprint !== fingerprint) return false;
+      // Session binding is exact-and-present on BOTH sides (fail closed).
+      if (p.scope === "session") {
+        if (!p.sessionId || !context.sessionId) return false;
+        if (p.sessionId !== context.sessionId) return false;
+      }
+      if (p.scope === "task") {
+        if (!p.taskId || !context.taskId) return false;
+        if (p.taskId !== context.taskId) return false;
+        if (!p.sessionId || !context.sessionId) return false;
+        if (p.sessionId !== context.sessionId) return false;
+      }
+      if (p.scope === "workspace") {
+        if (!p.workspaceRoot || !context.workspaceRoot) return false;
+        if (p.workspaceRoot !== context.workspaceRoot) return false;
+      }
       return true;
     });
   }

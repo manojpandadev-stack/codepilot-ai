@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { containsSecretText, MAX_IMAGE_BYTES } from "@codepilot/shared";
 import { buildInitialMessages } from "./resume.js";
 import type { CompactionArtifact } from "./compaction-types.js";
+import type { TaskPlan } from "./task-plan.js";
 
 /** Max staged images kept per task (across turns). */
 export const MAX_STAGED_IMAGES_PER_TASK = 8;
@@ -29,7 +30,13 @@ export const MAX_STAGED_IMAGE_BYTES = MAX_IMAGE_BYTES;
 // ============================================================================
 
 export type PersistedTaskStatus =
-  "running" | "interrupted" | "completed" | "failed" | "cancelled" | "archived";
+  | "running"
+  | "interrupted"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "archived";
 
 /**
  * A persisted tool call in the faithful conversation record (v2).
@@ -158,6 +165,12 @@ export interface PersistedTask {
   checkpointIds?: string[];
   /** Files the task was mutating — used for conflict detection on resume. */
   touchedFiles?: string[];
+  /**
+   * Structured execution plan (Phase 2). Written from agent.plan_created/
+   * plan_updated events; re-hydrated into the runtime on resume so a
+   * continued task keeps ITS plan. Metadata only — never file content.
+   */
+  plan?: TaskPlan;
 }
 
 export interface TaskStoreOptions {
@@ -440,7 +453,7 @@ export class TaskStore {
     return task;
   }
 
-  /** Update task status/state metadata. */
+  /** Update task status/state metadata. `plan: null` clears the plan. */
   async update(
     id: string,
     patch: Partial<
@@ -453,7 +466,7 @@ export class TaskStore {
         | "touchedFiles"
         | "lastStep"
       >
-    >,
+    > & { plan?: TaskPlan | null },
   ): Promise<PersistedTask | null> {
     const task = await this.read(id);
     if (!task) return null;
@@ -470,6 +483,13 @@ export class TaskStore {
       task.touchedFiles = patch.touchedFiles;
     if (patch.lastStep !== undefined)
       task.lastStep = patch.lastStep.slice(0, 120);
+    if (patch.plan !== undefined) {
+      // Plan text is model-authored — redact like every other persisted
+      // model-authored field (titles/notes can echo secrets incidentally).
+      task.plan = patch.plan
+        ? redactForPersistence(patch.plan)
+        : undefined;
+    }
     task.updatedAtMs = this.nextWriteMs();
     await this.write(task);
     return task;
@@ -709,7 +729,11 @@ export class TaskStore {
         this.quarantine(file);
         return null;
       }
-      return parsed;
+      // Read path: sanitize ONLY the structured plan (rebuildable metadata).
+      // Legacy-field fills (conversation/resumeGeneration) are deliberately
+      // NOT applied here — v1 records must round-trip unchanged so resume
+      // fidelity classification can still detect them (resume.test pins this).
+      return sanitizePlan(parsed);
     } catch {
       // Missing file is normal; unreadable/corrupt gets quarantined if present.
       if (fs.existsSync(file)) this.quarantine(file);
@@ -741,13 +765,37 @@ function isValidTask(value: unknown): value is PersistedTask {
 }
 
 /**
+ * Drop a structurally invalid `plan` (corrupt/hand-edited record) — plans are
+ * rebuildable metadata and must never fail the whole task load.
+ */
+function sanitizePlan<T extends PersistedTask>(task: T): T {
+  const raw: unknown = task.plan;
+  if (raw === undefined) return task;
+  const valid =
+    raw !== null &&
+    typeof raw === "object" &&
+    typeof (raw as { objective?: unknown }).objective === "string" &&
+    Array.isArray((raw as { steps?: unknown }).steps);
+  if (valid) return task;
+  const { plan: _malformedPlan, ...rest } = task;
+  return { ...rest } as T;
+}
+
+/**
  * Normalize a legacy (v1) record: fill new optional fields so downstream
  * code never sees undefined-vs-present divergence. Never mutates history.
+ * A structurally invalid `plan` (corrupt/hand-edited record) is dropped
+ * rather than failing the whole task — plans are rebuildable metadata.
  */
 export function normalizePersistedTask(task: PersistedTask): PersistedTask {
+  const sanitized = sanitizePlan(task);
   return {
-    ...task,
-    ...(task.conversation === undefined ? { conversation: undefined } : {}),
-    ...(task.resumeGeneration === undefined ? { resumeGeneration: 0 } : {}),
+    ...sanitized,
+    ...(sanitized.conversation === undefined
+      ? { conversation: undefined }
+      : {}),
+    ...(sanitized.resumeGeneration === undefined
+      ? { resumeGeneration: 0 }
+      : {}),
   };
 }

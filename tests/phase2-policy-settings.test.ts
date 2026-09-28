@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { DEFAULT_TOOL_POLICIES, isAllowedSettingKey, ALLOWED_SETTINGS_KEYS } from "../packages/shared/src/index.js";
 import { PolicyEngine } from "../packages/policy-engine/src/index.js";
 
@@ -65,6 +67,35 @@ describe("isAllowedSettingKey", () => {
       expect(isAllowedSettingKey(key), key).toBe(true);
       expect(isAllowedSettingKey(`codepilot.${key}`), `codepilot.${key}`).toBe(true);
     }
+    expect(
+      isAllowedSettingKey("localAI.ollama.useNodeHttpTransport"),
+    ).toBe(true);
+  });
+
+  it("keeps the VS Code node:http transport opt-in disabled by default", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          __dirname,
+          "..",
+          "apps",
+          "vscode-extension",
+          "package.json",
+        ),
+        "utf8",
+      ),
+    ) as {
+      contributes: {
+        configuration: {
+          properties: Record<string, { default?: unknown }>;
+        };
+      };
+    };
+    expect(
+      manifest.contributes.configuration.properties[
+        "codepilot.localAI.ollama.useNodeHttpTransport"
+      ].default,
+    ).toBe(false);
   });
 
   it("rejects arbitrary or unknown keys", () => {

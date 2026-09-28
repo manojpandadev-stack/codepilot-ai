@@ -99,11 +99,27 @@ export function resetBrowserChannelDiscovery(): void {
 
 export interface BrowserHostOptions {
   workspaceRoot: string;
+  /**
+   * TEST-ONLY SSRF policy override. Explicitly opts the browser stack into
+   * loopback/private navigation for local-development testing against
+   * localhost dev servers. NEVER set in production defaults; every navigation
+   * under this flag is audit-logged. Cloud metadata and other forbidden
+   * literals remain blocked regardless of this flag.
+   */
+  allowLoopbackForTests?: boolean;
   m4: M4PermissionPipeline;
   observability: {
     increment: (name: string, tags?: Record<string, string>) => void;
     observeMs: (name: string, ms: number) => void;
   };
+  /**
+   * Image-capture hook (row 21): browser_screenshot bytes forwarded here
+   * so the host can stage them into the vision pipeline. Omitted in tests.
+   */
+  onImageCaptured?: (
+    taskId: string,
+    image: { mime: string; name: string; sizeBytes: number; bytes: Buffer },
+  ) => void;
 }
 
 export class ExtensionBrowserService {
@@ -117,11 +133,23 @@ export class ExtensionBrowserService {
   constructor(private readonly options: BrowserHostOptions) {
     const channel = discoverBrowserChannel();
     this.service = new BrowserService({
+      ...(this.options.allowLoopbackForTests
+        ? {
+            urlPolicy: {
+              allowPrivateNetworks: true,
+            },
+          }
+        : {}),
       channel: channel ?? undefined,
       maxSessions: 2,
       navigationTimeoutMs: 20_000,
     });
-    const toolConfig: BrowserToolConfig = { service: this.service };
+    const toolConfig: BrowserToolConfig = {
+      service: this.service,
+      ...(options.onImageCaptured
+        ? { onImageCaptured: options.onImageCaptured }
+        : {}),
+    };
     this.tools = createBrowserTools(toolConfig);
     for (const t of this.tools) this.registry.register(t);
     this.execService = this.buildExecService();

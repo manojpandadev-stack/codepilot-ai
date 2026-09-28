@@ -78,6 +78,29 @@ const LIVE_TOOL_ID_MAP: Record<string, string> = {
   web_fetch: "use_web",
   fetch_url: "use_web",
   read_file: "read_file",
+  // SECURITY (classification bug fix): the plural agent-facing read tools
+  // previously fell through the unmapped path to `apply_file_changes`
+  // (write), so EVERY read/skills/ask call presented an approval card even
+  // though every policy layer classifies them read/auto. They are mapped
+  // explicitly to read actions — M4 still evaluates every call (hard
+  // boundaries, workspace escape), only the auto-approve classification now
+  // matches the declared policy. Unknown tools still fall through deny-biased.
+  read_files: "read_file",
+  search_codebase: "search_text",
+  skills: "read_file",
+  ask_question: "ask_user",
+  // Structured task-plan metadata (objective/steps/status only) — read
+  // classified; it can never mutate files, processes, or network state.
+  plan: "read_file",
+  // Structural outline of a workspace file (read-only, workspace-scoped).
+  inspect_symbols: "read_file",
+  // Read-only git inspections — auto-approved read class (mutating git ops
+  // remain unmapped → deny-biased write path).
+  git_status: "read_file",
+  git_diff: "read_file",
+  git_log: "read_file",
+  git_show: "read_file",
+  read_tool_output: "read_file",
   list_files: "list_directory",
   list_directory: "list_directory",
   search_files: "search_files",
@@ -100,6 +123,9 @@ const LIVE_TOOL_ID_MAP: Record<string, string> = {
   browser_extract: "browser_extract",
   browser_screenshot: "browser_screenshot",
   browser_close: "browser_close",
+  // Staged deletion (delete_file) — its own high-risk action (NOT the write
+  // class): approvals, audit, and risk display must reflect real deletion.
+  delete_file: "delete_file",
   // --- Agent-initiated tracked terminal sessions (M7) ----------------------
   // Every agent session operation maps to execute_command so each COMMAND is
   // independently risk-classified (high → ASK by default). A sessionId can

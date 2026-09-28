@@ -15,7 +15,11 @@
  * separate hard-coded provider lists in React.
  */
 
-import { CODEPILOT_PROVIDER_CATALOG } from "@codepilot/llm";
+import {
+  CODEPILOT_PROVIDER_CATALOG,
+  modelToolCallingSupport,
+  type LlmToolCallingSupport,
+} from "@codepilot/llm";
 import { OLLAMA_API_TAGS } from "@codepilot/shared";
 
 // ============================================================================
@@ -73,6 +77,14 @@ export interface CatalogModel {
   vision: boolean;
   tools: boolean;
   streaming: boolean;
+  /**
+   * Tool-calling support tri-state (CodePilot catalogue truth):
+   * "true" = verified structured tool calling; "unknown" = unverified
+   * (NOT supported, NOT unsupported — must never render as supported);
+   * "false" = the adapter cannot carry tool calls. Boolean `tools` above is
+   * the provider-level capability and stays for compatibility.
+   */
+  toolCalling: LlmToolCallingSupport;
   /** USD per million input tokens, when published. */
   inputPerMtok?: number;
   /** USD per million output tokens, when published. */
@@ -223,7 +235,7 @@ const DESCRIPTION_OVERRIDES: Readonly<Record<string, string>> = {
   anthropic: "Claude models via the official Anthropic API.",
   gemini: "Google Gemini models via the Gemini API.",
   vertex: "Google Gemini models via Vertex AI (GCP project billing).",
-  bedrock: "Claude and other models via AWS Bedrock (IAM credentials).",
+  bedrock: "Claude and other models via AWS Bedrock (IAM credentials). Discovery-only — no generation path.",
   ollama: "Run open models locally — nothing leaves your machine.",
   lmstudio: "Local models served by LM Studio on this machine.",
   openai: "OpenAI-Compatible endpoints (custom base URL + model).",
@@ -257,6 +269,8 @@ interface SdkModelInfo {
   contextWindow?: number;
   maxTokens?: number;
   capabilities?: string[];
+  /** CodePilot-owned tri-state from the LLM catalogue (absent = resolve). */
+  toolCallingSupport?: LlmToolCallingSupport;
   pricing?: { input?: number; output?: number };
 }
 
@@ -441,7 +455,7 @@ function fieldsFor(sdk: SdkProviderInfo, id: string): CatalogField[] {
   return out;
 }
 
-function modelFor(sdkModel: SdkModelInfo): CatalogModel {
+function modelFor(sdkModel: SdkModelInfo, providerId: string): CatalogModel {
   const caps = sdkModel.capabilities ?? [];
   return {
     id: sdkModel.id,
@@ -452,6 +466,9 @@ function modelFor(sdkModel: SdkModelInfo): CatalogModel {
     vision: caps.includes("images") || caps.includes("video"),
     tools: caps.includes("tools"),
     streaming: caps.includes("streaming") || caps.includes("tools"),
+    // Tri-state truth: the model entry's explicit value wins; otherwise the
+    // catalogue resolver decides (BYO/unlisted → "unknown", never "true").
+    toolCalling: sdkModel.toolCallingSupport ?? modelToolCallingSupport(providerId, sdkModel.id),
     inputPerMtok: sdkModel.pricing?.input,
     outputPerMtok: sdkModel.pricing?.output,
   };
@@ -472,7 +489,7 @@ export function getProviderCatalog(): CatalogProvider[] {
     // catalogue data; local runtimes discover at runtime.
     const supportsDiscovery =
       p.client === "openai-compatible" || p.client === "openai";
-    const models = Object.values(p.models ?? {}).map(modelFor);
+    const models = Object.values(p.models ?? {}).map((m) => modelFor(m, id));
     return {
       id,
       displayName: p.name,

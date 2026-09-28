@@ -42,7 +42,13 @@ import type {
   TerminalStreamEventWithCorrelation,
   TerminalStreamSink,
 } from "./terminal-stream.js";
-import { getDefaultShell, getShellInvocation } from "./shell-platform.js";
+import {
+  getDefaultShell,
+  getShellInvocation,
+  type ShellInvocation,
+} from "./shell-platform.js";
+import { persistToolOutput } from "./output-sidecar.js";
+import type { TerminalEnvironment } from "./terminal-environment.js";
 
 /** Combined-output cap in chars (matches the SDK executor default). */
 export const STREAMING_SHELL_MAX_OUTPUT_CHARS = 48_000;
@@ -90,6 +96,14 @@ export interface StreamingShellHooks {
   timeoutMs?: number;
   /** Combined-output char cap (default 48k — matches the SDK executor). */
   maxOutputChars?: number;
+  /** outputRef sidecar directory override (tests). */
+  sidecarDir?: string;
+  /**
+   * Terminal environment transport (Phase 9). When set, the resolved shell
+   * invocation is wrapped so the command executes inside that environment
+   * (local/wsl/ssh). Applied AFTER M4 gating — transport never gates.
+   */
+  environment?: TerminalEnvironment;
 }
 
 const DEFAULT_SHELL_TIMEOUT_MS = 30_000;
@@ -174,10 +188,21 @@ export function createStreamingShellExecutor(
             command: command.command,
             args: Array.isArray(command.args) ? command.args : [],
           };
-    const argv = {
+    // Phase 9: transport wrap (local/wsl/ssh). The invocation shape is
+    // ShellInvocation (`input` for stdin scripts); the argv shape uses
+    // `stdin` — translate both ways around the wrap.
+    const shellInvocation: ShellInvocation = {
       command: requested.command,
       args: requested.args,
-      ...(requested.stdin !== undefined ? { stdin: requested.stdin } : {}),
+      ...(requested.stdin !== undefined ? { input: requested.stdin } : {}),
+    };
+    const wrapped = hooks.environment
+      ? hooks.environment.wrap(shellInvocation)
+      : shellInvocation;
+    const argv = {
+      command: wrapped.command,
+      args: wrapped.args,
+      ...(wrapped.input !== undefined ? { stdin: wrapped.input } : {}),
     };
     let output: CommandOutput;
     try {
@@ -215,15 +240,27 @@ export function createStreamingShellExecutor(
       // unchanged so the caller maps it to tool_failed, as before.
       throw err instanceof Error ? err : new Error(String(err));
     }
-    const combined = truncateStreamingOutput(
-      combineShellOutput(output.stdout, output.stderr),
-      maxChars,
-    );
+    const full = combineShellOutput(output.stdout, output.stderr);
     if (output.cancelled) {
       throw new Error("Command cancelled");
     }
     if (output.timedOut) {
       throw new Error(`Command timed out after ${timeoutMs}ms`);
+    }
+    let combined = truncateStreamingOutput(full, maxChars);
+    if (full.length > maxChars) {
+      // Phase 7b: persist the pre-truncation output (secrets redacted,
+      // bounded store) and quote the ref so read_tool_output can retrieve
+      // the elided middle.
+      const ref = persistToolOutput(
+        full,
+        hooks.sidecarDir !== undefined ? { dir: hooks.sidecarDir } : undefined,
+      );
+      if (ref) {
+        combined +=
+          `\n[full output persisted (secrets redacted) — call ` +
+          `read_tool_output with ref "${ref}"]`;
+      }
     }
     if (output.exitCode !== 0 && output.exitCode !== null) {
       throw new Error(

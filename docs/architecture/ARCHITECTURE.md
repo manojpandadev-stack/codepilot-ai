@@ -76,7 +76,7 @@ own agent loop natively in TypeScript:
 - **CodePilotRuntime**: Session lifecycle, persistence, checkpoints, MCP, skills, teams
 - **Native agent engine**: Core agent loop with tools, M4 dispatcher gate, streaming events
 - **Native LLM registry**: Multi-provider model routing (Ollama, OpenAI, Anthropic, etc.)
-- **Built-in tools**: read_files, search_codebase, editor, apply_patch, bash, run_commands, web tools
+- **Built-in tools**: read_files, inspect_symbols, search_codebase, editor, apply_patch, bash, run_commands, web tools
 
 CodePilot adds value on top via:
 
@@ -124,7 +124,7 @@ The Spring Boot control plane is optional for:
 @codepilot/git-engine       (checkpoints, diff, commits)
 @codepilot/event-engine     (event bus)
 @codepilot/memory-engine    (3-layer memory)
-@codepilot/repository-engine (file discovery, indexing)
+
 @codepilot/rag-engine       (embeddings, search)
 @codepilot/mcp-manager      (MCP server management)
     ↑

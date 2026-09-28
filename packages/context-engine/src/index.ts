@@ -785,6 +785,20 @@ export type {
   RagHit,
 } from "./m6/types.js";
 export { WorkspaceIndex, discoverWorkspace } from "./m6/index.js";
+export {
+  extractSymbols,
+  detectLanguage,
+  inspectCodeStructure,
+  regexCodeStructureProvider,
+  getCodeStructureProvider,
+  setCodeStructureProvider,
+  isStructuredLanguage,
+} from "./m6/index.js";
+export type {
+  CodeStructureProvider,
+  CodeStructureResult,
+  StructuredSymbol,
+} from "./m6/index.js";
 
 // ============================================================================
 // M13 — Browser / Web Agent

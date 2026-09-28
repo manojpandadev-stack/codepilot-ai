@@ -204,9 +204,14 @@ describe("M9 RulesEngine", () => {
     const e = engine();
     expect(e.load().rules[0]?.content).toBe("v1");
 
-    // Same-mtime rewrite is still cached (fingerprint = mtime).
-    fs.writeFileSync(file, "v2", "utf8");
-    expect(e.load().rules[0]?.content).toBe("v2"); // mtime changed
+    // A rewrite is detected: the fingerprint folds mtime and total bytes.
+    // utimesSync pins a distinct mtime so the assertion never depends on
+    // filesystem timestamp granularity (~1s on some platforms), and the
+    // longer body proves the size term alone also invalidates.
+    fs.writeFileSync(file, "v2-extended", "utf8");
+    const bumped = new Date(Date.now() + 2000);
+    fs.utimesSync(file, bumped, bumped);
+    expect(e.load().rules[0]?.content).toBe("v2-extended");
 
     // Cache survives a second identical call.
     const first = e.load();

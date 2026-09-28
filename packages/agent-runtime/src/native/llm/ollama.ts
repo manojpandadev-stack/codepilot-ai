@@ -16,6 +16,7 @@
  */
 
 import type { AgentMessage, AgentTool, ImageBlock } from "../types.js";
+import { nodeHttpFetch } from "./node-http-fetch.js";
 import {
   LlmError,
   type LlmProvider,
@@ -131,8 +132,56 @@ export function toOllamaMessages(messages: AgentMessage[]): Array<{
 }
 
 export interface OllamaLlmOptions {
+  /**
+   * Ollama model residency after a completed request (Go duration string).
+   * Default "10m" keeps the model warm across consecutive turns. Ollama's
+   * built-in default (5m) unloads the model between turns, forcing a full
+   * reload (20-60s+ on CPU) before the next prompt's prefill even begins —
+   * measured live on qwen3:8b/CPU. Pass "0" to restore server-default
+   * unload behavior.
+   */
+  keepAlive?: string;
+  /**
+   * Ollama `num_ctx`: context window size for the model. BUG 4 — the VS Code
+   * setting `codepilot.localAI.ollama.contextLength` previously never
+   * reached the wire. Undefined → key omitted (server/model default).
+   */
+  numCtx?: number;
+  /**
+   * Ollama `num_predict`: maximum tokens to predict. BUG 4 — the VS Code
+   * setting `codepilot.localAI.ollama.numPredict` previously never reached
+   * the wire. Undefined → key omitted (server/model default).
+   */
+  numPredict?: number;
+  /**
+   * Ollama `think` control for reasoning models (qwen3 etc.). Three-state:
+   * undefined → key omitted (server/model default — NO blind disabling);
+   * true → request thinking output; false → request no thinking. The chat
+   * UX already surfaces real thinking spans as "Thinking…" from actual
+   * reasoning_delta events, so the user always sees reasoning time.
+   */
+  think?: boolean;
+  /**
+   * Inactivity window for the FIRST stream chunk in milliseconds. A local
+   * CPU prefill can be legitimately silent for minutes before the first
+   * byte (measured: >420s for a warm ~4k-token prompt on qwen3:8b), so the
+   * initial window must be more generous than the steady-stream inactivity
+   * window. Only a genuinely dead connection trips it.
+   * Defaults to 900_000 (15m) when unset.
+   */
+  firstTokenTimeoutMs?: number;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Transport selection. DEFAULT "fetch" = Node's global fetch (undici) —
+   * the documented test/embedding seam (vi.stubGlobal("fetch")). Optional
+   * "node-http" = the zero-transport-timeout adapter (node-http-fetch.ts):
+   * undici enforces a default 300s HEADERS timeout that kills a legitimate
+   * slow CPU prefill (measured on live qwen3:8b) before this provider's
+   * 15-minute first-token inactivity window can apply. Ignored when an
+   * explicit fetchImpl is injected.
+   */
+  transport?: "fetch" | "node-http";
   /** Per-request INACTIVITY timeout in ms (default 300_000): aborts when no
    *  bytes arrive for this long. A wall-clock cap would kill healthy local
    *  generations (cold model load ≈145s plus long thinking spans stream for
@@ -141,20 +190,87 @@ export interface OllamaLlmOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Convert the user-facing keepAlive MINUTES setting into a Go duration
+ * string Ollama accepts. Never returns a malformed value: whole minutes →
+ * "5m", 0 → "0" (server-default unload), fractional minutes → seconds
+ * ("0.5" → "30s"), anything non-finite/negative → undefined (omit the key).
+ */
+export function keepAliveMinutesToDuration(
+  minutes: number,
+): string | undefined {
+  if (!Number.isFinite(minutes) || minutes < 0) return undefined;
+  if (minutes === 0) return "0";
+  if (Number.isInteger(minutes)) return `${minutes}m`;
+  const seconds = Math.round(minutes * 60);
+  return seconds > 0 ? `${seconds}s` : undefined;
+}
+
 export class OllamaLlmProvider implements LlmProvider {
   readonly id = "ollama";
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  /** True only when the zero-timeout node:http adapter was opted into. */
+  readonly usesNodeHttpTransport: boolean;
   private readonly timeoutMs: number;
+  private readonly firstTokenTimeoutMs: number;
+  private readonly keepAlive: string;
+  private readonly numCtx?: number;
+  private readonly numPredict?: number;
+  private readonly think?: boolean;
 
   constructor(options: OllamaLlmOptions = {}) {
     this.baseUrl = (options.baseUrl ?? OLLAMA_DEFAULT_HOST).replace(/\/+$/, "");
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // TRANSPORT SELECTION — an explicit fetchImpl (tests, embedding hosts)
+    // always wins. Otherwise the DEFAULT is Node's global fetch (the
+    // documented testable seam); "node-http" opts into the zero-timeout
+    // adapter so a slow local CPU prefill is governed ONLY by the inactivity
+    // windows below, never by undici's 300s HEADERS cap (measured, live
+    // qwen3:8b — see node-http-fetch.ts and tests/ollama-perf-live.test.ts).
+    this.usesNodeHttpTransport =
+      options.fetchImpl === undefined && options.transport === "node-http";
+    this.fetchImpl = (options.fetchImpl ??
+      (this.usesNodeHttpTransport
+        ? (nodeHttpFetch as unknown as typeof fetch)
+        : fetch)) as typeof fetch;
     this.timeoutMs = options.timeoutMs ?? 300_000;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 900_000;
+    this.keepAlive = options.keepAlive ?? "10m";
+    this.numCtx =
+      options.numCtx !== undefined && Number.isFinite(options.numCtx) && options.numCtx > 0
+        ? Math.floor(options.numCtx)
+        : undefined;
+    this.numPredict =
+      options.numPredict !== undefined &&
+      Number.isFinite(options.numPredict) &&
+      options.numPredict > 0
+        ? Math.floor(options.numPredict)
+        : undefined;
+    this.think = options.think;
   }
 
   async listInstalledModels(): Promise<Array<{ name: string; size?: number }>> {
-    const res = await this.fetchImpl(`${this.baseUrl}/api/tags`);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/api/tags`);
+    } catch (err) {
+      // Undici's global fetch rejects network failures with the opaque
+      // "fetch failed" TypeError; unwrap the cause (e.g. "connect
+      // ECONNREFUSED 127.0.0.1:11434") so health-check classification and
+      // users see the real transport reason. baseUrl is configuration,
+      // never a credential.
+      const cause = (err as { cause?: unknown } | null)?.cause;
+      const causeText =
+        cause instanceof Error
+          ? `${(cause as { code?: string }).code ?? ""} ${cause.message}`.trim()
+          : "";
+      throw new LlmError(
+        this.id,
+        `tags request to ${this.baseUrl}/api/tags failed: ${
+          err instanceof Error ? err.message : String(err)
+        }${causeText ? ` (${causeText})` : ""}`,
+      );
+    }
     if (!res.ok) {
       throw new LlmError(this.id, `tags request failed: ${res.status}`, {
         status: res.status,
@@ -177,9 +293,27 @@ export class OllamaLlmProvider implements LlmProvider {
         ...toOllamaMessages(request.messages),
       ],
       stream: true,
+      // Pin model residency so consecutive turns do not each pay a full
+      // model reload (Ollama's server default unloads after 5m idle).
+      keep_alive: this.keepAlive,
+      // Explicit thinking control — three-state: omitted = server default.
+      ...(this.think !== undefined ? { think: this.think } : {}),
       ...(tools.length > 0 ? { tools: tools.map(ollamaToolSpec) } : {}),
-      ...(request.temperature !== undefined
-        ? { options: { temperature: request.temperature } }
+      // BUG 4: num_ctx/num_predict from the VS Code localAI settings reach
+      // the wire; temperature stays per-request. `options` is omitted
+      // entirely when nothing is configured (never an empty/partial object).
+      ...(this.numCtx !== undefined || this.numPredict !== undefined || request.temperature !== undefined
+        ? {
+            options: {
+              ...(this.numCtx !== undefined ? { num_ctx: this.numCtx } : {}),
+              ...(this.numPredict !== undefined
+                ? { num_predict: this.numPredict }
+                : {}),
+              ...(request.temperature !== undefined
+                ? { temperature: request.temperature }
+                : {}),
+            },
+          }
         : {}),
     };
 
@@ -187,18 +321,26 @@ export class OllamaLlmProvider implements LlmProvider {
     const onAbort = () => controller.abort();
     request.signal?.addEventListener("abort", onAbort, { once: true });
     if (request.signal?.aborted) controller.abort();
-    // Inactivity timer: re-armed on every received chunk. Only a silent
-    // connection (dead server, stalled stream) trips it.
+    // Inactivity timer, two phases. A local CPU prefill is legitimately
+    // silent for minutes before the first byte (measured: >420s for a warm
+    // ~4k-token prompt on qwen3:8b — model load + prompt evaluation emit
+    // NOTHING until generation starts), so the window before the first
+    // chunk is more generous (firstTokenTimeoutMs). Once bytes flow, the
+    // window tightens to timeoutMs and re-arms on every chunk. Only a
+    // genuinely silent connection (dead server, stalled stream) trips it.
     let timedOut = false;
-    const armTimeout = (): ReturnType<typeof setTimeout> =>
+    const armTimeout = (ms: number): ReturnType<typeof setTimeout> =>
       setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, this.timeoutMs);
-    let timeout = armTimeout();
+      }, ms);
+    let timeout = armTimeout(this.firstTokenTimeoutMs);
+    let firstChunkSeen = false;
     const rearmTimeout = (): void => {
       clearTimeout(timeout);
-      timeout = armTimeout();
+      timeout = armTimeout(
+        firstChunkSeen ? this.timeoutMs : this.firstTokenTimeoutMs,
+      );
     };
 
     let response: Response;
@@ -219,7 +361,23 @@ export class OllamaLlmProvider implements LlmProvider {
       if (timedOut) {
         throw new LlmError(
           this.id,
-          `chat request timed out after ${this.timeoutMs}ms of inactivity`,
+          `chat request timed out after ${firstChunkSeen ? this.timeoutMs : this.firstTokenTimeoutMs}ms of inactivity${firstChunkSeen ? "" : " before the first stream chunk (local model load or prompt prefill still running; raise firstTokenTimeoutMs for very large CPU prompts)"}`,
+        );
+      }
+      // MEASURED (live qwen3:8b, perf suite): undici's default 300s HEADERS
+      // timeout (UND_ERR_HEADERS_TIMEOUT) fires BEFORE this provider's
+      // designed first-token inactivity window when a CPU prefill stays
+      // silent longer than 5 minutes. Surface the REAL cause and the fix —
+      // never a generic "fetch failed".
+      const cause = (err as { cause?: unknown } | null)?.cause;
+      const causeCode =
+        cause instanceof Error
+          ? ((cause as { code?: string }).code ?? cause.message)
+          : "";
+      if (typeof causeCode === "string" && causeCode.includes("HEADERS_TIMEOUT")) {
+        throw new LlmError(
+          this.id,
+          `chat request to ${this.baseUrl}/api/chat was dropped by the HTTP client's 300s headers timeout while the local model was still prefilling (no response headers yet). The provider's own first-token window (firstTokenTimeoutMs) is longer — raise it deliberately AND run the request on a transport without undici's headers cap, or reduce context/prompt size.`,
         );
       }
       throw new LlmError(
@@ -232,9 +390,7 @@ export class OllamaLlmProvider implements LlmProvider {
         `chat request to ${this.baseUrl}/api/chat failed: ${
           err instanceof Error ? err.message : String(err)
         }${
-          (err as { cause?: unknown } | null)?.cause instanceof Error
-            ? `: ${(err as { cause: Error }).cause.message}`
-            : ""
+          cause instanceof Error ? `: ${cause.message}` : ""
         }`,
       );
     }
@@ -260,6 +416,7 @@ export class OllamaLlmProvider implements LlmProvider {
       while (!done) {
         const { value, done: streamDone } = await reader.read();
         if (streamDone) break;
+        firstChunkSeen = true;
         rearmTimeout();
         buffer += decoder.decode(value, { stream: true });
         let newlineIdx: number;
@@ -328,7 +485,7 @@ export class OllamaLlmProvider implements LlmProvider {
         type: "finish",
         reason: "error",
         error: timedOut
-          ? `chat stream timed out after ${this.timeoutMs}ms of inactivity`
+          ? `chat stream timed out after ${firstChunkSeen ? this.timeoutMs : this.firstTokenTimeoutMs}ms of inactivity${firstChunkSeen ? "" : " before the first stream chunk"}`
           : err instanceof Error
             ? err.message
             : String(err),

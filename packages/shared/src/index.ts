@@ -203,12 +203,14 @@ export type WebviewMessageType =
   | "chat/stream_delta"
   | "agent/start"
   | "agent/stop"
+  | "agent/pause"
   | "agent/status"
   | "agent/event"
   | "tool/request_approval"
   | "tool/approval_result"
   | "tool/approval_resolved"
   | "checkpoint/created"
+  | "plan/updated"
   | "tool/started"
   | "tool/completed"
   | "terminal/output"
@@ -219,6 +221,7 @@ export type WebviewMessageType =
   | "provider/catalog"
   | "provider/status"
   | "provider/test"
+  | "provider/test_result"
   | "provider/health"
   | "provider/models"
   | "provider/usage"
@@ -305,6 +308,7 @@ export type WebviewMessageType =
   | "memory/set"
   | "session/deleted"
   | "session/renamed"
+  | "runtime/ready"
   | "rules/reload"
   | "rules/list"
   | "tools/list"
@@ -542,6 +546,12 @@ export const DEFAULT_TOOL_POLICIES: Record<string, ToolPermission> = {
   list_files: "auto",
   ask_question: "auto",
   skills: "auto",
+  // Task-plan metadata (no filesystem/process/network effect)
+  plan: "auto",
+  // Structural outline of workspace files (read-only, workspace-scoped)
+  inspect_symbols: "auto",
+  // Persisted full output behind truncated results (read-only sidecar)
+  read_tool_output: "auto",
   // --- Write tools (require approval / ChangeSet) ---
   write_file: "approval",
   create_file: "approval",
@@ -590,6 +600,8 @@ export const ALLOWED_SETTINGS_KEYS: readonly string[] = [
   "localAI.ollama.temperature",
   "localAI.ollama.numPredict",
   "localAI.ollama.keepAlive",
+  "localAI.ollama.think",
+  "localAI.ollama.useNodeHttpTransport",
   // Auto-approval (individual + composite object from the webview)
   "autoApproval",
   "autoApproval.read",
@@ -701,6 +713,7 @@ export function autoApprovalToToolPermissions(
     "git_diff",
     "git_log",
     "git_show",
+    "read_tool_output",
   ];
   for (const tool of readTools) {
     result[tool] = settings.readFiles ? "auto" : "approval";
@@ -869,6 +882,24 @@ export interface UrlContext {
   url: string;
 }
 
+/**
+ * A git diff attached as context (@diff chip). Metadata only — the host
+ * runs the diff at send time and injects a bounded, labeled block.
+ */
+export interface DiffContext {
+  id: string;
+  scope: "working" | "staged";
+}
+
+/**
+ * Recent terminal output attached as context (@terminal chip). Metadata
+ * only — the host slices its bounded command history at send time.
+ */
+export interface TerminalContext {
+  id: string;
+  scope: "recent";
+}
+
 export type DiagnosticSeverityLabel =
   "Error" | "Warning" | "Information" | "Hint";
 
@@ -908,6 +939,10 @@ export interface ComposerContext {
   selection?: SelectionContextPayload | null;
   /** Attached images (data URLs or raw base64 — host re-validates). */
   images?: ImageContext[];
+  /** Attached git diffs (@diff chips — resolved host-side at send time). */
+  diffs?: DiffContext[];
+  /** Attached terminal output (@terminal chips — resolved host-side). */
+  terminals?: TerminalContext[];
 }
 
 /**

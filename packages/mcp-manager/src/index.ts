@@ -12,12 +12,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { scrubSecretsText } from "@codepilot/shared";
 
 export {
   MCPConfigStore,
   REDACTED_ENV_PLACEHOLDER,
   redactEnvForPersistence,
   restoreEnvFromPersistence,
+  redactHeadersForPersistence,
 } from "./config-store.js";
 
 // ============================================================================
@@ -30,10 +33,26 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /**
+   * Extra HTTP headers for remote transports (e.g. gateway tokens).
+   * Treated as secrets: redacted on persistence like env values.
+   */
+  headers?: Record<string, string>;
   url?: string;
   enabled: boolean;
+  /** Execution timeout for tool calls in ms (default below). */
   timeout?: number;
+  /**
+   * Deadline for the initialize/connect handshake (ms). A server that starts
+   * but never completes the MCP handshake must not hang the host.
+   */
+  connectTimeoutMs?: number;
 }
+
+/** Default deadline for one MCP tool call (server `timeout` overrides). */
+export const DEFAULT_MCP_CALL_TIMEOUT_MS = 120_000;
+/** Default deadline for the initialize/connect handshake. */
+export const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 15_000;
 
 export interface MCPTool {
   /** Globally unique: `serverName:toolName` */
@@ -389,6 +408,41 @@ export class CodePilotMCPManager {
   private async createConnectedClient(
     config: MCPServerConfig,
   ): Promise<Client> {
+    const connectDeadline =
+      config.connectTimeoutMs ?? DEFAULT_MCP_CONNECT_TIMEOUT_MS;
+    const connectWithDeadline = async (
+      transport: Parameters<Client["connect"]>[0],
+    ): Promise<Client> => {
+      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `MCP server '${config.name}' connect deadline exceeded (${connectDeadline}ms) — handshake never completed`,
+                  ),
+                ),
+              connectDeadline,
+            );
+          }),
+        ]);
+        return client;
+      } catch (err) {
+        try {
+          await client.close();
+        } catch {
+          // Ignore — the transport is already broken.
+        }
+        throw err;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
     if (config.transport === "stdio") {
       if (!config.command) {
         throw new Error(
@@ -400,9 +454,7 @@ export class CodePilotMCPManager {
         args: config.args ?? [],
         env: config.env as Record<string, string>,
       });
-      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
-      await client.connect(transport);
-      return client;
+      return connectWithDeadline(transport);
     }
 
     if (config.transport === "streamable-http") {
@@ -411,12 +463,16 @@ export class CodePilotMCPManager {
           `streamable-http transport requires an http(s) url for server '${config.name}'`,
         );
       }
+      const verdict = await validateMcpServerUrl(config.url);
+      if (!verdict.ok) {
+        throw new Error(
+          `MCP server '${config.name}' URL rejected: ${verdict.reason}`,
+        );
+      }
       const transport = new StreamableHTTPClientTransport(new URL(config.url), {
         requestInit: { headers: buildHttpHeaders(config) },
       });
-      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
-      await client.connect(transport);
-      return client;
+      return connectWithDeadline(transport);
     }
 
     if (config.transport === "sse") {
@@ -425,12 +481,16 @@ export class CodePilotMCPManager {
           `sse transport requires an http(s) url for server '${config.name}'`,
         );
       }
+      const verdict = await validateMcpServerUrl(config.url);
+      if (!verdict.ok) {
+        throw new Error(
+          `MCP server '${config.name}' URL rejected: ${verdict.reason}`,
+        );
+      }
       const transport = new SSEClientTransport(new URL(config.url), {
         requestInit: { headers: buildHttpHeaders(config) },
       });
-      const client = new Client({ name: "codepilot-ai", version: "0.1.0" });
-      await client.connect(transport);
-      return client;
+      return connectWithDeadline(transport);
     }
 
     throw new Error(
@@ -560,6 +620,10 @@ export class CodePilotMCPManager {
       riskLevel?: "low" | "medium" | "high";
       /** Custom timeout for approval (ms) */
       approvalTimeoutMs?: number;
+      /** Deadline for the tool call itself (default: server timeout or 120s). */
+      timeoutMs?: number;
+      /** Aborts the in-flight tool call. */
+      signal?: AbortSignal;
     },
   ): Promise<{
     result: MCPToolResult;
@@ -653,7 +717,12 @@ export class CodePilotMCPManager {
 
     // Execute immediately (auto-approved or force-approved)
     return {
-      result: await this.callToolDirect(tool, input),
+      result: await this.callToolDirect(tool, input, {
+        ...(options?.timeoutMs !== undefined
+          ? { timeoutMs: options.timeoutMs }
+          : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      }),
     };
   }
 
@@ -663,6 +732,7 @@ export class CodePilotMCPManager {
   async executeApprovedTool(
     toolId: string,
     input: Record<string, unknown>,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<MCPToolResult> {
     const tool = this.findToolById(toolId);
     if (!tool) {
@@ -671,15 +741,59 @@ export class CodePilotMCPManager {
         isError: true,
       };
     }
-    return this.callToolDirect(tool, input);
+    return this.callToolDirect(tool, input, options);
+  }
+
+  /**
+   * Race one MCP operation against a deadline and an abort signal.
+   * Shared by tool calls and resource reads so a hung server can neither
+   * wedge the caller nor outlive cancellation.
+   */
+  private withMcpDeadline<T>(
+    operation: Promise<T>,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<{ result: T } | { timedOut: true } | { aborted: true }> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutGate = new Promise<{ timedOut: true }>((resolve) => {
+      timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      if (timer.unref) timer.unref();
+    });
+    const abortGate =
+      signal === undefined
+        ? null
+        : new Promise<{ aborted: true }>((resolve) => {
+            if (signal.aborted) {
+              resolve({ aborted: true });
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => resolve({ aborted: true }),
+              { once: true },
+            );
+          });
+    return Promise.race([
+      operation.then((result) => ({ result })),
+      timeoutGate,
+      ...(abortGate ? [abortGate] : []),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   /**
    * Core tool call to the MCP server.
+   *
+   * Bounded by a deadline (server `timeout` or the 120s default) and
+   * abortable via `signal`: a hung server can neither wedge the caller
+   * nor outlive cancellation. Timeouts and aborts are audited and surface
+   * as errors, never hangs.
    */
   private async callToolDirect(
     tool: MCPTool,
     input: Record<string, unknown>,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<MCPToolResult> {
     const client = this.clients.get(tool.serverName);
     if (!client) {
@@ -700,11 +814,52 @@ export class CodePilotMCPManager {
       };
     }
 
+    const serverConfig = this.servers.get(tool.serverName);
+    const timeoutMs =
+      options?.timeoutMs ?? serverConfig?.timeout ?? DEFAULT_MCP_CALL_TIMEOUT_MS;
+
     try {
-      const result = await client.callTool({
-        name: tool.name,
-        arguments: input,
-      });
+      const outcome = await this.withMcpDeadline(
+        client.callTool({
+          name: tool.name,
+          arguments: input,
+        }),
+        timeoutMs,
+        options?.signal,
+      );
+      if ("timedOut" in outcome) {
+        this.audit({
+          timestamp: Date.now(),
+          server: tool.serverName,
+          tool: tool.name,
+          action: "timeout",
+          detail: `no response within ${timeoutMs}ms`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `MCP tool '${tool.name}' timed out after ${timeoutMs}ms`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      if ("aborted" in outcome) {
+        this.audit({
+          timestamp: Date.now(),
+          server: tool.serverName,
+          tool: tool.name,
+          action: "cancelled",
+        });
+        return {
+          content: [
+            { type: "text", text: `MCP tool '${tool.name}' was cancelled` },
+          ],
+          isError: true,
+        };
+      }
+      const call = outcome.result;
       this.audit({
         timestamp: Date.now(),
         server: tool.serverName,
@@ -713,8 +868,8 @@ export class CodePilotMCPManager {
       });
       return {
         content:
-          (result.content as Array<{ type: string; text?: string }>) ?? [],
-        isError: result.isError as boolean | undefined,
+          (call.content as Array<{ type: string; text?: string }>) ?? [],
+        isError: call.isError as boolean | undefined,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -809,10 +964,18 @@ export class CodePilotMCPManager {
   async readResource(
     name: string,
     uri: string,
-    options?: { forceApproved?: boolean },
+    options?: {
+      forceApproved?: boolean;
+      riskLevel?: "low" | "medium" | "high";
+      approvalTimeoutMs?: number;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    },
   ): Promise<{
     contents: Array<{ uri: string; text?: string; mimeType?: string }>;
     isError: boolean;
+    approvalRequest?: MCPApprovalRequest;
+    approvalPromise?: Promise<MCPApprovalResolution>;
   }> {
     const client = this.clients.get(name);
     if (!client) {
@@ -820,11 +983,49 @@ export class CodePilotMCPManager {
     }
     const permission = this.getToolPermission(`server:${name}`);
     if (permission === "blocked" && !options?.forceApproved) {
+      this.audit({
+        timestamp: Date.now(),
+        server: name,
+        tool: "resource",
+        action: "blocked_by_policy",
+      });
       return { contents: [], isError: true };
     }
+    // Approval parity with tool execution: resource reads expose
+    // server-side data and must pass the same user decision.
+    if (permission === "approval" && !options?.forceApproved) {
+      const { request, promise } = this.approvalManager.requestApproval(
+        name,
+        "resource",
+        { uri },
+        options?.riskLevel ?? "medium",
+        options?.approvalTimeoutMs,
+      );
+      this.audit({
+        timestamp: Date.now(),
+        server: name,
+        tool: "resource",
+        action: "approval_required",
+        detail: request.requestId,
+      });
+      return { contents: [], isError: false, approvalRequest: request, approvalPromise: promise };
+    }
     try {
-      const result = await client.readResource({ uri });
-      const contents = (result.contents ?? []).map((c) => ({
+      const outcome = await this.withMcpDeadline(
+        client.readResource({ uri }),
+        options?.timeoutMs ?? DEFAULT_MCP_CALL_TIMEOUT_MS,
+        options?.signal,
+      );
+      if ("timedOut" in outcome || "aborted" in outcome) {
+        this.audit({
+          timestamp: Date.now(),
+          server: name,
+          tool: "resource",
+          action: "timedOut" in outcome ? "timeout" : "cancelled",
+        });
+        return { contents: [], isError: true };
+      }
+      const contents = (outcome.result.contents ?? []).map((c) => ({
         uri: c.uri,
         text: "text" in c && typeof c.text === "string" ? c.text : undefined,
         mimeType: c.mimeType ?? undefined,
@@ -857,7 +1058,15 @@ export class CodePilotMCPManager {
   // ---- Audit ----
 
   private audit(entry: AuditEntry): void {
-    this.auditLog.push(entry);
+    // Detail carries raw error text/URLs — scrub secret-shaped fragments
+    // before the record lands in the ring.
+    const safe: AuditEntry = {
+      ...entry,
+      ...(entry.detail !== undefined
+        ? { detail: scrubSecretsText(entry.detail).slice(0, 2000) }
+        : {}),
+    };
+    this.auditLog.push(safe);
     if (this.auditLog.length > 1000) {
       this.auditLog = this.auditLog.slice(-1000);
     }
@@ -931,5 +1140,123 @@ function buildHttpHeaders(config: MCPServerConfig): Record<string, string> {
   if (token && token !== "[REDACTED]") {
     headers["Authorization"] = `Bearer ${token}`;
   }
+  // Operator-supplied custom headers (e.g. gateway keys). Values are
+  // treated as secrets everywhere downstream (redacted persistence, never
+  // logged verbatim).
+  for (const [key, value] of Object.entries(config.headers ?? {})) {
+    if (typeof key === "string" && typeof value === "string" && key && value) {
+      headers[key] = value;
+    }
+  }
   return headers;
+}
+
+/**
+ * Hostnames/IP literals that must never be an MCP remote endpoint:
+ * cloud metadata services (credential theft). Loopback and private ranges
+ * are ALLOWED — operators explicitly configure local/dev servers, and
+ * localhost MCP servers are the common case.
+ */
+const MCP_FORBIDDEN_HOSTS: readonly string[] = [
+  "169.254.169.254",
+  "169.254.169.123",
+  "100.100.100.200",
+  "metadata.google.internal",
+  "metadata.google.internal.",
+  "[::ffff:169.254.169.254]",
+  "[::ffff:a9fe:a9fe]",
+];
+
+const MCP_FORBIDDEN_IPV6: readonly string[] = [
+  "::ffff:169.254.169.254",
+  "::ffff:169.254.169.123",
+  "::ffff:100.100.100.200",
+];
+
+/** Resolver shape (injectable for deterministic tests). */
+export type MCPDnsResolver = (
+  hostname: string,
+) => Promise<Array<{ address: string }>>;
+
+async function defaultMcpDnsResolver(
+  hostname: string,
+): Promise<Array<{ address: string }>> {
+  const records = await dnsLookup(hostname, { all: true });
+  return records.map((r) => ({ address: r.address }));
+}
+
+function normalizeMcpHost(host: string): string {
+  return host.toLowerCase().replace(/\.$/, "");
+}
+
+function isMcpForbiddenLiteral(host: string): boolean {
+  const h = normalizeMcpHost(host);
+  if ((MCP_FORBIDDEN_HOSTS as readonly string[]).includes(h)) return true;
+  // Bracketed IPv6 literals.
+  const unbracketed = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if ((MCP_FORBIDDEN_IPV6 as readonly string[]).includes(unbracketed)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Validate a remote MCP server URL before connecting.
+ *
+ * - http(s) only, no credentials in the URL (userinfo rejected).
+ * - Cloud-metadata endpoints rejected textually (no DNS needed).
+ * - The hostname is resolved and every address re-checked: metadata hits
+ *   reject (DNS-rebinding guard). Resolution failure rejects fail-closed.
+ * - Loopback/private addresses are permitted: the operator configures MCP
+ *   servers explicitly, and local servers are the norm.
+ */
+export async function validateMcpServerUrl(
+  url: string,
+  resolve: MCPDnsResolver = defaultMcpDnsResolver,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, reason: "invalid MCP server URL" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return {
+      ok: false,
+      reason: `MCP URL protocol ${parsed.protocol} not allowed (http/https only)`,
+    };
+  }
+  if (parsed.username || parsed.password) {
+    return { ok: false, reason: "credentials in MCP server URL are not allowed" };
+  }
+  if (isMcpForbiddenLiteral(parsed.hostname)) {
+    return {
+      ok: false,
+      reason: `MCP server host ${parsed.hostname} is forbidden (metadata endpoint)`,
+    };
+  }
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await resolve(parsed.hostname);
+  } catch {
+    return {
+      ok: false,
+      reason: `MCP server host ${parsed.hostname} does not resolve`,
+    };
+  }
+  if (addresses.length === 0) {
+    return {
+      ok: false,
+      reason: `MCP server host ${parsed.hostname} does not resolve`,
+    };
+  }
+  for (const { address } of addresses) {
+    if (isMcpForbiddenLiteral(address)) {
+      return {
+        ok: false,
+        reason: `MCP server host ${parsed.hostname} resolves to a forbidden metadata address`,
+      };
+    }
+  }
+  return { ok: true };
 }

@@ -161,6 +161,8 @@ export interface FileChange {
   updatedAt: number;
   checkpointId?: string;
   conflictInfo?: ConflictInfo;
+  /** Staged deletion (staged delete_file): accept removes the file via M5. */
+  delete?: boolean;
 }
 
 export interface ConflictInfo {
@@ -243,6 +245,21 @@ export function generateDiff(
   return diff.join("\n");
 }
 
+/**
+ * Unified-diff rendering for staged deletions: every original line removed.
+ * Bounded display (first 400 lines) keeps huge files from flooding the UI.
+ */
+export function generateDeletionDiff(
+  original: string,
+  _filePath: string,
+): string {
+  const lines = original.split("\n");
+  return lines
+    .slice(0, 400)
+    .map((l) => `-${l}`)
+    .join("\n");
+}
+
 // hashContent is imported from the M5 diff engine so ChangeSet hashes use
 // the same algorithm FileMutationService validates expectedHash against.
 
@@ -272,7 +289,11 @@ export class ChangeSetManager {
    */
   createChangeSet(
     taskId: string,
-    changes: Array<{ filePath: string; proposedContent: string }>,
+    changes: Array<{
+      filePath: string;
+      proposedContent: string;
+      delete?: boolean;
+    }>,
   ): ChangeSet {
     // F-08: Validate all proposed paths before creating ChangeSet
     if (this.pathValidator) {
@@ -288,14 +309,17 @@ export class ChangeSetManager {
 
     const changeSetId = `cs-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-    const fileChanges: FileChange[] = changes.map((c, i) => {
+    const fileChanges: FileChange[] = changes.map((c, cIdx) => {
       const fullPath = this.resolvePath(c.filePath);
       const originalContent = this.readFileSafe(fullPath);
       const originalHash = hashContent(originalContent);
-      const diff = generateDiff(originalContent, c.proposedContent, c.filePath);
+      const diff =
+        c.delete === true
+          ? generateDeletionDiff(originalContent, c.filePath)
+          : generateDiff(originalContent, c.proposedContent, c.filePath);
 
       return {
-        id: `${changeSetId}-${i}`,
+        id: `${changeSetId}-${cIdx}`,
         filePath: c.filePath,
         originalContent,
         proposedContent: c.proposedContent,
@@ -304,6 +328,7 @@ export class ChangeSetManager {
         status: "pending" as ChangeStatus,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        ...(c.delete === true ? { delete: true as const } : {}),
       };
     });
 
@@ -386,18 +411,24 @@ export class ChangeSetManager {
         const result = await this.mutation.execute({
           taskId: changeSet.taskId,
           ops: [
-            existed
+            change.delete === true
               ? {
-                  kind: "modify",
+                  kind: "delete" as const,
                   path: change.filePath,
-                  content: change.proposedContent,
                   expectedHash: change.originalHash,
                 }
-              : {
-                  kind: "create",
-                  path: change.filePath,
-                  content: change.proposedContent,
-                },
+              : existed
+                ? {
+                    kind: "modify" as const,
+                    path: change.filePath,
+                    content: change.proposedContent,
+                    expectedHash: change.originalHash,
+                  }
+                : {
+                    kind: "create" as const,
+                    path: change.filePath,
+                    content: change.proposedContent,
+                  },
           ],
           allOrNothing: true,
         });
@@ -529,7 +560,9 @@ export class ChangeSetManager {
 
     const fullPath = this.resolvePath(change.filePath);
 
-    if (!existsSync(fullPath)) {
+    // A staged-deletion rollback restores a file that is (by definition)
+    // absent — the existence precheck applies only to content rollbacks.
+    if (change.delete !== true && !existsSync(fullPath)) {
       return Promise.resolve({
         success: false,
         error: "File no longer exists",
@@ -537,13 +570,15 @@ export class ChangeSetManager {
     }
 
     // Check that file hasn't been further modified
-    const currentContent = this.readFileSafe(fullPath);
-    if (currentContent !== change.proposedContent) {
-      return Promise.resolve({
-        success: false,
-        error:
-          "File was modified after agent applied this change. Manual rollback required.",
-      });
+    if (change.delete !== true) {
+      const currentContent = this.readFileSafe(fullPath);
+      if (currentContent !== change.proposedContent) {
+        return Promise.resolve({
+          success: false,
+          error:
+            "File was modified after agent applied this change. Manual rollback required.",
+        });
+      }
     }
 
     const finish = (): { success: boolean; error?: string } => {
@@ -560,14 +595,20 @@ export class ChangeSetManager {
         .execute({
           taskId: changeSet.taskId,
           ops: [
-            change.originalContent
+            change.delete === true
               ? {
-                  kind: "modify",
+                  kind: "create" as const,
                   path: change.filePath,
                   content: change.originalContent,
-                  expectedHash: hashContent(change.proposedContent),
                 }
-              : { kind: "delete", path: change.filePath },
+              : change.originalContent
+                ? {
+                    kind: "modify" as const,
+                    path: change.filePath,
+                    content: change.originalContent,
+                    expectedHash: hashContent(change.proposedContent),
+                  }
+                : { kind: "delete" as const, path: change.filePath },
           ],
           allOrNothing: true,
         })

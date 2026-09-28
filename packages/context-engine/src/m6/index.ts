@@ -6,4 +6,5 @@ export * from "./types.js";
 export * from "./tokens.js";
 export * from "./errors.js";
 export * from "./symbols.js";
+export * from "./code-structure.js";
 export * from "./workspace-index.js";

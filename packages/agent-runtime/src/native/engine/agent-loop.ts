@@ -1,6 +1,10 @@
 /**
  * Native engine — the CodePilot agent loop.
  *
+ * PRODUCTION PATH: `runAgentLoop` is the SINGLE iteration engine — used by
+ * NativeSessionManager (session.ts) for every runtime turn (and by agent.ts).
+ * There is no alternate loop; do not add a second execution path.
+ *
  * Independently authored iteration engine:
  *
  *   user message

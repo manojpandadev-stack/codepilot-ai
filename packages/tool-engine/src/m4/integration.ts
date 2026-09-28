@@ -15,7 +15,10 @@
  * regardless of policy or approval decisions.
  */
 
-import { PermissionPolicyEngine } from "./policy-engine.js";
+import {
+  PermissionPolicyEngine,
+  operationFingerprintOf,
+} from "./policy-engine.js";
 import { ApprovalManager } from "./approval-manager.js";
 import { RiskEngine } from "./risk-engine.js";
 import { SecurityValidator } from "./security-validator.js";
@@ -107,6 +110,9 @@ const TOOL_ID_ACTION_MAP: Record<string, PermissionAction> = {
   browser_click: "network_request",
   browser_type: "network_request",
   browser_press: "network_request",
+  browser_select: "network_request",
+  browser_console: "web_fetch",
+  browser_network: "web_fetch",
   browser_close: "web_fetch",
   read_file: "read_file",
   write_file: "write_file",
@@ -119,6 +125,15 @@ const TOOL_ID_ACTION_MAP: Record<string, PermissionAction> = {
   search_text: "search_text",
   execute_command: "execute_command",
   kill_process: "kill_process",
+  // SECURITY: direct live-tool aliases. The LiveToolPermissionBridge maps
+  // these to execute_command before calling the pipeline, but the pipeline
+  // is a public API — without explicit entries toolIdToAction("bash")/
+  // ("run_commands") fell through to read_file (auto-approve), a
+  // misclassification hazard for any direct caller.
+  bash: "execute_command",
+  run_commands: "execute_command",
+  run_command: "execute_command",
+  terminal: "execute_command",
   git_diff: "git_operation",
   git_status: "git_operation",
   ask_user: "ask_user",
@@ -400,6 +415,12 @@ export class M4PermissionPipeline {
         : result.scope === "task"
           ? "task"
           : "single_execution";
+    // SECURITY: the grant is bound to the OPERATION FINGERPRINT of the
+    // exact approved operation (action + command + paths + cwd). A session
+    // grant for `node --version` can never authorize a different command —
+    // a materially different command re-enters the ASK path and prompts.
+    // Single_execution grants are also fingerprinted for auditability but
+    // are consumed by their one approval and never re-match (scope guard).
     this.policy.grantScopedPermission({
       id: `grant-${result.approvalId}`,
       action: context.action,
@@ -407,6 +428,7 @@ export class M4PermissionPipeline {
       sessionId: context.sessionId,
       taskId: context.taskId,
       workspaceRoot: this.security.workspaceRoot,
+      operationFingerprint: operationFingerprintOf(context),
     });
 
     return {

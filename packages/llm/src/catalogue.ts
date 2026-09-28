@@ -16,6 +16,31 @@
  * mapping code (status/category/protocol/fields/models) is untouched.
  */
 
+/**
+ * Tri-state native tool-calling support for a model.
+ *
+ * POLICY (binding for the runtime and every adapter):
+ * - "true"     → authoritative evidence the model emits structured tool
+ *                calls natively (Ollama /api/chat `tool_calls`). The pipeline
+ *                behaves exactly as it does today.
+ * - "false"    → authoritative evidence the model CANNOT emit structured
+ *                tool calls natively. The runtime may omit the tools array
+ *                for this model (they cannot be dispatched anyway); it must
+ *                do so honestly (a diagnostic line), never silently.
+ * - "unknown"  → no reliable evidence either way. The native tool pipeline
+ *                MUST stay enabled: tools are still advertised and streamed
+ *                tool_calls are still accepted. Unknown NEVER silently
+ *                disables the tool pipeline — the model either uses the
+ *                advertised tools or answers in prose, and the Act-mode
+ *                no-tool-call diagnostic records which happened.
+ *
+ * This field is deliberately separate from the legacy `capabilities` string
+ * array (consumed by model-gateway's capability mapping); it exists so a
+ * claim can carry its own evidence class. A model whose support cannot be
+ * established from authoritative metadata is "unknown" — never guessed.
+ */
+export type LlmToolCallingSupport = "true" | "false" | "unknown";
+
 export interface LlmCatalogModel {
   id: string;
   name?: string;
@@ -23,6 +48,11 @@ export interface LlmCatalogModel {
   maxTokens?: number;
   capabilities?: string[];
   pricing?: { input?: number; output?: number };
+  /**
+   * Tri-state native tool-calling support (see the type's policy block).
+   * Absent on models with no curated evidence → treated as "unknown".
+   */
+  toolCallingSupport?: LlmToolCallingSupport;
 }
 
 export interface LlmCatalogField {
@@ -96,12 +126,26 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
         name: "Qwen 3 8B",
         contextWindow: 32768,
         capabilities: ["tools", "streaming", "reasoning"],
+        // Verified live on this machine (qwen3:8b, Ollama /api/chat): the
+        // model emits structured `message.tool_calls` entries with parsed
+        // JSON arguments — same protocol class the catalogue already credits
+        // (Ollama tool calling, Qwen3 family). Recorded 2026-09.
+        toolCallingSupport: "true",
       },
       "qwen2.5-coder:3b": {
         id: "qwen2.5-coder:3b",
         name: "Qwen 2.5 Coder 3B",
         contextWindow: 32768,
         capabilities: ["tools", "streaming"],
+        // Deliberately "unknown", NOT "true": the Ollama model page
+        // advertises tool templates for this tag, but the only live
+        // observation available (2026-09, CPU, full 17-tool schema) is that
+        // the model SOMETIMES answers an explicit terminal request in prose
+        // instead of emitting a structured tool call. That is not enough
+        // evidence for "true", and nothing authoritative supports "false".
+        // Per policy, "unknown" keeps the native tool pipeline fully enabled
+        // — the Act-mode no-tool-call diagnostic records actual behavior.
+        toolCallingSupport: "unknown",
       },
     },
   },
@@ -442,4 +486,47 @@ export function modelSupportsVision(
     return capabilitiesIncludeVision(provider.capabilities);
   }
   return undefined;
+}
+
+/**
+ * Tri-state native tool-calling support for a provider/model pair.
+ *
+ * - A model explicitly listed in the catalogue decides by its own
+ *   `toolCallingSupport` (absent field → "unknown": absence of curated
+ *   evidence is never a denial).
+ * - Models on local runtimes (Ollama, LM Studio) not explicitly listed are
+ *   unknowable statically → "unknown" (the user installed whatever they
+ *   installed; live behavior is the only truth).
+ * - Generic bring-your-own endpoints (`openai-compatible`, `custom`,
+ *   legacy `openai`) accept any model by construction → "unknown".
+ * - Any other catalogued provider falls back to its provider-level
+ *   `capabilities` array ONLY as a "true" signal when it names "tools"
+ *   (provider-level metadata is a protocol claim, weaker than per-model
+ *   evidence — it can never produce "false").
+ * - Unknown provider ids → "unknown".
+ *
+ * See the `LlmToolCallingSupport` policy block: "unknown" keeps the native
+ * tool pipeline fully enabled; only authoritative "false" may omit tools,
+ * and even then honestly (a diagnostic), never silently.
+ */
+export function modelToolCallingSupport(
+  providerId: string,
+  modelId: string,
+): LlmToolCallingSupport {
+  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === providerId);
+  if (!provider) return "unknown";
+  const model = provider.models?.[modelId];
+  if (model !== undefined) {
+    return model.toolCallingSupport ?? "unknown";
+  }
+  if (providerId === "ollama" || providerId === "lmstudio") return "unknown";
+  if (
+    providerId === "openai-compatible" ||
+    providerId === "custom" ||
+    providerId === "openai"
+  ) {
+    return "unknown";
+  }
+  if (provider.capabilities?.includes("tools")) return "true";
+  return "unknown";
 }

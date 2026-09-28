@@ -7,7 +7,10 @@
  * cases are gated to Windows via `it.runIf`.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { CommandExecutionService } from "./command-execution.js";
 import {
   createStreamingShellExecutor,
@@ -17,6 +20,7 @@ import {
   STREAMING_SHELL_MAX_OUTPUT_CHARS,
   type StreamingShellContext,
 } from "./streaming-shell.js";
+import { readToolOutput } from "./output-sidecar.js";
 import type { TerminalStreamEventWithCorrelation } from "./terminal-stream.js";
 
 const NODE = process.execPath;
@@ -387,5 +391,90 @@ describe("streaming shell helpers", () => {
       expect(argv.args).toEqual(["-l", "-c", "echo hi"]);
       expect(argv.stdin).toBeUndefined();
     }
+  });
+});
+
+
+// ---------------------------------------------- outputRef sidecar (Phase 7b)
+describe("streaming shell executor — outputRef sidecar", () => {
+  const sidecarDirs: string[] = [];
+  afterEach(() => {
+    while (sidecarDirs.length > 0) {
+      fs.rmSync(sidecarDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+  function sidecarDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shell-sidecar-"));
+    sidecarDirs.push(dir);
+    return dir;
+  }
+  function refIn(text: string): string {
+    const match = /read_tool_output with ref "([a-z0-9_-]+)"/.exec(text);
+    expect(match, `no outputRef quoted in: ${text.slice(0, 400)}`).toBeTruthy();
+    return match![1]!;
+  }
+  const bigOutput = {
+    command: NODE,
+    args: ["-e", "process.stdout.write('X'.repeat(5000));"],
+  };
+
+  it("persists pre-truncation output and quotes a readable ref", async () => {
+    const dir = sidecarDir();
+    const service = new CommandExecutionService();
+    const execute = createStreamingShellExecutor(service, {
+      maxOutputChars: 300,
+      sidecarDir: dir,
+    });
+    const out = await execute(bigOutput, process.cwd(), ctx);
+    expect(out).toContain("[... output truncated:");
+    expect(out.length).toBeLessThan(1_000);
+    const full = readToolOutput(refIn(out), { dir });
+    expect(full).toMatch(/X{5000}/);
+  });
+
+  it("quotes the ref inside non-zero-exit errors as well", async () => {
+    const dir = sidecarDir();
+    const service = new CommandExecutionService();
+    const execute = createStreamingShellExecutor(service, {
+      maxOutputChars: 300,
+      sidecarDir: dir,
+    });
+    let message = "";
+    try {
+      await execute(
+        {
+          command: NODE,
+          args: [
+            "-e",
+            "process.stdout.write('Y'.repeat(4000)); process.exitCode = 3;",
+          ],
+        },
+        process.cwd(),
+        ctx,
+      );
+      expect.unreachable("command should have failed");
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("[Command exited with code 3]");
+    const full = readToolOutput(refIn(message), { dir });
+    expect(full).toMatch(/Y{4000}/);
+  });
+
+  it("persists nothing and quotes nothing when output fits", async () => {
+    const dir = sidecarDir();
+    const service = new CommandExecutionService();
+    const execute = createStreamingShellExecutor(service, {
+      maxOutputChars: 300,
+      sidecarDir: dir,
+    });
+    const out = await execute(
+      { command: NODE, args: ["-e", "process.stdout.write('small');"] },
+      process.cwd(),
+      ctx,
+    );
+    expect(out).toBe("small");
+    expect(out).not.toContain("read_tool_output");
+    expect(fs.readdirSync(dir)).toHaveLength(0);
   });
 });

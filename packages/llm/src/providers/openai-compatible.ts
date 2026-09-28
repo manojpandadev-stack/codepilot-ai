@@ -39,26 +39,58 @@ interface AccumulatedCall {
   hasName: boolean;
 }
 
-function toWireContent(content: LlmMessage["content"]): string {
+function toWireContent(
+  content: LlmMessage["content"],
+): string | Array<Record<string, unknown>> {
   if (typeof content === "string") return content;
-  const parts: string[] = [];
+  const hasImage = content.some((block) => block.type === "image");
+  if (!hasImage) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block.type === "text") parts.push(block.text);
+      else if (block.type === "tool_use") {
+        parts.push(
+          `[tool_use ${block.name} id=${block.id}] ${JSON.stringify(block.input).slice(0, 4000)}`,
+        );
+      } else if (block.type === "tool_result") {
+        parts.push(
+          `[tool_result ${block.name ?? block.tool_use_id}${block.is_error ? " ERROR" : ""}] ${block.content.slice(0, 6000)}`,
+        );
+      }
+    }
+    return parts.join("\n");
+  }
+  const parts: Array<Record<string, unknown>> = [];
   for (const block of content) {
-    if (block.type === "text") parts.push(block.text);
-    else if (block.type === "tool_use") {
-      parts.push(
-        `[tool_use ${block.name} id=${block.id}] ${JSON.stringify(block.input).slice(0, 4000)}`,
-      );
+    if (block.type === "text") parts.push({ type: "text", text: block.text });
+    else if (block.type === "image") {
+      if (
+        typeof block.dataBase64 !== "string" ||
+        block.dataBase64.length === 0
+      ) {
+        throw new Error(
+          "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+        );
+      }
+      parts.push({
+        type: "image_url",
+        image_url: {
+          url: `data:${block.mime};base64,${block.dataBase64}`,
+        },
+      });
+    } else if (block.type === "tool_use") {
+      parts.push({
+        type: "text",
+        text: `[tool_use ${block.name} id=${block.id}] ${JSON.stringify(block.input).slice(0, 4000)}`,
+      });
     } else if (block.type === "tool_result") {
-      parts.push(
-        `[tool_result ${block.name ?? block.tool_use_id}${block.is_error ? " ERROR" : ""}] ${block.content.slice(0, 6000)}`,
-      );
-    } else if (block.type === "image") {
-      // Simplified text path: mark the image explicitly so it is never
-      // silently dropped (native providers carry the real bytes).
-      parts.push(`[image ${block.mime}]`);
+      parts.push({
+        type: "text",
+        text: `[tool_result ${block.name ?? block.tool_use_id}${block.is_error ? " ERROR" : ""}] ${block.content.slice(0, 6000)}`,
+      });
     }
   }
-  return parts.join("\n");
+  return parts;
 }
 
 function toWireMessages(request: LlmRequest): Array<Record<string, unknown>> {

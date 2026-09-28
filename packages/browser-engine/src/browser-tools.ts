@@ -114,6 +114,16 @@ export interface BrowserToolConfig {
   service: BrowserService;
   /** Selector sanitizer (optional). Return null to reject the selector. */
   selectorPolicy?: (selector: string) => string | null;
+  /**
+   * Image-capture hook (row 21): when set, browser_screenshot bytes are
+   * forwarded here so the host can stage them into the vision pipeline
+   * (modelSupportsVision-gated). The host owns persistence; the tool only
+   * produces the bytes.
+   */
+  onImageCaptured?: (
+    taskId: string,
+    image: { mime: string; name: string; sizeBytes: number; bytes: Buffer },
+  ) => void;
 }
 
 /** Common permission block generator. */
@@ -594,7 +604,181 @@ export function createBrowserTools(
         ctx.signal,
       );
       if (!shot.ok) throw err("INTERNAL", shot.error, ctx.executionId);
+      // Row 21: forward the bytes to the host's staging pipeline when wired
+      // (the host stages into the task store; vision gate applies upstream).
+      if (config.onImageCaptured) {
+        config.onImageCaptured(ctx.taskId ?? "no-task", {
+          mime: "image/png",
+          name: `screenshot-${Date.now()}.png`,
+          sizeBytes: shot.base64.length,
+          bytes: Buffer.from(shot.base64, "base64"),
+        });
+      }
       return { ok: true, imageBase64: shot.base64 };
+    },
+  };
+
+  // ---- browser_select -------------------------------------------------------
+
+  const browserSelect: ToolDefinition = {
+    id: "browser_select",
+    name: "browser_select",
+    description:
+      "Select an option in a <select> dropdown by value. May change remote " +
+      "state (forms) — requires approval by default.",
+    category: "analysis",
+    version: "1.0.0",
+    capabilities: ["network", "cancellable"],
+    permission: permission(
+      "network",
+      true,
+      "Selecting a dropdown option may change remote state",
+    ),
+    idempotent: false,
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector of the <select> element",
+        },
+        value: {
+          type: "string",
+          description: "Option value to select",
+        },
+      },
+      required: ["selector", "value"],
+      additionalProperties: false,
+    },
+    validate(input) {
+      const selector = asString(input.selector);
+      if (!selector)
+        return err("VALIDATION", "selector must be a string", "validate");
+      if (selectorPolicy(selector) === null) {
+        return err("VALIDATION", "selector rejected by policy", "validate");
+      }
+      if (!asString(input.value)) {
+        return err("VALIDATION", "value must be a string", "validate");
+      }
+      return null;
+    },
+    async execute(input, ctx) {
+      try {
+        const selector = requireString(
+          input as Record<string, unknown>,
+          "selector",
+          MAX_SELECTOR_LEN,
+          ctx.executionId,
+        );
+        const value = requireString(
+          input as Record<string, unknown>,
+          "value",
+          MAX_TEXT_LEN,
+          ctx.executionId,
+        );
+        const result = await service.selectOption(
+          ctx.taskId ?? "no-task",
+          resolveSessionId(ctx),
+          selector,
+          value,
+          ctx.signal,
+        );
+        if (!result.ok) {
+          throw err("INTERNAL", result.error ?? "select failed", ctx.executionId);
+        }
+        return { ok: true };
+      } catch (e) {
+        if (isToolError(e)) throw e;
+        throw err("INTERNAL", sanitize(e), ctx.executionId);
+      }
+    },
+  };
+
+  // ---- browser_console ------------------------------------------------------
+
+  const browserConsole: ToolDefinition = {
+    id: "browser_console",
+    name: "browser_console",
+    description:
+      "Read console messages captured from the current page since the " +
+      "session started (bounded, secret-redacted). Read-only.",
+    category: "analysis",
+    version: "1.0.0",
+    capabilities: ["cancellable"],
+    permission: permission("read", false, "Read captured console messages"),
+    idempotent: true,
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max messages to return (default 50)",
+        },
+      },
+      additionalProperties: false,
+    },
+    async execute(input, ctx) {
+      const limit =
+        typeof input.limit === "number" && input.limit > 0
+          ? Math.min(Math.floor(input.limit), 200)
+          : 50;
+      const messages = service
+        .consoleMessages(ctx.taskId ?? "no-task", resolveSessionId(ctx))
+        .slice(-limit);
+      return {
+        ok: true,
+        messages: messages.map((m) => ({
+          type: m.type,
+          text: m.text,
+          timestamp: m.timestamp,
+        })),
+      };
+    },
+  };
+
+  // ---- browser_network ------------------------------------------------------
+
+  const browserNetwork: ToolDefinition = {
+    id: "browser_network",
+    name: "browser_network",
+    description:
+      "Read network exchanges captured from the current page since the " +
+      "session started (bounded). URLs are credential-scrubbed; headers " +
+      "(Authorization/Cookie) are NEVER captured. Read-only.",
+    category: "analysis",
+    version: "1.0.0",
+    capabilities: ["cancellable"],
+    permission: permission("read", false, "Read captured network activity"),
+    idempotent: true,
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max entries to return (default 50)",
+        },
+      },
+      additionalProperties: false,
+    },
+    async execute(input, ctx) {
+      const limit =
+        typeof input.limit === "number" && input.limit > 0
+          ? Math.min(Math.floor(input.limit), 200)
+          : 50;
+      const entries = service
+        .networkRequests(ctx.taskId ?? "no-task", resolveSessionId(ctx))
+        .slice(-limit);
+      return {
+        ok: true,
+        entries: entries.map((e) => ({
+          method: e.method,
+          url: e.url,
+          ...(e.status !== undefined ? { status: e.status } : {}),
+          ...(e.contentType !== undefined ? { contentType: e.contentType } : {}),
+          durationMs: e.durationMs,
+          timestamp: e.timestamp,
+        })),
+      };
     },
   };
 
@@ -632,6 +816,9 @@ export function createBrowserTools(
     browserWait,
     browserExtract,
     browserScreenshot,
+    browserSelect,
+    browserConsole,
+    browserNetwork,
     browserClose,
   ];
 }

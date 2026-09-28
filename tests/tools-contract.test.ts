@@ -16,6 +16,7 @@ import {
   CODEPILOT_MODEL_TOOL_NAMES,
   createCodePilotBuiltinTools,
 } from "../packages/agent-runtime/src/builtin-tools.js";
+import { DEFAULT_TOOL_POLICIES } from "../packages/shared/src/index.js";
 import { normalizeToolList } from "../apps/webview/src/lib/messages.js";
 
 function byName(name: string): ToolDisplayEntry {
@@ -130,5 +131,93 @@ describe("tool display contract — webview passthrough", () => {
     expect(out[0]?.callableName).toBe("search_codebase");
     expect(out[1]?.callableName).toBeNull();
     expect(out[2]?.callableName).toBeUndefined();
+  });
+});
+
+
+describe("tool display contract — plan tool (Phase 2)", () => {
+  it("plan resolves to the native plan tool in the agent category", () => {
+    const e = byName("plan");
+    expect(e.callableName).toBe("plan");
+    expect(e.category).toBe("agent");
+    expect(e.description.length).toBeGreaterThan(0);
+  });
+
+  it("plan is advertised by the factory, in the canonical model set, and policy auto", () => {
+    const tools = createCodePilotBuiltinTools({ cwd: process.cwd() });
+    expect(tools.some((t) => t.name === "plan")).toBe(true);
+    expect(CODEPILOT_MODEL_TOOL_NAMES).toContain("plan");
+    expect(DEFAULT_TOOL_POLICIES.plan).toBe("auto");
+  });
+
+  it("plan survives the webview passthrough with its callableName", () => {
+    const out = normalizeToolList({
+      tools: [
+        {
+          name: "plan",
+          category: "agent",
+          description: "d",
+          source: "builtin",
+          permission: "auto",
+          callableName: "plan",
+        },
+      ],
+    });
+    expect(out[0]?.callableName).toBe("plan");
+  });
+});
+
+
+describe("tool display contract — inspect_symbols (Phase 4 parity)", () => {
+  it("resolves to the native inspect_symbols tool in the read category", () => {
+    const e = byName("inspect_symbols");
+    expect(e.callableName).toBe("inspect_symbols");
+    expect(e.category).toBe("read");
+    expect(e.description.length).toBeGreaterThan(0);
+  });
+
+  it("is advertised by the factory, in the canonical set, and policy auto", () => {
+    const tools = createCodePilotBuiltinTools({ cwd: process.cwd() });
+    expect(tools.some((t) => t.name === "inspect_symbols")).toBe(true);
+    expect(CODEPILOT_MODEL_TOOL_NAMES).toContain("inspect_symbols");
+    expect(DEFAULT_TOOL_POLICIES.inspect_symbols).toBe("auto");
+  });
+});
+
+
+describe("tool display contract — git tools (Phase 5)", () => {
+  it("git read tools resolve to native callables with auto policy", () => {
+    for (const name of ["git_status", "git_diff", "git_log", "git_show"]) {
+      const e = byName(name);
+      expect(e.callableName).toBe(name);
+      expect(e.category).toBe("git");
+      expect(DEFAULT_TOOL_POLICIES[name]).toBe("auto");
+    }
+  });
+
+  it("all four git tools are advertised by the factory and canonical set", () => {
+    const tools = createCodePilotBuiltinTools({ cwd: process.cwd() });
+    const names = new Set(tools.map((t) => t.name));
+    for (const name of ["git_status", "git_diff", "git_log", "git_show"]) {
+      expect(names.has(name), `${name} missing from factory`).toBe(true);
+      expect(CODEPILOT_MODEL_TOOL_NAMES).toContain(name);
+    }
+  });
+});
+
+
+// ------------------------------- read_tool_output contract row (Phase 7b)
+describe("tool display contract — outputRef retrieval (Phase 7b)", () => {
+  it("resolves to a native read callable with auto policy", () => {
+    const e = byName("read_tool_output");
+    expect(e.callableName).toBe("read_tool_output");
+    expect(e.category).toBe("read");
+    expect(DEFAULT_TOOL_POLICIES.read_tool_output).toBe("auto");
+  });
+
+  it("is advertised by the factory and the canonical set", () => {
+    const tools = createCodePilotBuiltinTools({ cwd: process.cwd() });
+    expect(tools.some((t) => t.name === "read_tool_output")).toBe(true);
+    expect(CODEPILOT_MODEL_TOOL_NAMES).toContain("read_tool_output");
   });
 });

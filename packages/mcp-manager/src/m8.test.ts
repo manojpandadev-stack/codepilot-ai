@@ -140,6 +140,25 @@ describe("M8 MCPConfigStore", () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.name).toBe("good");
   });
+
+  it("redacts custom header values on save and restores them empty", async () => {
+    const store = new MCPConfigStore(file);
+    await store.save([
+      {
+        name: "gw",
+        transport: "streamable-http",
+        url: "https://gw.example.com/mcp",
+        headers: { "X-Gateway-Key": "super-secret-1", "X-Tenant": "t-9" },
+        enabled: true,
+      },
+    ]);
+    const raw = fs.readFileSync(file, "utf8");
+    expect(raw).not.toContain("super-secret-1");
+    expect(raw).not.toContain("t-9");
+    expect(raw).toContain("X-Gateway-Key");
+    const loaded = await store.load();
+    expect(loaded[0]?.headers?.["X-Gateway-Key"]).toBe("");
+  });
 });
 
 // ============================================================================

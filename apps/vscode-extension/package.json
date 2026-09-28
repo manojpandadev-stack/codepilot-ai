@@ -196,6 +196,31 @@
           "default": 5,
           "description": "Keep model loaded for N minutes"
         },
+        "codepilot.localAI.ollama.think": {
+          "type": "string",
+          "enum": [
+            "default",
+            "enabled",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Use the model's default reasoning behavior (recommended)",
+            "Request thinking/reasoning output from reasoning models (qwen3, deepseek-r1, …)",
+            "Request no thinking output — faster responses, less depth on reasoning models"
+          ],
+          "default": "default",
+          "description": "Explicit thinking control for reasoning models. 'default' never disables reasoning blindly; real thinking spans are always shown as Thinking… status in Chat."
+        },
+        "codepilot.localAI.ollama.useNodeHttpTransport": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use the node:http transport for local Ollama chat instead of Node's global fetch. This is an explicit opt-in that removes undici's 300s headers timeout for slow local CPU prefills. Global fetch remains the default and testable transport."
+        },
+        "codepilot.localAI.browser.allowLoopbackForTests": {
+          "type": "boolean",
+          "default": false,
+          "description": "TEST-ONLY: allow the browser tools to navigate to loopback/private-network targets (e.g. http://127.0.0.1:PORT) for local development testing. Production default is false; cloud metadata endpoints remain blocked in all cases. Every navigation under this flag is audit-logged."
+        },
         "codepilot.autoApproval.read": {
           "type": "boolean",
           "default": true,
@@ -257,17 +282,18 @@
     "@codepilot/browser-engine": "workspace:*",
     "@codepilot/changeset-engine": "workspace:*",
     "@codepilot/context-engine": "workspace:*",
-    "@codepilot/model-gateway": "workspace:*",
+    "@codepilot/git-engine": "workspace:*",
     "@codepilot/mcp-manager": "workspace:*",
+    "@codepilot/model-gateway": "workspace:*",
     "@codepilot/shared": "workspace:*",
     "@codepilot/tool-engine": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.30.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.100.0",
     "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.7.0",
-    "@vscode/vsce": "^3.2.0"
+    "typescript": "^5.7.0"
   }
 }

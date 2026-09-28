@@ -184,6 +184,11 @@ export interface WriteProposal {
   filePath: string;
   relativePath: string;
   proposedContent: string;
+  /**
+   * Explicit deletion marker (staged delete_file). Empty proposedContent is
+   * a legitimate truncate — it must never be conflated with a deletion.
+   */
+  delete?: boolean;
 }
 
 export type ParseResult =
@@ -194,6 +199,50 @@ export type ParseResult =
  * array) into staged proposals. Original file content is supplied via
  * `readOriginal` so this function stays pure.
  */
+/**
+ * Parse a staged delete_file tool input into a single delete-marked
+ * proposal. The target must exist (checked via readOriginal through the
+ * same bounded reader used for edits) and must be workspace-relative.
+ * Pure: no filesystem access of its own.
+ */
+export function parseDeleteFileInput(
+  input: Record<string, unknown>,
+  cwd: string,
+  readOriginal: (absolutePath: string) => string | undefined,
+): ParseResult {
+  const filePath =
+    typeof input.path === "string"
+      ? input.path
+      : typeof input.file_path === "string"
+        ? input.file_path
+        : typeof input.filePath === "string"
+          ? input.filePath
+          : "";
+  if (!filePath) {
+    return { ok: false, error: "delete_file input missing path" };
+  }
+  const resolved = resolveWorkspacePath(filePath, cwd);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const original = readOriginal(resolved.absolutePath);
+  if (original === undefined) {
+    return {
+      ok: false,
+      error: `delete_file: file does not exist or is not readable: ${resolved.relativePath}`,
+    };
+  }
+  return {
+    ok: true,
+    proposals: [
+      {
+        filePath,
+        relativePath: resolved.relativePath,
+        proposedContent: "",
+        delete: true,
+      },
+    ],
+  };
+}
+
 export function parseEditorInput(
   input: Record<string, unknown>,
   cwd: string,
@@ -341,7 +390,7 @@ export function formatStagedResult(
   proposals: WriteProposal[],
 ): string {
   const lines = proposals.map((p) => {
-    const label = p.proposedContent.length === 0 ? "deleted" : "updated";
+    const label = p.delete === true ? "deleted" : p.proposedContent.length === 0 ? "emptied" : "updated";
     return `  ${p.relativePath} (${label}, ${p.proposedContent.length} chars)`;
   });
   return [

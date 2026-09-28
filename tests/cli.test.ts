@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
+import { ALLOWED_SETTINGS_KEYS } from "../packages/shared/src/index.js";
 
 // Helpers to invoke the CLI's exported parse logic without a model:
 
@@ -138,6 +139,47 @@ describe("CLI task persistence", () => {
     expect(loaded[0].taskId).toBe("task-abc");
     expect(loaded[0].status).toBe("completed");
     expect(loaded[0].prompt).toBe("implement feature");
+  });
+});
+
+describe("VS Code Ollama transport setting contract", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "..", "apps", "vscode-extension", "package.json"),
+      "utf8",
+    ),
+  ) as {
+    contributes: {
+      configuration: {
+        properties: Record<string, { type?: string; default?: unknown }>;
+      };
+    };
+  };
+
+  it("keeps global fetch as the default and exposes explicit node-http opt-in", () => {
+    const property =
+      manifest.contributes.configuration.properties[
+        "codepilot.localAI.ollama.useNodeHttpTransport"
+      ];
+    expect(property).toMatchObject({ type: "boolean", default: false });
+  });
+
+  it("registers the transport key in the settings/set allowlist", () => {
+    expect(ALLOWED_SETTINGS_KEYS).toContain(
+      "localAI.ollama.useNodeHttpTransport",
+    );
+    expect(new Set(ALLOWED_SETTINGS_KEYS).size).toBe(ALLOWED_SETTINGS_KEYS.length);
+  });
+
+  it("keeps every Ollama setting declared in the manifest and writable", () => {
+    const properties = manifest.contributes.configuration.properties;
+    const ollamaKeys = ALLOWED_SETTINGS_KEYS.filter((key) =>
+      key.startsWith("localAI.ollama."),
+    );
+    expect(ollamaKeys.length).toBeGreaterThan(0);
+    for (const key of ollamaKeys) {
+      expect(properties[`codepilot.${key}`]).toBeDefined();
+    }
   });
 });
 

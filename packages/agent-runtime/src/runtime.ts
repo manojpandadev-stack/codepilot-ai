@@ -38,6 +38,29 @@ import {
   createStreamingShellExecutor,
 } from "@codepilot/tool-engine";
 import type { TerminalStreamEventWithCorrelation } from "@codepilot/tool-engine";
+import {
+  CommandRepairLoop,
+  runTerminalToolRepair,
+  classifyCommandFailure,
+  type CommandRepairOutcome,
+} from "./m13-command-repair.js";
+
+/** Extract the single command text from a terminal tool call's raw args. */
+function extractCommandText(argsText: unknown): string | null {
+  // The loop event carries the raw arguments JSON text (LlmToolCall).
+  if (typeof argsText !== "string" || argsText.length === 0) return null;
+  try {
+    const parsed = JSON.parse(argsText) as { command?: unknown };
+    if (typeof parsed.command === "string" && parsed.command.length > 0) {
+      return parsed.command;
+    }
+  } catch {
+    return null;
+  }
+  // Multi-command batches ({ commands: [...] }) are NOT repaired — the
+  // repair loop is defined for a single command text.
+  return null;
+}
 import type { ToolPermissionPolicy } from "@codepilot/shared";
 import { OLLAMA_DEFAULT_BASE_URL, scrubSecretsText } from "@codepilot/shared";
 import { modelSupportsVision } from "@codepilot/llm";
@@ -61,8 +84,10 @@ import {
 } from "./cancellation.js";
 import { MAX_PROPOSED_FILE_BYTES } from "./write-tools.js";
 import { createCodePilotBuiltinTools } from "./builtin-tools.js";
+import { parseModelPlanText, type TaskPlan } from "./task-plan.js";
 import {
   parseEditorInput,
+  parseDeleteFileInput,
   parseApplyPatchInput,
   formatStagedResult,
 } from "./write-tools.js";
@@ -298,6 +323,24 @@ export class CodePilotRuntime {
   /** Tool calls that failed this run (executor error or gate denial). */
   private toolFailureCount = 0;
 
+  /** Names of the tools exposed to the model for the CURRENT run (Phase 1
+   *  tool-automation diagnostics — authoritative post-filter list). */
+  private lastRunToolNames: string[] = [];
+
+  /** Structured tool calls the model emitted this run (Phase 2 no-tool-call
+   *  diagnostic �?" distinguishes "model chose prose" from "runtime lost the
+   *  call"). Counted at tool_started, i.e. post-parse, pre-approval. */
+  private lastRunToolCallCount = 0;
+
+  /**
+   * Structured task plan for the ACTIVE task. Written by the `plan` builtin
+   * (or the PLAN-mode text fallback) and re-hydrated by the host on resume;
+   * every change is emitted as agent.plan_created/plan_updated so the host
+   * persists it and the WebView renders live progress. Holds plan METADATA
+   * only (objective/steps/status) �?" never file or command content.
+   */
+  private currentTaskPlan: TaskPlan | null = null;
+
   /**
    * Live tool names for terminal_output correlation: toolCallId → name.
    * Pruned on every terminal tool event and cleared per run — bounded by construction.
@@ -330,9 +373,14 @@ export class CodePilotRuntime {
         toolCallId?: string;
       }) => Promise<string>)
     | null = null;
+  /** Bounded command-failure repair loop (Phase 12, row 14). */
+  private commandRepairLoop: CommandRepairLoop | null = null;
 
   constructor(options: CodePilotRuntimeOptions) {
     this.options = options;
+    // SECURITY: gate mode-boundary state starts from the CONFIGURED mode so
+    // the gate is safe even before the first startSession assigns it.
+    this.activeRunAgentMode = options.agentMode ?? "act";
     this.defaultConfig = {
       providerId: options.providerId,
       modelId: options.modelId,
@@ -372,7 +420,7 @@ export class CodePilotRuntime {
   // ============================================================================
 
   private async stageInput(
-    toolName: "editor" | "apply_patch",
+    toolName: "editor" | "apply_patch" | "delete_file",
     input: Record<string, unknown>,
     cwd: string,
   ): Promise<string> {
@@ -382,7 +430,9 @@ export class CodePilotRuntime {
     const result =
       toolName === "editor"
         ? parseEditorInput(input, cwd, (abs) => this.readOriginalSafe(abs))
-        : await parseApplyPatchInput(input, cwd);
+        : toolName === "delete_file"
+          ? parseDeleteFileInput(input, cwd, (abs) => this.readOriginalSafe(abs))
+          : await parseApplyPatchInput(input, cwd);
     if (!result.ok) {
       throw new Error(`${toolName} staging failed: ${result.error}`);
     }
@@ -408,6 +458,32 @@ export class CodePilotRuntime {
     }
   }
 
+  /**
+   * Tools that can never execute in a given agent mode (Phase 1 — Act-mode
+   * truth). The tool-calling ASK/PLAN contract is read-only Q&A: mutating
+   * tools (writes, shell, staged edits) are NOT advertised to the model at
+   * all, so a mis-modeled turn cannot even attempt a mutation the policy
+   * would deny anyway. Read-only tools (read_files, search_codebase,
+   * ask_question, skills, web) stay available because ASK legitimately reads
+   * the workspace to answer. This is a model-contract filter ONLY — the M4
+   * gate still evaluates every call in every mode; nothing here bypasses or
+   * weakens approval.
+   */
+  private static readonly MODE_FILTERED_TOOLS: ReadonlySet<string> = new Set([
+    "bash",
+    "run_commands",
+    "write_file",
+    "editor",
+    "apply_patch",
+    "delete_file",
+    // SECURITY (live-verified escape): agent-initiated tracked terminal
+    // tools were injected as extra tools in EVERY mode, so a model in
+    // ask/plan could emit terminal_session_start/exec and run real commands.
+    // They are mutating execution tools exactly like bash/run_commands.
+    "terminal_session_start",
+    "terminal_session_exec",
+  ]);
+
   /** Build the native toolset for a merged config. */
   private buildNativeTools(config: CodePilotAgentConfig): AgentTool[] {
     const tools: AgentTool[] = [];
@@ -421,6 +497,7 @@ export class CodePilotRuntime {
     if (this.options.onWriteProposal) {
       tools.push(this.buildStagingTool("editor"));
       tools.push(this.buildStagingTool("apply_patch"));
+      tools.push(this.buildStagingTool("delete_file"));
     }
     // CodePilot-owned model-facing builtins (read_files, search_codebase,
     // skills, ask_question, run_commands, plus fetch_web_content/web_search
@@ -441,6 +518,13 @@ export class CodePilotRuntime {
       // run_commands shares the ONE streaming executor (same live events,
       // same engine) instead of falling back to completion-only collection.
       ...(streamingRunner ? { streamingCommandRunner: streamingRunner } : {}),
+      // Structured plan seam: plan tool changes flow through runtime state
+      // and emit agent.plan_created/plan_updated (host persists the plan on
+      // the task and fans it out to the WebView).
+      planBridge: {
+        getPlan: () => this.currentTaskPlan,
+        onChange: (plan, kind) => this.applyTaskPlanChange(plan, kind),
+      },
     })) {
       if (registeredNames.has(owned.name)) continue;
       registeredNames.add(owned.name);
@@ -463,15 +547,38 @@ export class CodePilotRuntime {
         },
       });
     }
+    // Phase 1 — mode/tool-contract truth: in ASK/PLAN the model is told to
+    // answer without mutating, so mutating tools are not advertised at all
+    // (they could not pass policy; advertising them invites doomed calls).
+    // ACT/AUTO/REVIEW keep the full set. M4 still gates every call in every
+    // mode — this filter changes what the MODEL sees, never authorization.
+    if (config.agentMode === "ask" || config.agentMode === "plan") {
+      const filtered = tools.filter(
+        (t) => !CodePilotRuntime.MODE_FILTERED_TOOLS.has(t.name),
+      );
+      const dropped = tools.length - filtered.length;
+      if (dropped > 0) {
+        this.emit({
+          type: "status",
+          message: `AGENT_TOOLS_FILTERED mode=${config.agentMode} advertised=${filtered.length} withheld=${dropped} (mutating tools unavailable in ${config.agentMode} mode)`,
+          ...this.buildCorrelation(),
+        });
+      }
+      return filtered;
+    }
     return tools;
   }
 
   /** Native wrapper for the ChangeSet-staged write tools. */
-  private buildStagingTool(toolName: "editor" | "apply_patch"): AgentTool {
+  private buildStagingTool(
+    toolName: "editor" | "apply_patch" | "delete_file",
+  ): AgentTool {
     const description =
       toolName === "editor"
         ? "Edit file ranges in the workspace. The edit is staged as a pending ChangeSet for user approval — no file is modified until approved."
-        : "Apply a Codex-style patch (*** Begin Patch format) to workspace files. Changes are staged as a pending ChangeSet for user approval — no file is modified until approved.";
+        : toolName === "delete_file"
+          ? "Permanently delete a workspace file. The deletion is staged as a pending ChangeSet for user approval — no file is modified until approved."
+          : "Apply a Codex-style patch (*** Begin Patch format) to workspace files. Changes are staged as a pending ChangeSet for user approval — no file is modified until approved.";
     const schema: Record<string, unknown> =
       toolName === "editor"
         ? {
@@ -483,33 +590,39 @@ export class CodePilotRuntime {
               },
               operation: {
                 type: "string",
-                enum: ["replace", "insert", "append"],
+                enum: ["str_replace", "replace_all", "insert", "delete", "create"],
                 description:
-                  "replace: swap old_string→new_string; insert: insert after line; append: add to end",
+                  "str_replace (default): swap old_string→new_string (first occurrence); replace_all: every occurrence; insert: new_string immediately before old_string; delete: remove old_string; create: new file whose content is new_string",
               },
               old_string: {
                 type: "string",
                 description: "Text to replace (replace operation)",
               },
               new_string: { type: "string", description: "Replacement text" },
-              line: {
-                type: "number",
-                description: "1-based line number (insert operation)",
-              },
-              content: { type: "string", description: "Text to insert/append" },
             },
             required: ["file_path", "operation"],
           }
-        : {
-            type: "object",
-            properties: {
-              patch: {
-                type: "string",
-                description: "Patch beginning with '*** Begin Patch'",
+        : toolName === "delete_file"
+          ? {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "Workspace-relative file path to delete",
+                },
               },
-            },
-            required: ["patch"],
-          };
+              required: ["path"],
+            }
+          : {
+              type: "object",
+              properties: {
+                patch: {
+                  type: "string",
+                  description: "Patch beginning with '*** Begin Patch'",
+                },
+              },
+              required: ["patch"],
+            };
     return {
       name: toolName,
       description,
@@ -691,6 +804,16 @@ export class CodePilotRuntime {
   ): Promise<string> {
     const merged = { ...this.defaultConfig, ...config };
 
+    // Phase 12 (row 14): bounded command-failure repair. Created once per
+    // runtime from the effective config; history persists when configured.
+    if (this.commandRepairLoop === null) {
+      this.commandRepairLoop = new CommandRepairLoop({
+        ...(merged.commandRepairPersistPath !== undefined
+          ? { persistPath: merged.commandRepairPersistPath }
+          : {}),
+      });
+    }
+
     // ---- Privacy guard (fail-closed) ----
     // A provider whose requests leave the machine must NEVER run while the
     // user selected "local" privacy mode: that mode promises "no data leaves
@@ -759,6 +882,7 @@ export class CodePilotRuntime {
     this.runStartedAt = Date.now();
     this.terminalToolNames.clear();
     this.terminalSeqByToolCall.clear();
+    this.lastRunToolCallCount = 0;
 
     // Assign a stable task ID for this run (preserved across retries)
     this.currentTaskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -796,6 +920,10 @@ export class CodePilotRuntime {
 
     // Transition: CREATED → INITIALIZING
     this.doTransition("INITIALIZING", "Session starting");
+
+    // SECURITY: record the ACTIVE run's mode BEFORE any tool can dispatch —
+    // the gate enforces the ask/plan execution boundary from this value.
+    this.activeRunAgentMode = merged.agentMode;
 
     this.emit({
       type: "status",
@@ -848,12 +976,49 @@ export class CodePilotRuntime {
     this.state.status = "running";
 
     const tools = this.buildNativeTools(merged);
+    // Phase 1 — authoritative per-run tool truth for diagnostics: the
+    // post-filter list the model is actually offered, not the UI's button.
+    this.lastRunToolNames = tools.map((t) => t.name);
+    // Tool-automation truth line: mode/provider/model/toolCount as resolved
+    // by the RUNTIME (not the webview button). Names stay available via
+    // getLastRunToolSummary(); the message itself carries no secrets.
+    this.emit({
+      type: "status",
+      message: `AGENT_REQUEST mode=${merged.agentMode} provider=${merged.providerId || "ollama"} model=${merged.modelId} tools=${tools.length}`,
+      ...this.buildCorrelation(),
+    });
     const providerConfig: LlmProviderConfig = {
       providerId: merged.providerId || "ollama",
       ...(merged.apiKey ? { apiKey: merged.apiKey } : {}),
       ...(merged.baseUrl ? { baseUrl: merged.baseUrl } : {}),
+      ...(this.options.ollamaFirstTokenTimeoutMs !== undefined
+        ? { ollamaFirstTokenTimeoutMs: this.options.ollamaFirstTokenTimeoutMs }
+        : {}),
+      ...(this.options.ollamaKeepAlive !== undefined
+        ? { ollamaKeepAlive: this.options.ollamaKeepAlive }
+        : {}),
+      ...(this.options.ollamaContextLength !== undefined
+        ? { ollamaContextLength: this.options.ollamaContextLength }
+        : {}),
+      ...(this.options.ollamaNumPredict !== undefined
+        ? { ollamaNumPredict: this.options.ollamaNumPredict }
+        : {}),
+      ...(this.options.ollamaThink !== undefined
+        ? { ollamaThink: this.options.ollamaThink }
+        : {}),
     };
-    this.sessions = new NativeSessionManager([providerConfig]);
+    this.sessions = new NativeSessionManager(
+      [providerConfig],
+      undefined,
+      400,
+      // BUG 5 — production opt-in: local Ollama chat uses the node:http
+      // transport (no undici 300s HEADERS cap) so a slow CPU prefill is
+      // governed solely by the provider's first-token inactivity window.
+      this.options.ollamaUseNodeHttpTransport === true &&
+        (merged.providerId || "ollama") === "ollama"
+        ? "node-http"
+        : "fetch",
+    );
     this.sessions.create(sessionId, {
       providerId: merged.providerId || "ollama",
       modelId: merged.modelId || "",
@@ -970,6 +1135,39 @@ export class CodePilotRuntime {
         const metrics = this.buildRunMetrics(false, false);
         this.state.lastRunMetrics = metrics;
 
+        // Phase 2 — Act-mode no-tool-call diagnostic. A completed Act turn
+        // with ZERO structured tool calls is LEGITIMATE (the model may
+        // genuinely not need a tool); this is diagnostic truth, never an
+        // error and never a retry. It distinguishes "model chose prose" from
+        // "runtime failed to receive/parse a tool call" — if tools were
+        // advertised (count > 0) but none were called, the request path is
+        // suspect; if tools were filtered (ASK/PLAN) this line is absent by
+        // design. No prompt text, no secrets.
+        if (
+          (merged.agentMode === "act" || merged.agentMode === "auto") &&
+          this.lastRunToolCallCount === 0 &&
+          this.lastRunToolNames.length > 0
+        ) {
+          this.emit({
+            type: "status",
+            message: `AGENT_COMPLETED_WITHOUT_TOOL_CALL mode=${merged.agentMode} provider=${merged.providerId || "ollama"} model=${merged.modelId} toolCount=${this.lastRunToolNames.length} classification=model_answered_without_tool_call`,
+            ...this.buildCorrelation(),
+          });
+        }
+
+        // Phase 2 — structured plan fallback. In PLAN mode, when the model
+        // answered with plan-shaped prose instead of calling the `plan`
+        // tool, materialize a real TaskPlan from it (fenced JSON block or an
+        // ordered list). parseModelPlanText is deliberately conservative —
+        // it returns null rather than guessing, and a structured plan from
+        // an actual `plan` tool call is never overwritten here.
+        if (merged.agentMode === "plan" && !this.currentTaskPlan) {
+          const parsed = parseModelPlanText(result.text, Date.now());
+          if (parsed) {
+            this.applyTaskPlanChange(parsed, "created");
+          }
+        }
+
         this.emit({
           type: "completed",
           result: result.text,
@@ -1047,6 +1245,10 @@ export class CodePilotRuntime {
     }
   }
 
+  /** SECURITY: agent mode of the ACTIVE run — read by the tool gate to
+   *  enforce the ask/plan execution boundary even for unadvertised tools. */
+  private activeRunAgentMode: CodePilotAgentConfig["agentMode"] = "act";
+
   /** The M4 gate handed to the native dispatcher — deny-closed. */
   private buildGate() {
     return async (request: {
@@ -1054,6 +1256,20 @@ export class CodePilotRuntime {
       toolName: string;
       input: unknown;
     }): Promise<{ approved: boolean; reason?: string }> => {
+      // SECURITY BOUNDARY (mode): mutating/execution tools are rejected at
+      // the gate in ask/plan mode — INDEPENDENT of tool advertisement. Even
+      // a tool the model was never told about is refused here if the model
+      // emits it anyway (no advertisement-only "protection").
+      const activeMode = this.activeRunAgentMode;
+      if (
+        (activeMode === "ask" || activeMode === "plan") &&
+        CodePilotRuntime.MODE_FILTERED_TOOLS.has(request.toolName)
+      ) {
+        return {
+          approved: false,
+          reason: `Tool '${request.toolName}' is unavailable in ${activeMode} mode (execution boundary)`,
+        };
+      }
       if (!this.options.requestApproval) {
         // Fail-closed: no permission pipeline configured.
         return {
@@ -1092,6 +1308,91 @@ export class CodePilotRuntime {
       }
       return { approved: true };
     };
+  }
+
+  /**
+   * Emit the canonical tool_failed event for an executor failure (vs gate
+   * denial, which arrives as tool_denied). UI cards, history, and healing
+   * see the failure — matching the long-standing tool_failed contract.
+   */
+  private emitToolFailure(loop: {
+    call: { toolCallId: string };
+    toolName: string;
+    output: unknown;
+  }): void {
+    this.toolFailureCount += 1;
+    this.emit({
+      type: "tool_failed",
+      toolCallId: loop.call.toolCallId,
+      toolName: loop.toolName,
+      error: String(loop.output ?? "tool failed").slice(0, 4000),
+      ...this.buildCorrelation(),
+    });
+  }
+
+  /**
+   * Phase 12 (row 14): attempt bounded repair for a failed terminal tool
+   * call. Returns the repair outcome, or null when the failure is not
+   * repairable (non-terminal tool, unknown command, no loop/factory).
+   *
+   * M4 on each rerun: identical command text stays covered by the original
+   * approval; TRANSFORMED text is re-evaluated through the deny-closed gate
+   * before it executes.
+   */
+  private async tryRepairTerminalToolFailure(loop: {
+    call: { toolCallId: string; argumentsText: string };
+    toolName: string;
+    output: unknown;
+    durationMs: number;
+  }): Promise<CommandRepairOutcome | null> {
+    if (this.commandRepairLoop === null) return null;
+    if (loop.toolName !== "bash" && loop.toolName !== "run_commands") {
+      return null;
+    }
+    const command = extractCommandText(loop.call.argumentsText);
+    if (command === null) return null;
+    if (this.terminalStreamingFactory === null) return null;
+    const factory = this.terminalStreamingFactory;
+    this.emit({
+      type: "status",
+      message: `Repairing ${loop.toolName} failure (bounded attempts)…`,
+      ...this.buildCorrelation(),
+    });
+    const decision = await runTerminalToolRepair(
+      {
+        loop: this.commandRepairLoop,
+        isTerminalTool: (name) => name === "bash" || name === "run_commands",
+        extractCommand: (input) => extractCommandText(input),
+        executeRepair: async (cmd) => {
+          const original = extractCommandText(loop.call.argumentsText);
+          if (cmd !== original) {
+            const gate = this.buildGate();
+            const verdict = await gate({
+              toolCallId: loop.call.toolCallId,
+              toolName: loop.toolName,
+              input: { command: cmd },
+            });
+            if (!verdict.approved) {
+              throw new Error(
+                `repair command denied by M4: ${verdict.reason ?? "approval required"}`,
+              );
+            }
+          }
+          return factory({
+            command: cmd,
+            toolCallId: loop.call.toolCallId,
+          });
+        },
+      },
+      {
+        toolCallId: loop.call.toolCallId,
+        toolName: loop.toolName,
+        input: loop.call.argumentsText,
+        output: String(loop.output ?? "tool failed").slice(0, 4000),
+      },
+    );
+    if (decision.action !== "repair") return null;
+    return decision.outcome;
   }
 
   /** Map native loop/session events onto the preserved AgentEvent union. */
@@ -1149,6 +1450,7 @@ export class CodePilotRuntime {
         break;
       case "tool_started":
         this.recordToolStart(loop.toolName);
+        this.lastRunToolCallCount += 1;
         this.terminalToolNames.set(loop.call.toolCallId, loop.toolName);
         if (this.stateMachine.canTransitionTo("RUNNING_TOOL")) {
           this.doTransition("RUNNING_TOOL", `Tool: ${loop.toolName}`);
@@ -1178,18 +1480,47 @@ export class CodePilotRuntime {
           if (record) record.totalDurationMs += loop.durationMs;
         }
         if (loop.isError) {
-          // Executor failure (vs gate denial, which arrives as tool_denied):
-          // surface as tool_failed so UI cards, history, and healing see a
-          // failure — matching the long-standing tool_failed contract for
-          // failed executions. The error detail rides in `error`.
-          this.toolFailureCount += 1;
-          this.emit({
-            type: "tool_failed",
-            toolCallId: loop.call.toolCallId,
-            toolName: loop.toolName,
-            error: String(loop.output ?? "tool failed").slice(0, 4000),
-            ...this.buildCorrelation(),
-          });
+          // Phase 12 (row 14): bounded command-failure repair for terminal
+          // tools. Only recoverable failure classes enter the loop — the
+          // emission is deferred until the outcome is known (each rerun
+          // re-gates transformed commands through M4). Non-recoverable
+          // failures emit tool_failed synchronously via the normal path.
+          const failureText = String(loop.output ?? "tool failed").slice(
+            0,
+            4000,
+          );
+          const { classification } = classifyCommandFailure(failureText);
+          if (classification !== "non_recoverable") {
+            void this.tryRepairTerminalToolFailure(loop).then((repair) => {
+              if (repair !== null && repair.status === "recovered") {
+                if (this.stateMachine.canTransitionTo("EXECUTING")) {
+                  this.doTransition(
+                    "EXECUTING",
+                    `Tool done: ${loop.toolName}`,
+                  );
+                }
+                this.emit({
+                  type: "tool_completed",
+                  toolCallId: loop.call.toolCallId,
+                  toolName: loop.toolName,
+                  output: repair.output ?? "",
+                  durationMs: loop.durationMs,
+                  ...this.buildCorrelation(),
+                });
+                this.emit({
+                  type: "agent.tool_completed",
+                  toolCallId: loop.call.toolCallId,
+                  toolName: loop.toolName,
+                  durationMs: loop.durationMs,
+                  ...this.buildCorrelation(),
+                });
+                return;
+              }
+              this.emitToolFailure(loop);
+            });
+            break;
+          }
+          this.emitToolFailure(loop);
           break;
         }
         this.emit({
@@ -1341,6 +1672,12 @@ export class CodePilotRuntime {
       apiKey?: string | null;
       /** null explicitly CLEARS the stored base URL (provider switch). */
       baseUrl?: string | null;
+      /** Ollama-only live settings (BUG 4): reach the next /api/chat body. */
+      ollamaContextLength?: number;
+      ollamaNumPredict?: number;
+      ollamaKeepAlive?: string;
+      /** Explicit thinking control (three-state; undefined = server default). */
+      ollamaThink?: boolean;
     },
   ): void {
     // NOTE: provider/model/baseUrl/apiKey must move ATOMICALLY when the user
@@ -1357,6 +1694,16 @@ export class CodePilotRuntime {
       this.defaultConfig.apiKey = patch.apiKey ?? undefined;
     if (patch.temperature !== undefined)
       this.defaultConfig.temperature = patch.temperature;
+    // Ollama-only live settings (BUG 4): stored on the runtime so the next
+    // startSession builds its LlmProviderConfig with the current values.
+    if (patch.ollamaContextLength !== undefined)
+      this.options.ollamaContextLength = patch.ollamaContextLength;
+    if (patch.ollamaNumPredict !== undefined)
+      this.options.ollamaNumPredict = patch.ollamaNumPredict;
+    if (patch.ollamaKeepAlive !== undefined)
+      this.options.ollamaKeepAlive = patch.ollamaKeepAlive;
+    if (patch.ollamaThink !== undefined)
+      this.options.ollamaThink = patch.ollamaThink;
     if (patch.maxIterations !== undefined)
       this.defaultConfig.maxIterations = patch.maxIterations;
     if (patch.privacyMode !== undefined)
@@ -1364,6 +1711,8 @@ export class CodePilotRuntime {
     if (patch.agentMode !== undefined) {
       this.defaultConfig.agentMode = patch.agentMode;
       this.policyEngine.setAgentMode(toPolicyEngineMode(patch.agentMode));
+      // SECURITY: keep the gate's mode boundary in sync with config changes.
+      if (!this.state.sessionId) this.activeRunAgentMode = patch.agentMode;
     }
     if (patch.systemPrompt !== undefined)
       this.defaultConfig.systemPrompt = patch.systemPrompt;
@@ -1398,6 +1747,52 @@ export class CodePilotRuntime {
         ? { baseUrl: this.defaultConfig.baseUrl }
         : {}),
     };
+  }
+
+  /**
+   * Phase 1 tool-automation truth: the tool names exposed to the model for
+   * the most recent (or current) run — the post-filter authoritative list
+   * the request contract (LlmRequest.tools) is built from. Never contains
+   * schemas or inputs; safe for logs and diagnostics.
+  */
+  getLastRunToolSummary(): { count: number; names: string[] } {
+    return { count: this.lastRunToolNames.length, names: [...this.lastRunToolNames] };
+  }
+
+  /**
+   * Structured task plan — host seam. The host hydrates this from the
+   * persisted task on resume (so a resumed task continues ITS plan, never a
+   * blank one) and clears it when the active task changes.
+   */
+  getTaskPlan(): TaskPlan | null {
+    return this.currentTaskPlan;
+  }
+
+  setTaskPlan(plan: TaskPlan | null): void {
+    this.currentTaskPlan = plan;
+  }
+
+  /** Apply a `plan` tool change: hold state + emit the typed plan event. */
+  private applyTaskPlanChange(
+    plan: TaskPlan,
+    kind: "created" | "updated",
+  ): void {
+    this.currentTaskPlan = plan;
+    if (kind === "created") {
+      this.emit({
+        type: "agent.plan_created",
+        plan: plan.objective,
+        stepsCount: plan.steps.length,
+        taskPlan: plan,
+        ...this.buildCorrelation(),
+      });
+    } else {
+      this.emit({
+        type: "agent.plan_updated",
+        taskPlan: plan,
+        ...this.buildCorrelation(),
+      });
+    }
   }
 
   getState(): Readonly<AgentRuntimeState> {
@@ -1460,7 +1855,9 @@ export class CodePilotRuntime {
 
     if (config.agentMode === "plan") {
       parts.push(
-        "You are in PLAN mode. Analyze the codebase and create an implementation plan. Do NOT modify any files. Describe what changes would be needed, which files to modify, and the implementation steps.",
+        "You are in PLAN mode. Analyze the codebase and create an implementation plan. Do NOT modify any files. Describe what changes would be needed, which files to modify, and the implementation steps. " +
+          "FIRST call the `plan` tool with action=create to record the plan as structured steps (objective, ordered steps with affected files and validation); " +
+          "then summarize the same plan for the user. If the `plan` tool is unavailable, present the plan as an ordered numbered list.",
       );
     } else if (config.agentMode === "review") {
       parts.push(

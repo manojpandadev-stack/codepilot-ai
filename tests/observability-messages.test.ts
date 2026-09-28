@@ -16,6 +16,9 @@ import {
   normalizeToolRow,
   normalizeDiagnosticSummary,
   formatMetricValue,
+  normalizeUsageSummary,
+  validateUsageAction,
+  formatUsageCost,
 } from "../apps/webview/src/lib/messages.js";
 
 function metric(overrides: Record<string, unknown> = {}) {
@@ -206,5 +209,198 @@ describe("metrics state synchronization", () => {
       },
     });
     expect(first?.overview[0]!.value).toBe(1);
+  });
+});
+
+
+// ------------------------------------------------ Phase 3 — usage/summary
+const USAGE_PAYLOAD = {
+  summary: {
+    totalRequests: 12,
+    totalInputTokens: 34000,
+    totalOutputTokens: 5600,
+    totalEstimatedCostUsd: 0.0123,
+    pricingCoverage: "full",
+    byProvider: [
+      {
+        providerId: "ollama",
+        requests: 10,
+        inputTokens: 30000,
+        outputTokens: 5000,
+        estimatedCostUsd: 0.0123,
+      },
+      {
+        providerId: "openrouter",
+        requests: 2,
+        inputTokens: 4000,
+        outputTokens: 600,
+        estimatedCostUsd: 0,
+      },
+    ],
+  },
+  recent: [
+    {
+      ts: 1700000000000,
+      providerId: "ollama",
+      modelId: "qwen3:8b",
+      inputTokens: 1200,
+      outputTokens: 300,
+      estimatedCostUsd: 0.001,
+      reason: "agent",
+    },
+  ],
+};
+
+describe("normalizeUsageSummary (usage/summary consumption)", () => {
+  it("passes through a well-formed summary with recent rows", () => {
+    const out = normalizeUsageSummary(USAGE_PAYLOAD);
+    expect(out).not.toBeNull();
+    expect(out!.summary).toMatchObject({
+      totalRequests: 12,
+      totalInputTokens: 34000,
+      totalOutputTokens: 5600,
+      totalEstimatedCostUsd: 0.0123,
+      pricingCoverage: "full",
+    });
+    expect(out!.summary.byProvider).toHaveLength(2);
+    expect(out!.summary.byProvider[0]!.providerId).toBe("ollama");
+    expect(out!.recent).toHaveLength(1);
+    expect(out!.recent[0]!.modelId).toBe("qwen3:8b");
+    expect(out!.recent[0]!.reason).toBe("agent");
+  });
+
+  it("never invents cost when pricingCoverage is none", () => {
+    const out = normalizeUsageSummary({
+      summary: {
+        totalRequests: 3,
+        totalInputTokens: 900,
+        totalOutputTokens: 100,
+        totalEstimatedCostUsd: 0, // host sum — really means "unpriced"
+        pricingCoverage: "none",
+        byProvider: [
+          {
+            providerId: "ollama",
+            requests: 3,
+            inputTokens: 900,
+            outputTokens: 100,
+            estimatedCostUsd: 0,
+          },
+        ],
+      },
+    });
+    expect(out).not.toBeNull();
+    expect(out!.summary.totalEstimatedCostUsd).toBeNull();
+    expect(out!.summary.pricingCoverage).toBe("none");
+    expect(formatUsageCost(out!.summary)).toEqual({
+      text: "cost unavailable (no pricing)",
+      tone: "none",
+    });
+  });
+
+  it("rejects malformed payloads instead of rendering junk", () => {
+    expect(normalizeUsageSummary(null)).toBeNull();
+    expect(normalizeUsageSummary("summary")).toBeNull();
+    expect(normalizeUsageSummary({})).toBeNull();
+    expect(normalizeUsageSummary({ summary: {} })).toBeNull();
+    expect(
+      normalizeUsageSummary({
+        summary: { totalRequests: "many", totalInputTokens: 1, totalOutputTokens: 1, pricingCoverage: "full" },
+      }),
+    ).toBeNull();
+    expect(
+      normalizeUsageSummary({
+        summary: {
+          totalRequests: 1,
+          totalInputTokens: 1,
+          totalOutputTokens: 1,
+          pricingCoverage: "definitely",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("bounds rows and drops malformed entries", () => {
+    const out = normalizeUsageSummary({
+      summary: {
+        totalRequests: 1,
+        totalInputTokens: 1,
+        totalOutputTokens: 1,
+        totalEstimatedCostUsd: 0.0042,
+        pricingCoverage: "partial",
+        byProvider: [
+          { providerId: "o".repeat(200), requests: 1, inputTokens: 1, outputTokens: 1, estimatedCostUsd: 1 },
+          { nope: true },
+          "junk",
+        ],
+      },
+      recent: [
+        { ts: 5, providerId: "p", modelId: "m".repeat(300), inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.5 },
+        { ts: "now" },
+      ],
+    });
+    expect(out).not.toBeNull();
+    expect(out!.summary.byProvider).toHaveLength(1);
+    expect(out!.summary.byProvider[0]!.providerId.length).toBe(64);
+    expect(out!.recent).toHaveLength(1);
+    expect(out!.recent[0]!.modelId.length).toBe(128);
+    // partial coverage keeps the number but is labelled by formatUsageCost
+    expect(formatUsageCost(out!.summary)).toEqual({
+      text: "≈ $0.0042 (partial)",
+      tone: "partial",
+    });
+  });
+
+  it("a negative or non-finite cost is dropped, never displayed", () => {
+    const out = normalizeUsageSummary({
+      summary: {
+        totalRequests: 1,
+        totalInputTokens: 1,
+        totalOutputTokens: 1,
+        totalEstimatedCostUsd: -5,
+        pricingCoverage: "full",
+        byProvider: [],
+      },
+    });
+    expect(out).not.toBeNull();
+    expect(out!.summary.totalEstimatedCostUsd).toBeNull();
+    expect(formatUsageCost(out!.summary).tone).toBe("none");
+  });
+
+  it("full coverage renders an explicit estimate label", () => {
+    const out = normalizeUsageSummary(USAGE_PAYLOAD)!;
+    expect(formatUsageCost(out.summary)).toEqual({
+      text: "≈ $0.0123 (est.)",
+      tone: "est",
+    });
+  });
+
+  it("tolerates a usage/clear reply with summary only (no recent)", () => {
+    const out = normalizeUsageSummary({
+      summary: {
+        totalRequests: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalEstimatedCostUsd: 0,
+        pricingCoverage: "none",
+        byProvider: [],
+      },
+    });
+    expect(out).not.toBeNull();
+    expect(out!.recent).toEqual([]);
+    expect(out!.summary.totalRequests).toBe(0);
+    expect(out!.summary.totalEstimatedCostUsd).toBeNull();
+  });
+});
+
+describe("validateUsageAction (outbound WebView usage controls)", () => {
+  it("allows exactly the two ledger actions", () => {
+    expect(validateUsageAction("usage/summary").ok).toBe(true);
+    expect(validateUsageAction("usage/clear", {}).ok).toBe(true);
+  });
+
+  it("rejects everything else", () => {
+    expect(validateUsageAction("usage/reset")).toMatchObject({ ok: false });
+    expect(validateUsageAction("metrics/get")).toMatchObject({ ok: false });
+    expect(validateUsageAction("")).toMatchObject({ ok: false });
   });
 });

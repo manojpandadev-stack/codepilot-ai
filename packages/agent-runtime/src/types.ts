@@ -1,5 +1,6 @@
 import type { PrivacyMode, CodePilotAgentMode } from "@codepilot/shared";
 import type { AgentState } from "./state-machine.js";
+import type { TaskPlan } from "./task-plan.js";
 // CodePilot-owned contracts (native engine types)
 export type { AgentTool, AgentUsage, AgentMessage } from "./native/types.js";
 import type { AgentTool, AgentUsage, AgentMessage } from "./native/types.js";
@@ -32,6 +33,11 @@ export interface CodePilotAgentConfig {
     toolName: string;
     input: unknown;
   }) => Promise<{ approved: boolean; reason?: string }>;
+  /**
+   * Persisted command-repair history (Phase 12, row 14). When set, bounded
+   * command-failure repair attempts survive restarts. Omit for in-memory.
+   */
+  commandRepairPersistPath?: string;
 }
 
 /**
@@ -56,6 +62,50 @@ export interface CodePilotRuntimeOptions {
    */
   maxRetries?: number;
   /**
+   * Ollama-only: inactivity window (ms) allowed before the FIRST stream
+   * chunk. A local CPU prefill is legitimately silent for minutes before
+   * generation starts (measured: >420s for a warm ~4k-token prompt on
+   * qwen3:8b), so the steady-stream inactivity window must not apply to
+   * that phase. Defaults to 900_000 (15m) when unset.
+   */
+  ollamaFirstTokenTimeoutMs?: number;
+  /**
+   * Ollama-only: model residency after a completed request (Go duration
+   * string, e.g. "10m"). Pinning keeps the model warm so consecutive turns
+   * avoid a full model reload (measured 21.9s cold vs 0.6s warm on
+   * qwen3:8b/CPU). Defaults to "10m"; "0" restores server-default unload.
+   */
+  ollamaKeepAlive?: string;
+  /**
+   * Ollama-only: `num_ctx` context window (VS Code setting
+   * `codepilot.localAI.ollama.contextLength`). Undefined → omit from the
+   * Ollama request (server/model default applies).
+   */
+  ollamaContextLength?: number;
+  /**
+   * Ollama-only: `num_predict` max tokens (VS Code setting
+   * `codepilot.localAI.ollama.numPredict`). Undefined → omit from the
+   * Ollama request (server/model default applies).
+   */
+  ollamaNumPredict?: number;
+  /**
+   * Ollama-only: explicit `think` control for reasoning models (qwen3).
+   * Three-state: undefined → server/model default (never blindly disabled);
+   * true → request thinking; false → request no thinking. Real reasoning
+   * spans are surfaced to the user as "Thinking…" status regardless.
+   */
+  ollamaThink?: boolean;
+  /**
+   * BUG 5 — production opt-in: use the node:http transport for local Ollama
+   * chat instead of global fetch (undici). undici enforces a default 300s
+   * HEADERS timeout that kills a legitimate slow CPU prefill (measured on
+   * live qwen3:8b — see tests/ollama-perf-live.test.ts) before the provider's
+   * 15-minute first-token inactivity window can apply. The node:http adapter
+   * imposes NO transport timeouts. Tests embedding hosts leave this unset to
+   * keep the global-fetch seam (vi.stubGlobal("fetch")).
+   */
+  ollamaUseNodeHttpTransport?: boolean;
+  /**
    * Per-run timeout in milliseconds. Defaults to 0 (no timeout).
    * When a run exceeds this duration it is aborted and an error event emitted.
    */
@@ -71,6 +121,8 @@ export interface CodePilotRuntimeOptions {
       filePath: string;
       relativePath: string;
       proposedContent: string;
+      /** Staged deletion marker (delete_file). */
+      delete?: boolean;
     }>,
   ) => Promise<{ changeSetId: string }>;
   /**
@@ -272,6 +324,13 @@ export type AgentEvent =
       type: "agent.plan_created";
       plan: string;
       stepsCount: number;
+      /** Full structured plan (persisted by the host on the active task). */
+      taskPlan: TaskPlan;
+    } & WithCorrelation)
+  | ({
+      type: "agent.plan_updated";
+      /** Full plan after the step transition (derived progress included). */
+      taskPlan: TaskPlan;
     } & WithCorrelation)
   | ({
       type: "agent.tool_requested";

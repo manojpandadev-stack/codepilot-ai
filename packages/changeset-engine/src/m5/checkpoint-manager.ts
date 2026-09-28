@@ -15,6 +15,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { hashContent } from "./diff-engine.js";
 import { M5Error } from "./errors.js";
 import type { FileMutationService } from "./file-mutation.js";
@@ -43,6 +44,14 @@ export interface CheckpointManagerOptions {
   maxFilesPerCheckpoint?: number;
   /** Max total content bytes captured per checkpoint (default 8 MiB). */
   snapshotBudgetBytes?: number;
+  /**
+   * Durability directory (Phase 8). When set, checkpoint metadata AND
+   * snapshots persist as one JSON file per checkpoint (atomic tmp+rename)
+   * and reload on construction, so restores survive a host/extension
+   * restart. Corrupt files are quarantined (renamed `*.corrupt-*`), never
+   * thrown — in-memory state stays authoritative.
+   */
+  storageDir?: string;
 }
 
 const DEFAULT_MAX_CHECKPOINTS = 50;
@@ -67,6 +76,7 @@ export class CheckpointManager {
   private readonly maxFiles: number;
   private readonly snapshotBudget: number;
   private readonly checkpoints = new Map<string, Checkpoint>();
+  private readonly storageDir?: string;
   private seq = 0;
 
   constructor(options: CheckpointManagerOptions) {
@@ -76,6 +86,8 @@ export class CheckpointManager {
     this.maxFiles = options.maxFilesPerCheckpoint ?? DEFAULT_MAX_FILES;
     this.snapshotBudget =
       options.snapshotBudgetBytes ?? DEFAULT_SNAPSHOT_BUDGET;
+    this.storageDir = options.storageDir;
+    if (this.storageDir !== undefined) this.loadFromDisk();
   }
 
   // ---- Queries ----
@@ -169,6 +181,7 @@ export class CheckpointManager {
     }
 
     this.checkpoints.set(checkpointId, checkpoint);
+    this.persist(checkpoint);
     this.trimCheckpoints();
     this.emit({
       kind: "CHECKPOINT_CREATED",
@@ -273,6 +286,7 @@ export class CheckpointManager {
 
     if (ok) {
       checkpoint.status = "restored";
+      this.persist(checkpoint);
     }
     const kind =
       conflicts > 0
@@ -400,6 +414,7 @@ export class CheckpointManager {
     const cp = this.checkpoints.get(checkpointId);
     if (!cp || cp.status === "active") return false;
     this.checkpoints.delete(checkpointId);
+    this.removePersisted(checkpointId);
     return true;
   }
   // ==========================================================================
@@ -423,8 +438,85 @@ export class CheckpointManager {
     const keep = Math.floor(this.maxCheckpoints / 2);
     for (let i = 0; i < sorted.length - keep; i++) {
       const cp = sorted[i];
-      if (cp) this.checkpoints.delete(cp.checkpointId);
+      if (cp) {
+        this.checkpoints.delete(cp.checkpointId);
+        this.removePersisted(cp.checkpointId);
+      }
     }
+  }
+
+  // ---- Durability (Phase 8) ----
+
+  /** Atomic per-checkpoint JSON write (tmp + rename), best-effort. */
+  private persist(cp: Checkpoint): void {
+    if (this.storageDir === undefined) return;
+    try {
+      fs.mkdirSync(this.storageDir, { recursive: true });
+      const file = path.join(this.storageDir, `${cp.checkpointId}.json`);
+      const tmp = `${file}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify(cp), "utf8");
+      fs.renameSync(tmp, file);
+    } catch {
+      // Durability is best-effort — never fail checkpoint creation for it.
+    }
+  }
+
+  private removePersisted(checkpointId: string): void {
+    if (this.storageDir === undefined) return;
+    try {
+      fs.rmSync(path.join(this.storageDir, `${checkpointId}.json`), {
+        force: true,
+      });
+    } catch {
+      // Best-effort.
+    }
+  }
+
+  /**
+   * Reload every valid checkpoint file and continue the id sequence past
+   * the highest persisted seq so post-restart ids never collide.
+   */
+  private loadFromDisk(): void {
+    if (this.storageDir === undefined) return;
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(this.storageDir);
+    } catch {
+      return; // No store yet.
+    }
+    let maxSeq = 0;
+    for (const name of entries) {
+      if (!name.endsWith(".json") || name.includes(".tmp-")) continue;
+      const file = path.join(this.storageDir, name);
+      try {
+        const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Checkpoint;
+        if (
+          !parsed ||
+          typeof parsed.checkpointId !== "string" ||
+          !Array.isArray(parsed.files) ||
+          !Array.isArray(parsed.changeIds) ||
+          typeof parsed.status !== "string"
+        ) {
+          throw new Error("invalid checkpoint shape");
+        }
+        this.checkpoints.set(parsed.checkpointId, parsed);
+        const seq = Number.parseInt(
+          parsed.checkpointId.split("-")[1] ?? "",
+          36,
+        );
+        if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
+      } catch {
+        // Quarantine corrupt entries (renamed off *.json so they are not
+        // re-read, but kept for inspection).
+        try {
+          fs.renameSync(file, `${file}.corrupt-${Date.now()}`);
+        } catch {
+          // Ignore.
+        }
+      }
+    }
+    this.seq = maxSeq;
+    if (this.checkpoints.size > this.maxCheckpoints) this.trimCheckpoints();
   }
 
   private emit(event: M5Event): void {

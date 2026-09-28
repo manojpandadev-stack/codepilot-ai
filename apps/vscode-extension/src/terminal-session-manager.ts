@@ -34,6 +34,7 @@
 import {
   TerminalSession,
   detectShell,
+  getDefaultShell,
   shellArgvForCommand,
   type TerminalSessionSnapshot,
 } from "@codepilot/tool-engine";
@@ -170,6 +171,8 @@ interface AgentSessionContainer {
   /** Command index currently running (1-based), or null. */
   runningIndex: number | null;
   open: boolean;
+  /** Persistent interactive shell (only when started with interactive:true). */
+  shell?: AgentSessionShell;
   /** Completed-command summaries for status view (bounded by maxHistoryEntries upstream). */
   completed: Array<
     Pick<
@@ -226,6 +229,14 @@ export interface M4DecisionToken {
 /** How long an unconsumed decision token stays valid. */
 const DECISION_TOKEN_TTL_MS = 60_000;
 
+/** Max chars accepted by one interactive stdin write (bounded input). */
+export const MAX_STDIN_WRITE_CHARS = 8192;
+
+/** A persistent interactive shell attached to an agent session (row 13). */
+interface AgentSessionShell {
+  session: TerminalSession;
+}
+
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly finishedOrder: string[] = [];
@@ -246,7 +257,8 @@ export class TerminalSessionManager {
           | "started"
           | "completed"
           | "failed"
-          | "cancelled";
+          | "cancelled"
+          | "stdin";
         command: string;
         status?: string;
         exitCode?: number | null;
@@ -640,6 +652,13 @@ export class TerminalSessionManager {
   startAgentSession(options: {
     taskId: string;
     cwd?: string;
+    /**
+     * Open a persistent interactive shell (REPL/prompt programs) whose
+     * stdin can be fed line-by-line via writeSessionStdin. The shell
+     * process is killed on close/cancel — sessions still do not survive
+     * host restart.
+     */
+    interactive?: boolean;
   }): AgentSessionStartResult {
     if (
       typeof options.taskId !== "string" ||
@@ -654,7 +673,7 @@ export class TerminalSessionManager {
       };
     }
     const sessionId = `agent-ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    this.agentSessions.set(sessionId, {
+    const container: AgentSessionContainer = {
       sessionId,
       taskId: options.taskId,
       createdAt: Date.now(),
@@ -664,18 +683,150 @@ export class TerminalSessionManager {
       runningIndex: null,
       open: true,
       completed: [],
-    });
+    };
+    this.agentSessions.set(sessionId, container);
     this.auditHook?.({
       sessionId,
       phase: "requested",
       command: "(agent session created)",
     });
+    if (options.interactive === true) {
+      const shell = this.startInteractiveShell(container);
+      if (!shell.ok) {
+        // Never leak a container whose shell failed to spawn.
+        this.agentSessions.delete(sessionId);
+        return { ok: false, error: shell.error };
+      }
+      container.shell = shell.value;
+    }
     return {
       ok: true,
       sessionId,
       taskId: options.taskId,
-      createdAt: Date.now(),
+      createdAt: container.createdAt,
     };
+  }
+
+  /**
+   * Spawn the persistent interactive shell for an agent session. The shell
+   * runs WITHOUT a command (PowerShell -NonInteractive / bash -i) and reads
+   * stdin lines fed by writeSessionStdin. Output streams through the same
+   * correlated terminal.* event contract as exec commands.
+   */
+  private startInteractiveShell(
+    container: AgentSessionContainer,
+  ): { ok: true; value: AgentSessionShell } | { ok: false; error: string } {
+    const shell = getDefaultShell(process.platform);
+    const session = new TerminalSession({
+      command: shell,
+      args:
+        process.platform === "win32"
+          ? ["-NoProfile", "-NonInteractive"]
+          : ["-i"],
+      cwd: container.cwd ?? this.workspaceRoot,
+      keepStdinOpen: true,
+      onEvent: (event) => {
+        const correlated: TrackedTerminalEvent = {
+          ...event,
+          sessionId: container.sessionId,
+          executionId: "interactive",
+          taskId: container.taskId,
+          timestamp: Date.now(),
+        };
+        try {
+          this.eventSink?.(correlated as TerminalStreamEventWithCorrelation);
+        } catch {
+          // A failing sink must never break the session.
+        }
+      },
+    });
+    try {
+      session.start();
+    } catch (err) {
+      return {
+        ok: false,
+        error: `interactive shell failed to start: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+    this.auditHook?.({
+      sessionId: container.sessionId,
+      phase: "started",
+      command: "(interactive shell)",
+    });
+    return { ok: true, value: { session } };
+  }
+
+  /**
+   * Write one payload to the persistent interactive shell's stdin of an
+   * owned agent session. A trailing newline is appended when missing so the
+   * shell executes the line. Bounded per write; the session must have been
+   * started with interactive:true.
+   *
+   * M4 note: the session itself was permission-gated at start; stdin content
+   * is data inside that approved session, not a new command evaluation.
+   */
+  writeSessionStdin(options: {
+    sessionId: string;
+    taskId: string;
+    text: string;
+  }):
+    | { ok: true; bytesWritten: number }
+    | {
+        ok: false;
+        error: string;
+        code:
+          | "NOT_FOUND"
+          | "FORBIDDEN"
+          | "INVALID"
+          | "NO_SHELL"
+          | "SHELL_CLOSED";
+      } {
+    const owned = this.ownedSession(options.sessionId, options.taskId);
+    if (!owned.ok) {
+      return { ok: false, error: owned.error, code: owned.code };
+    }
+    const container = owned.container;
+    if (!container.open) {
+      return { ok: false, error: "session is closed", code: "INVALID" };
+    }
+    if (typeof options.text !== "string" || options.text.length === 0) {
+      return { ok: false, error: "text is required", code: "INVALID" };
+    }
+    if (options.text.length > MAX_STDIN_WRITE_CHARS) {
+      return {
+        ok: false,
+        error: `text too long (max ${MAX_STDIN_WRITE_CHARS} chars)`,
+        code: "INVALID",
+      };
+    }
+    const shell = container.shell;
+    if (!shell) {
+      return {
+        ok: false,
+        error:
+          "session has no interactive shell (start it with interactive:true)",
+        code: "NO_SHELL",
+      };
+    }
+    if (!shell.session.stdinOpen) {
+      return {
+        ok: false,
+        error: "interactive shell is no longer accepting input",
+        code: "SHELL_CLOSED",
+      };
+    }
+    const payload = options.text.endsWith("\n")
+      ? options.text
+      : `${options.text}\n`;
+    shell.session.writeStdin(payload);
+    this.auditHook?.({
+      sessionId: container.sessionId,
+      phase: "stdin",
+      command: `(${payload.length} bytes)`,
+    });
+    return { ok: true, bytesWritten: Buffer.byteLength(payload, "utf8") };
   }
 
   /** Look up a container and enforce ownership. Deny-closed. */
@@ -1035,6 +1186,12 @@ export class TerminalSessionManager {
     const owned = this.ownedSession(sessionId, taskId);
     if (!owned.ok) return false;
     const c = owned.container;
+    // Interactive shell: interrupt the foreground program with Ctrl+C
+    // instead of tearing down the persistent shell.
+    if (c.shell?.session.stdinOpen) {
+      c.shell.session.writeStdin("\x03");
+      return true;
+    }
     if (c.runningIndex === null) return false;
     // Find the live TerminalSession for the running command: it is the most
     // recent non-finished session created by this container. Command sessions
@@ -1066,6 +1223,10 @@ export class TerminalSessionManager {
         }
       }
     }
+    if (c.shell) {
+      c.shell.session.kill();
+      c.shell = undefined;
+    }
     this.auditHook?.({
       sessionId: c.sessionId,
       phase: "cancelled",
@@ -1091,6 +1252,10 @@ export class TerminalSessionManager {
           }
         }
       }
+      if (container.shell) {
+        container.shell.session.kill();
+        container.shell = undefined;
+      }
       closed += 1;
     }
     return closed;
@@ -1107,6 +1272,10 @@ export class TerminalSessionManager {
             session.cancel();
           }
         }
+      }
+      if (container.shell) {
+        container.shell.session.kill();
+        container.shell = undefined;
       }
     }
   }

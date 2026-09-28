@@ -26,6 +26,7 @@ import {
   rulesToContextItems,
 } from "../packages/context-engine/src/index.js";
 import { GitEngine } from "../packages/git-engine/src/index.js";
+import { isAllowedSettingKey } from "../packages/shared/src/index.js";
 
 const WORKSPACE = path.join(os.tmpdir(), "codepilot-smoke-" + Date.now());
 
@@ -69,6 +70,21 @@ describe("Extension Structure", () => {
     expect(pkg.displayName).toBe("CodePilot AI");
     expect(pkg.main).toBe("./dist/extension.js");
     expect(pkg.engines.vscode).toBeDefined();
+  });
+
+  it("registers node:http Ollama as an explicit false-default opt-in", () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, "..", "apps/vscode-extension/package.json"),
+        "utf-8",
+      ),
+    );
+    const properties = pkg.contributes.configuration.properties;
+    const transport = properties["codepilot.localAI.ollama.useNodeHttpTransport"];
+    expect(transport).toMatchObject({ type: "boolean", default: false });
+    expect(
+      isAllowedSettingKey("localAI.ollama.useNodeHttpTransport"),
+    ).toBe(true);
   });
 
   it("registers all required commands", () => {
@@ -118,6 +134,14 @@ describe("Extension Structure", () => {
     expect(props["codepilot.privacyMode"]).toBeDefined();
     expect(props["codepilot.agentMode"]).toBeDefined();
     expect(props["codepilot.localAI.ollama.baseUrl"]).toBeDefined();
+    // Global fetch is the production and test default. The node:http
+    // transport is an explicit opt-in for slow local CPU prefills.
+    expect(
+      props["codepilot.localAI.ollama.useNodeHttpTransport"],
+    ).toMatchObject({ type: "boolean", default: false });
+    expect(
+      isAllowedSettingKey("localAI.ollama.useNodeHttpTransport"),
+    ).toBe(true);
     expect(props["codepilot.autoApproval.read"]).toBeDefined();
     expect(props["codepilot.autoApproval.write"]).toBeDefined();
     expect(props["codepilot.autoApproval.terminal"]).toBeDefined();

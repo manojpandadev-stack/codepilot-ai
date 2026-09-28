@@ -14,13 +14,21 @@ approval boundaries; nothing executes silently.
 ## Features
 
 ### Core Agent Capabilities
+
 - **Assisted Coding**: Understand requests, plan, implement, test, and review
 - **Multi-File Editing**: Propose changes across files as reviewable diffs (ChangeSet approval)
 - **Terminal Execution**: Run build tools, tests, and shell commands (approval-gated)
 - **Git Intelligence**: Checkpoints, diffs, branch awareness
 - **Self-Verification**: Run tests and surface failures for approved follow-ups
+- **Image Attachments (Multimodal)**: Attach images to a task for
+  vision-capable models — support is provider/model dependent, images are
+  validated and bounded (format, size, count) before entering the model
+  pipeline, and text-only models fail closed with a clear error rather
+  than silently receiving image input (Ollama `images` and
+  OpenAI-compatible `image_url` payloads are supported)
 
 ### Privacy & Security
+
 - **Local-First**: Runs fully on-machine with Ollama once models are pulled
 - **Three Privacy Modes**: Local Only, Hybrid, Cloud
 - **Tool Governance**: Per-tool approval policies
@@ -41,6 +49,11 @@ catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
   (base URL + key); credentials are stored in VS Code SecretStorage
 - Local providers discover models live from the running server; cloud
   providers offer curated catalogue models
+- **Vision (image input) is model-specific, not provider-wide**: per-model
+  capability metadata in the catalogue decides support. Ollama as a server
+  is not universally vision-capable — for example, `qwen3:8b` is
+  catalogue-defined as text-only, so attaching an image to it fails closed;
+  select a vision-capable model when you want image input
 
 > Live-verified in this repository: Ollama (full E2E including native tool
 > calling and M4 approval). Other providers share the same native provider
@@ -48,6 +61,7 @@ catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
 > selector's Test Connection probe before relying on a new provider.
 
 ### Agent Modes
+
 - **Ask**: Conversational assistance without modifications
 - **Plan**: Analyze and create implementation plans
 - **Act**: Execute approved plans with file modifications
@@ -55,6 +69,7 @@ catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
 - **Auto**: Autonomous execution under configured policies
 
 ### Developer Tools
+
 - **Browser Tools**: Navigate pages and extract content through policy-checked, SSRF-protected fetching
 - **Architecture Analysis**: Agent-driven codebase surveys via the Analyze Repository command
 - **Code Review**: Severity-classified findings via review mode and Review commands
@@ -64,6 +79,7 @@ catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
 - **MCP Manager**: Configure and manage MCP servers
 
 ### Optional Backend (Spring Boot)
+
 - REST API for project and agent run management
 - PostgreSQL with pgvector for semantic search
 - Redis for caching and state management
@@ -73,6 +89,7 @@ catalogue (`CODEPILOT_PROVIDER_CATALOG` in `@codepilot/llm`, see
 ## Quick Start
 
 ### Prerequisites
+
 - Node.js 22+
 - Java 21 (for Spring Boot control plane)
 - Maven 3.9+ (for Spring Boot control plane)
@@ -139,6 +156,7 @@ mvn spring-boot:run
 ### Start Coding
 
 Type your request in the chat:
+
 - "Add Redis caching to the OrderService"
 - "Review this file for security issues"
 - "Generate unit tests for the UserController"
@@ -146,13 +164,13 @@ Type your request in the chat:
 
 ### Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Shift+A` | Open Agent Panel |
+| Shortcut       | Action            |
+| -------------- | ----------------- |
+| `Ctrl+Shift+A` | Open Agent Panel  |
 | `Ctrl+Shift+E` | Explain Selection |
-| `Ctrl+Shift+.` | Stop Agent |
-| `Enter` | Send Message |
-| `Shift+Enter` | New Line |
+| `Ctrl+Shift+.` | Stop Agent        |
+| `Enter`        | Send Message      |
+| `Shift+Enter`  | New Line          |
 
 ## Configuration
 
@@ -207,7 +225,6 @@ codepilot-ai/
 │   ├── tool-engine/         # Terminal/streaming execution, M4 bridge, audit
 │   ├── policy-engine/       # Tool governance and security
 │   ├── context-engine/      # Context budgeting and management
-│   ├── repository-engine/   # File discovery and indexing
 │   ├── rag-engine/          # Embeddings and semantic search
 │   ├── memory-engine/       # Three-layer memory system
 │   ├── mcp-manager/         # MCP server management

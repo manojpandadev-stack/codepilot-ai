@@ -259,6 +259,39 @@ describe("Plan Mode Enforcement", () => {
     expect(engine.checkPermission("git_diff").enabled).toBe(true);
   });
 
+  it("plan mode allows the plan tool (read-class plan metadata)", () => {
+    const engine = createPolicyEngine({ initialMode: "plan" });
+    const result = engine.checkPermission("plan", {
+      action: "create",
+      objective: "x",
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.autoApprove).toBe(true);
+  });
+
+  it("plan mode allows inspect_symbols (read-class structural outline)", () => {
+    const engine = createPolicyEngine({ initialMode: "plan" });
+    const result = engine.checkPermission("inspect_symbols");
+    expect(result.enabled).toBe(true);
+    expect(result.autoApprove).toBe(true);
+    // And it stays read-class in act mode too (auto-approved, never prompt).
+    engine.setAgentMode("act");
+    const act = engine.checkPermission("inspect_symbols");
+    expect(act.enabled).toBe(true);
+    expect(act.autoApprove).toBe(true);
+  });
+
+  it("plan mode allows read_tool_output (read-class sidecar retrieval)", () => {
+    const engine = createPolicyEngine({ initialMode: "plan" });
+    const result = engine.checkPermission("read_tool_output");
+    expect(result.enabled).toBe(true);
+    expect(result.autoApprove).toBe(true);
+    engine.setAgentMode("act");
+    const act = engine.checkPermission("read_tool_output");
+    expect(act.enabled).toBe(true);
+    expect(act.autoApprove).toBe(true);
+  });
+
   it("plan mode blocks git_commit", () => {
     const engine = createPolicyEngine({ initialMode: "plan" });
     const result = engine.checkPermission("git_commit");

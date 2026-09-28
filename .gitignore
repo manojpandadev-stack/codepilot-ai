@@ -54,3 +54,7 @@ coverage/
 # Benchmark run outputs (thresholds are committed; raw run results stay local)
 scripts/benchmark/results/
 
+# Local agent/build artifacts (never commit)
+.local/
+_typecheck.out
+

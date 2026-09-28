@@ -52,7 +52,8 @@ describe("ProviderService.testConnection — Ollama endpoint correctness", () =>
     expect(result.message).toBe("Connected.");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const firstCall = fetchMock.mock.calls[0];
-    if (!firstCall) throw new Error("expected Ollama probe to have been called");
+    if (!firstCall)
+      throw new Error("expected Ollama probe to have been called");
     const [url] = firstCall;
     expect(url).toBe("http://localhost:11434/api/tags");
   });
@@ -60,7 +61,9 @@ describe("ProviderService.testConnection — Ollama endpoint correctness", () =>
   it("NEVER probes the root endpoint (/) for Ollama", async () => {
     const svc = makeService();
     svc.setConfig("ollama", { baseUrl: "http://localhost:11434/" });
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ models: [] }));
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ models: [] }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const result = await svc.testConnection("ollama");
@@ -95,7 +98,9 @@ describe("ProviderService.testConnection — Ollama endpoint correctness", () =>
   it("normalizes trailing slashes exactly as configured in the settings UI", async () => {
     const svc = makeService();
     svc.setConfig("ollama", { baseUrl: "http://localhost:11434/" });
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ models: [] }));
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ models: [] }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     await svc.testConnection("ollama");
@@ -110,8 +115,8 @@ describe("ProviderService.testConnection — Ollama endpoint correctness", () =>
     svc.setConfig("ollama", { baseUrl: "http://localhost:11434" });
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () => jsonResponse({ error: "not found" }, 404),
+      vi.fn(async () =>
+        jsonResponse({ error: "not found" }, 404),
       ) as unknown as typeof fetch,
     );
 
@@ -176,7 +181,9 @@ describe("ProviderService.testConnection — Ollama endpoint correctness", () =>
   it("requires no API key for the local Ollama probe", async () => {
     const svc = makeService();
     svc.setConfig("ollama", { baseUrl: "http://localhost:11434" });
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ models: [] }));
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ models: [] }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const result = await svc.testConnection("ollama");
@@ -200,7 +207,9 @@ describe("ProviderService.testConnection — provider switching", () => {
     });
     const svcBase = svc.effectiveBaseUrl("openai-compatible");
     expect(svcBase).toBe("https://api.example.com/v1");
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [] }));
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: [] }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     inMemorySecrets.set("codepilot.apiKey.openai-compatible", "test-key");
@@ -215,7 +224,9 @@ describe("ProviderService.testConnection — provider switching", () => {
   it("switching to the local LM Studio provider still probes loopback /models", async () => {
     const svc = makeService();
     svc.setConfig("lmstudio", { baseUrl: "http://localhost:1234/v1" });
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [] }));
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: [] }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const result = await svc.testConnection("lmstudio");
@@ -229,19 +240,21 @@ describe("ProviderService.testConnection — provider switching", () => {
   it("switching back to Ollama after another provider probes /api/tags again", async () => {
     const svc = makeService();
     svc.setConfig("lmstudio", { baseUrl: "http://localhost:1234/v1" });
-    const fetchMock = vi.fn<typeof fetch>(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.endsWith("/models")) return jsonResponse({ data: [] });
-      if (url.endsWith("/api/tags")) {
-        return jsonResponse({ models: [{ name: "qwen3:8b" }] });
-      }
-      return jsonResponse({}, 404);
-    });
+    const fetchMock = vi.fn<typeof fetch>(
+      async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("/models")) return jsonResponse({ data: [] });
+        if (url.endsWith("/api/tags")) {
+          return jsonResponse({ models: [{ name: "qwen3:8b" }] });
+        }
+        return jsonResponse({}, 404);
+      },
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    await expect(
-      svc.testConnection("lmstudio"),
-    ).resolves.toMatchObject({ state: "connected" });
+    await expect(svc.testConnection("lmstudio")).resolves.toMatchObject({
+      state: "connected",
+    });
     await expect(svc.testConnection("ollama")).resolves.toMatchObject({
       state: "connected",
     });
@@ -253,5 +266,94 @@ describe("ProviderService.testConnection — provider switching", () => {
     const svc = makeService();
     const result = await svc.testConnection("definitely-not-a-provider");
     expect(result.state).toBe("invalid-config");
+  });
+});
+
+describe("ProviderService.listConnectionStates — per-provider connection truth", () => {
+  /**
+   * Regression (the "Ollama Offline" UI bug): the provider/list bridge used
+   * to probe ONLY the settings-selected provider, and probed every local
+   * provider through the OLLAMA base URL. With lmstudio selected, a running
+   * Ollama server was therefore never probed and the UI showed it Offline;
+   * lmstudio itself would have been probed on Ollama's port (11434) instead
+   * of its own (1234). Connection truth must be per-provider through each
+   * provider's OWN authoritative path, independent of selection.
+   */
+  it("probes every local provider at its OWN endpoint regardless of selection", async () => {
+    const svc = makeService();
+    svc.setConfig("ollama", { baseUrl: "http://localhost:11434" });
+    svc.setConfig("lmstudio", { baseUrl: "http://localhost:1234/v1" });
+    // Selection is deliberately NOT consulted by listConnectionStates; the
+    // bug reproduced with lmstudio selected and Ollama running.
+    const fetchMock = vi.fn<typeof fetch>(
+      async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "http://localhost:11434/api/tags") {
+          return jsonResponse({ models: [{ name: "qwen3:8b" }] });
+        }
+        if (url === "http://localhost:1234/v1/models") {
+          return jsonResponse({ data: [{ id: "emb" }] });
+        }
+        return jsonResponse({}, 404);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const states = await svc.listConnectionStates();
+    const byId = new Map(states.map((s) => [s.id, s]));
+
+    // BUG 1 contract: every entry carries the typed ConnectionState and the
+    // derived connected flag. Both local servers are up: both must report
+    // the honest connected state.
+    expect(byId.get("ollama")).toMatchObject({
+      state: "connected",
+      connected: true,
+    });
+    expect(byId.get("lmstudio")).toMatchObject({
+      state: "connected",
+      connected: true,
+    });
+    // Each probed at its OWN endpoint — never cross-probed.
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls).toContain("http://localhost:11434/api/tags");
+    expect(urls).toContain("http://localhost:1234/v1/models");
+    expect(
+      urls.filter((u) => u === "http://localhost:11434/api/tags"),
+    ).toHaveLength(1);
+  });
+
+  it("reports a DOWN local provider as not connected without throwing", async () => {
+    const svc = makeService();
+    svc.setConfig("ollama", { baseUrl: "http://localhost:11434" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch,
+    );
+
+    const states = await svc.listConnectionStates();
+    const ollama = states.find((s) => s.id === "ollama");
+    expect(ollama).toBeDefined();
+    expect(ollama?.connected).toBe(false);
+  });
+
+  it("cloud providers with a credential report configured, NEVER connected (no probe)", async () => {
+    const svc = makeService();
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    inMemorySecrets.set("codepilot.apiKey.openrouter", "test-key");
+
+    const states = await svc.listConnectionStates();
+    const openrouter = states.find((s) => s.id === "openrouter");
+    // BUG 1 REGRESSION: "API key exists" ≠ "provider connected". Without a
+    // positive host-side probe the honest state is "configured".
+    expect(openrouter?.state).toBe("configured");
+    expect(openrouter?.connected).toBe(false);
+    // Local providers are probed by design; the CLOUD provider must not be.
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.filter((u) => !u.includes("localhost"))).toEqual([]);
   });
 });

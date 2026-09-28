@@ -19,7 +19,7 @@
     "dev:webview": "pnpm --filter @codepilot/webview dev",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "test": "pnpm -r test",
+    "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
     "clean": "pnpm -r clean",
     "format": "prettier --write 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts' 'apps/webview/src/**/*.{ts,tsx}'"

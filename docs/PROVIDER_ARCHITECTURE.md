@@ -72,6 +72,7 @@ package, which also exposes the curated static model entries.
 │   Anthropic / Gemini — owned, in-repo)   │
 └──────────────────────────────────────────┘
 ```
+
 (Historical: Bedrock/Vertex rows below describe the Milestone-2 design
 and are not part of the curated catalogue.)
 
@@ -101,10 +102,12 @@ interface ModelProvider {
   // Health
   healthCheck(signal?: AbortSignal): Promise<ProviderHealth>;
 
-  // Capability queries
+  // Capability queries — see "Vision capability resolution" below.
+  // Vision support is NOT a per-provider boolean: it is resolved per
+  // provider+model pair from the catalogue (explicit model capability
+  // metadata first, else `undefined` for local/unknown endpoints).
   supportsStreaming(): boolean;
   supportsTools(): boolean;
-  supportsVision(): boolean;
   supportsStructuredOutput(): boolean;
   supportsEmbeddings(): boolean;
   getCapabilities(modelId: string): ModelCapabilitySet;
@@ -276,8 +279,32 @@ Supports **any** OpenAI Chat Completions compatible endpoint:
 | Discovery      | `GET {baseUrl}/models` (falls back to static list for known providers) |
 | Health check   | `GET {baseUrl}/models` with 401/403 detection                          |
 | Capabilities   | `KNOWN_OPENAI_MODEL_CAPABILITIES` lookup + heuristics                  |
-| Authentication | `Authorization: Bearer {apiKey}` header                |
-| Streaming      | Native OpenAI-compatible provider (SSE `/chat/completions`) |
+| Authentication | `Authorization: Bearer {apiKey}` header                                |
+| Streaming      | Native OpenAI-compatible provider (SSE `/chat/completions`)            |
+
+### Vision capability resolution (shipped contract)
+
+Vision is resolved per provider+model pair by the catalogue-driven
+`modelSupportsVision(providerId, modelId)` in `@codepilot/llm` — it is not a
+per-provider boolean. Resolution order:
+
+```
+explicit model capability metadata
+    ↓
+true / false
+    ↓
+otherwise local/unknown (Ollama, LM Studio, BYO endpoints)
+    ↓
+undefined
+```
+
+Explicit per-model catalogue capabilities take precedence: a model with an
+explicit entry that lacks a vision capability (e.g. Ollama `qwen3:8b`)
+returns `false`, so the runtime fails closed before making any request.
+`true` / `false` mean the catalogue knows; `undefined` means statically
+unknowable — the runtime allows the request and the server owns the truth.
+The runtime consults this gate before any provider request when image
+blocks are present (`runtime-vision-guard.test.ts` pins this ordering).
 
 ### Static Model Catalogue (OpenAI)
 

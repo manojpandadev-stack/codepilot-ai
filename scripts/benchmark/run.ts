@@ -23,7 +23,6 @@ import {
   type BenchResult,
 } from "./harness.js";
 import { runSuites } from "./suites.js";
-import { runClineComparison } from "./cline-compare.js";
 import { THRESHOLDS } from "./thresholds.js";
 
 function parseArgs(argv: string[]): {
@@ -75,11 +74,13 @@ async function main(): Promise<void> {
       fast: args.fast,
       onProgress: (id) => console.log(`[bench]   done ${id}`),
     });
-    console.log("[bench] running Cline comparison probe…");
-    const clineResults = await runClineComparison();
+    // CodePilot-only benchmark output. Historical Cline comparison probes are
+    // intentionally not executed: CodePilot does not depend on, instantiate,
+    // or benchmark a Cline runtime. Any old comparison records remain
+    // historical documentation only.
     const all: BenchResult[] = args.suitePrefix
-      ? [...results, ...clineResults].filter((r) => r.id.startsWith(args.suitePrefix as string))
-      : [...results, ...clineResults];
+      ? results.filter((r) => r.id.startsWith(args.suitePrefix as string))
+      : results;
     const report: BenchReport = {
       tool: "codepilot-benchmark",
       version: "0.1.0",

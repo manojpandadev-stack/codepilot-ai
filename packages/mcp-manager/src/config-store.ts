@@ -29,6 +29,18 @@ export function redactEnvForPersistence(
   return out;
 }
 
+/** Strip header values for persistence (keys are kept, values redacted). */
+export function redactHeadersForPersistence(
+  headers?: Record<string, string>,
+): Record<string, string> {
+  if (!headers) return {};
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(headers)) {
+    out[key] = REDACTED_ENV_PLACEHOLDER;
+  }
+  return out;
+}
+
 /** Restore persisted env (placeholders become empty strings for re-entry). */
 export function restoreEnvFromPersistence(
   env?: Record<string, string>,
@@ -46,11 +58,12 @@ export function restoreEnvFromPersistence(
 export class MCPConfigStore {
   constructor(private readonly filePath: string) {}
 
-  /** Persist server configs atomically. Never writes env values. */
+  /** Persist server configs atomically. Never writes env/header values. */
   async save(servers: readonly MCPServerConfig[]): Promise<void> {
     const payload = servers.map((server) => ({
       ...server,
       env: redactEnvForPersistence(server.env),
+      headers: redactHeadersForPersistence(server.headers),
     }));
     const dir = path.dirname(this.filePath);
     fs.mkdirSync(dir, { recursive: true });
@@ -86,6 +99,7 @@ export class MCPConfigStore {
             ? candidate.args.filter((a): a is string => typeof a === "string")
             : undefined,
           env: restoreEnvFromPersistence(candidate.env),
+          headers: restoreEnvFromPersistence(candidate.headers),
           url: typeof candidate.url === "string" ? candidate.url : undefined,
           enabled: candidate.enabled ?? false,
           timeout:

@@ -23,6 +23,7 @@ export {
   resolveWorkspacePath,
   applyEditorOperation,
   parseEditorInput,
+  parseDeleteFileInput,
   parseApplyPatchInput,
   formatStagedResult,
   MAX_PROPOSED_FILE_BYTES,
@@ -36,6 +37,7 @@ export type {
 
 // ---- Factory ----
 export { createCodePilotRuntime } from "./factory.js";
+export { keepAliveMinutesToDuration } from "./native/llm/ollama.js";
 
 // ---- Model-facing builtin tools (native callable set) ----
 export {
@@ -99,6 +101,40 @@ export type {
   PersistedToolCall,
   PersistedConversationMessage,
 } from "./m12-task-store.js";
+// ---- Command-failure repair (Phase 12, row 14) ----
+export {
+  MAX_AUTO_REPAIR_ATTEMPTS,
+  MAX_SAME_SIGNATURE_REPEATS,
+  CommandRepairLoop,
+  classifyCommandFailure,
+  planCommandRepair,
+  commandFailureSignature,
+  runTerminalToolRepair,
+} from "./m13-command-repair.js";
+export type {
+  CommandRepairAttempt,
+  CommandRepairRecord,
+  CommandRepairStatus,
+  CommandRepairOutcome,
+  CommandFailureClass,
+  TerminalToolFailure,
+  TerminalToolRepairDeps,
+  TerminalToolRepairDecision,
+} from "./m13-command-repair.js";
+// ---- Structured task plan (Phase 2) ----
+export {
+  createTaskPlan,
+  updateTaskPlanStep,
+  planProgress,
+  parseModelPlanText,
+  MAX_PLAN_STEPS,
+} from "./task-plan.js";
+export type {
+  TaskPlan,
+  TaskPlanStep,
+  TaskPlanStepStatus,
+  TaskPlanProgress,
+} from "./task-plan.js";
 // ---- Per-task persistence serialization (M12 v4) ----
 export { TaskPersistenceQueue } from "./task-persistence-queue.js";
 export type { TaskPersistenceOutcome } from "./task-persistence-queue.js";

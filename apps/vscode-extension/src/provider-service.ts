@@ -141,6 +141,38 @@ export interface HealthResult {
   latencyMs?: number;
 }
 
+/**
+ * Honest, host-verified provider connection states.
+ *
+ * CRITICAL RULE: "API key exists" ≠ "provider connected". Only a positive
+ * host-side probe may produce "connected". Credential presence alone is
+ * "configured" (cloud) / "unverified" — never "connected".
+ */
+export type ConnectionState =
+  | "configured"
+  | "checking"
+  | "connected"
+  | "unavailable"
+  | "auth-required"
+  | "auth-invalid"
+  | "rate-limited"
+  | "no-endpoint"
+  | "unverified";
+
+/** One entry of `provider/list` — per-provider connection truth. */
+export interface ConnectionStateEntry {
+  id: string;
+  name: string;
+  state: ConnectionState;
+  /** Derived convenience: true ONLY for a positive host-side probe. */
+  connected: boolean;
+  /** Secret-free detail (HTTP status / network error text). */
+  detail?: string;
+  latencyMs?: number;
+  /** Host time of the probe that produced this state (ISO-8601), if probed. */
+  checkedAt?: string;
+}
+
 export interface ProviderUsageSnapshot {
   providerId: string;
   kind: "provider-api" | "local-tracking" | "none";
@@ -376,6 +408,106 @@ export class ProviderService implements vscode.Disposable {
       }
       return { state: "unavailable", message: `Network error: ${msg}` };
     }
+  }
+
+  /**
+   * Connection truth for every catalogue provider, in list order.
+   *
+   * BUG 1 FIX — connection false positive: the previous implementation
+   * reported `connected: true` for key-based cloud providers from credential
+   * PRESENCE alone. "API key exists" ≠ "provider connected": an unreachable
+   * endpoint, a rejected key (401) or a rate limit all presented as
+   * "Connected" in the UI. Every provider now reports an honest typed
+   * ConnectionState derived ONLY from an actual host-side probe of its OWN
+   * authoritative endpoint (per-provider `health.probePath` + effective base
+   * URL).
+   *
+   * Honest states per category:
+   *   local providers  → LIVE probe at the provider's OWN endpoint
+   *                      (catalogue probePath + effective base URL).
+   *   cloud/gateway    → credential presence maps to "configured" (static,
+   *                      NO network on panel open) — never "connected". A
+   *                      real verdict requires an actual probe, which the
+   *                      SELECTED provider gets via connectionState() and
+   *                      every provider via provider/test.
+   * Selection is irrelevant for the list: every local provider reports its
+   * own live truth, so a selected provider can never inherit another
+   * provider's verdict. Results are secret-free by construction.
+   */
+  async listConnectionStates(): Promise<ConnectionStateEntry[]> {
+    return Promise.all(
+      this.listProviders().map(async (p): Promise<ConnectionStateEntry> => {
+        const base = { id: p.id, name: p.displayName };
+        const configured = await this.hasCredential(p.id);
+        const staticState = (): ConnectionStateEntry => ({
+          ...base,
+          state: configured ? "configured" : "unverified",
+          connected: false,
+        });
+        if (p.category !== "local") {
+          // Cloud/gateway/custom: honest STATIC state for the list. No
+          // network on panel open; credential presence is "configured".
+          return staticState();
+        }
+        if (!p.health.supportsTestConnection || !this.effectiveBaseUrl(p.id)) {
+          return staticState();
+        }
+        const result = await this.testConnection(p.id);
+        const state: ConnectionState =
+          result.state === "invalid-config" ? "unverified" : result.state;
+        return {
+          ...base,
+          state,
+          connected: state === "connected",
+          ...(result.message !== "Connected." ? { detail: result.message } : {}),
+          ...(result.latencyMs !== undefined
+            ? { latencyMs: result.latencyMs }
+            : {}),
+          checkedAt: new Date().toISOString(),
+        };
+      }),
+    );
+  }
+
+  /**
+   * Connection truth for ONE provider — the selected-provider path.
+   * Identical derivation to listConnectionStates for a single id.
+   */
+  async connectionState(providerId: string): Promise<ConnectionStateEntry> {
+    const provider = getCatalogProvider(providerId);
+    if (!provider) {
+      return {
+        id: providerId,
+        name: providerId,
+        state: "unverified",
+        connected: false,
+      };
+    }
+    const base = { id: providerId, name: provider.displayName };
+    const configured = await this.hasCredential(providerId);
+    if (
+      !provider.health.supportsTestConnection ||
+      !this.effectiveBaseUrl(providerId)
+    ) {
+      return {
+        ...base,
+        state: configured ? "configured" : "unverified",
+        connected: false,
+      };
+    }
+    const result = await this.testConnection(providerId);
+    const state: ConnectionState =
+      result.state === "invalid-config" ? "unverified" : result.state;
+    return {
+      ...base,
+      state,
+      connected: state === "connected",
+      ...(result.message !== "Connected." ? { detail: result.message } : {}),
+      ...(result.latencyMs !== undefined
+        ? { latencyMs: result.latencyMs }
+        : {}),
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   // ------------------------------------------------------------------

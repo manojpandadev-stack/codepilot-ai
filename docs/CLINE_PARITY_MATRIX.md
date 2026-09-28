@@ -1,5 +1,14 @@
 # CodePilot AI - Cline Parity Matrix
 
+> **Historical snapshot — workflow inspiration only.** This matrix was
+> written while `@cline/core` was still integrated (references below to
+> "via @cline/core" describe that removed design). The current tree is an
+> independent implementation: no Cline source, no `@cline/*` runtime
+> dependencies, no ClineCore instantiation — the runtime is CodePilot's
+> native `CodePilotRuntime` (see `docs/architecture/ARCHITECTURE.md`).
+> Cline remains a high-level product/workflow inspiration only. Retained
+> unchanged as an engineering record.
+
 **Date:** 2026-08-25  
 **CodePilot Baseline:** v0.1.0  
 **Target:** v0.2.0 (Cline-class capabilities)
@@ -32,17 +41,17 @@
 
 ## 2. Provider/Model System
 
-| Feature              | Cline Capability                     | CodePilot v0.1.0                                                                                                    | Gap | Priority | Proposed Implementation             | Dependencies | Tests Required          | Status                                                                           |
-| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | --- | -------- | ----------------------------------- | ------------ | ----------------------- | -------------------------------------------------------------------------------- |
-| Provider Abstraction | Unified Provider interface           | `ModelProvider` interface in @codepilot/model-gateway                                                               | ✅  | M2       | Create ModelProvider interface      | None         | 10 provider tests       | **M2 Complete**                                                                  |
-| Multiple Providers   | OpenAI, Anthropic, OpenAI-compatible | Ollama, OpenAI, OpenAI-compatible, Anthropic, Google Gemini, OpenRouter, LM Studio, DeepSeek, Mistral, xAI, Bedrock | ✅  | M2       | —                                   | Shared types | Provider contract tests | **M2 Complete** (11 built-in provider ids incl. native Anthropic/Gemini/Bedrock) |
-| Model Discovery      | List available models                | Dynamic discovery via ProviderRegistry (`listModels`)                                                               | ✅  | M2       | Extend to all providers             | None         | Model discovery tests   | **M2 Complete**                                                                  |
-| Model Selection      | UI model picker                      | WebView model picker backed by dynamic discovery                                                                    | ✅  | M2       | Add dynamic model picker to WebView | WebView UI   | Model selector tests    | **M2 Complete**                                                                  |
-| Streaming            | Real-time token streaming            | Streaming works                                                                                                     | ✅  | -        | Add token budgeting                 | None         | Streaming tests         | Already                                                                          |
-| Tool Calling         | Model tool calling capability        | via native tool dispatch (M4-gated)                                                                                 | ✅  | -        | Verify all models                   | None         | Tool calling tests      | Already                                                                          |
-| Vision               | Image input support                  | Not implemented                                                                                                     | ❌  | M9       | Add vision capability flag          | None         | Vision tests            | M9                                                                               |
-| Health Checks        | Provider health monitoring           | TTL-cached `healthCheck()` in registry + all providers                                                              | ✅  | M2       | Add healthCheck() method            | None         | Health check tests      | **M2 Complete**                                                                  |
-| Timeout              | Request timeouts                     | Per-provider timeoutMs + AbortSignal support                                                                        | ✅  | M2       | Add timeout to provider calls       | None         | Timeout tests           | **M2 Complete**                                                                  |
+| Feature              | Cline Capability                     | CodePilot v0.1.0                                                                                                                                                                                                                               | Gap | Priority | Proposed Implementation             | Dependencies | Tests Required                                                                          | Status                                                                           |
+| -------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | -------- | ----------------------------------- | ------------ | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Provider Abstraction | Unified Provider interface           | `ModelProvider` interface in @codepilot/model-gateway                                                                                                                                                                                          | ✅  | M2       | Create ModelProvider interface      | None         | 10 provider tests                                                                       | **M2 Complete**                                                                  |
+| Multiple Providers   | OpenAI, Anthropic, OpenAI-compatible | Ollama, OpenAI, OpenAI-compatible, Anthropic, Google Gemini, OpenRouter, LM Studio, DeepSeek, Mistral, xAI — Bedrock is **discovery-only** (no generation path) | ✅  | M2       | —                                   | Shared types | Provider contract tests                                                                 | **M2 Complete** (11 built-in provider ids; Bedrock discovery-only) |
+| Model Discovery      | List available models                | Dynamic discovery via ProviderRegistry (`listModels`)                                                                                                                                                                                          | ✅  | M2       | Extend to all providers             | None         | Model discovery tests                                                                   | **M2 Complete**                                                                  |
+| Model Selection      | UI model picker                      | WebView model picker backed by dynamic discovery                                                                                                                                                                                               | ✅  | M2       | Add dynamic model picker to WebView | WebView UI   | Model selector tests                                                                    | **M2 Complete**                                                                  |
+| Streaming            | Real-time token streaming            | Streaming works                                                                                                                                                                                                                                | ✅  | -        | Add token budgeting                 | None         | Streaming tests                                                                         | Already                                                                          |
+| Tool Calling         | Model tool calling capability        | via native tool dispatch (M4-gated)                                                                                                                                                                                                            | ✅  | -        | Verify all models                   | None         | Tool calling tests                                                                      | Already                                                                          |
+| Vision               | Image input support                  | Implemented — multimodal image input with model capability gating (`modelSupportsVision`), Ollama `images` payloads, OpenAI-compatible `image_url` payloads, and fail-closed behavior for unsupported models. Not claimed as 1:1 Cline parity. | ✅  | M9       | —                                   | None         | Vision tests (`catalogue.test.ts`, `runtime-vision-guard.test.ts`, provider wire tests) | **Implemented (v0.1.0)**                                                         |
+| Health Checks        | Provider health monitoring           | TTL-cached `healthCheck()` in registry + all providers                                                                                                                                                                                         | ✅  | M2       | Add healthCheck() method            | None         | Health check tests                                                                      | **M2 Complete**                                                                  |
+| Timeout              | Request timeouts                     | Per-provider timeoutMs + AbortSignal support                                                                                                                                                                                                   | ✅  | M2       | Add timeout to provider calls       | None         | Timeout tests                                                                           | **M2 Complete**                                                                  |
 
 ---
 
@@ -64,10 +73,10 @@
 | Run Build             | build execution           | via terminal           | ⚠️  | M3       | Add run_build tool                 | Terminal tool   | Build execution tests       | M3      |
 | Diagnostics           | diagnostics               | ✅                     | ✅  | -        | Already implemented                | None            | Diagnostics tests           | Already |
 | Workspace Info        | workspace_info            | via list_directory     | ⚠️  | M3       | Add workspace_info tool            | None            | Workspace info tests        | M3      |
-| Git Status            | git_status                | ✅                     | ✅  | -        | Already implemented                | GitEngine       | Git status tests            | Already |
-| Git Diff              | git_diff                  | ✅                     | ✅  | -        | Already implemented                | GitEngine       | Git diff tests              | Already |
-| Git Log               | git_log                   | ✅                     | ✅  | -        | Already implemented                | GitEngine       | Git log tests               | Already |
-| Git Branch            | git_branch                | ✅                     | ✅  | -        | Already implemented                | GitEngine       | Git branch tests            | Already |
+| Git Status            | git_status                | ✅                     | ✅  | -        | Model-callable builtin tool (`git_status`) | None            | `builtin-tools.test.ts` git block           | Already |
+| Git Diff              | git_diff                  | ✅                     | ✅  | -        | Model-callable builtin tool (`git_diff`, staged + path scoping) | None            | `builtin-tools.test.ts` git block           | Already |
+| Git Log               | git_log                   | ✅                     | ✅  | -        | Model-callable builtin tool (`git_log`, bounded count) | None            | `builtin-tools.test.ts` git block           | Already |
+| Git Branch            | git_branch                | via bash               | ⚠️  | M14      | Add git_branch tool            | None            | Git branch tests            | M14     |
 | Dependency Inspection | dependency_inspection     | via terminal           | ⚠️  | M3       | Add dependency_inspection tool     | None            | Dependency inspection tests | M3      |
 | Workspace Boundaries  | Enforce workspace root    | PolicyEngine validates | ✅  | -        | Verify all tools enforce           | PolicyEngine    | Boundary tests              | Already |
 
@@ -135,7 +144,7 @@
 | Folders             | Folder context            | ✅                 | ✅  | -        | Already implemented                | ContextEngine | Folder context tests      | Already |
 | Problems            | Diagnostics context       | ✅                 | ✅  | -        | Already implemented                | ContextEngine | Diagnostics tests         | Already |
 | Workspace Structure | Include directory tree    | via list_directory | ⚠️  | M8       | Add workspace structure to context | ContextEngine | Workspace structure tests | M8      |
-| Git Diff            | Include recent changes    | ✅                 | ✅  | -        | Already implemented                | GitEngine     | Git diff context tests    | Already |
+| Git Diff            | Include recent changes    | ✅                 | ✅  | -        | `@diff` composer chip; host-resolved bounded diff at send (Phase 6-7a)     | GitEngine     | `context-grounding.test.ts` (7)   | Already |
 | Task History        | Include previous messages | via ContextEngine  | ⚠️  | M8       | Add task history to context        | ContextEngine | Task history tests        | M8      |
 | Prioritization      | Priority-based selection  | ✅                 | ✅  | -        | Already implemented                | ContextEngine | Priority tests            | Already |
 | Token Budgeting     | Limit context tokens      | ✅                 | ✅  | -        | Already implemented                | ContextEngine | Token budgeting tests     | Already |
@@ -211,7 +220,7 @@
 | ---------------- | ----------------------------------- | ---------------- | --- | -------- | --------------------------- | ------------- | ---------------------- | ------- |
 | Filename Search  | search files by name                | ✅               | ✅  | -        | Already implemented         | RAGEngine     | Filename search tests  | M13     |
 | Text Search      | search file content                 | ✅               | ✅  | -        | Already implemented         | RAGEngine     | Text search tests      | M13     |
-| Symbol Search    | search symbols (functions, classes) | None             | ❌  | M13      | Add symbol indexing         | RAGEngine     | Symbol search tests    | M13     |
+| Symbol Search    | search symbols (functions, classes) | Per-file `inspect_symbols` outline (regex provider, line ranges); no workspace-wide index | ❌  | M13      | Workspace symbol index (RAGEngine) on top of `inspect_symbols` | RAGEngine     | Symbol search tests (per-file done: `code-structure.test.ts`) | Partial (Phase 4) |
 | Dependency Graph | dependency analysis                 | None             | ❌  | M13      | Add dependency graph        | RAGEngine     | Dependency graph tests | M13     |
 | Import Graph     | import analysis                     | None             | ❌  | M13      | Add import graph            | RAGEngine     | Import graph tests     | M13     |
 | Related Files    | find related files                  | None             | ❌  | M13      | Add related files algorithm | RAGEngine     | Related files tests    | M13     |
@@ -325,9 +334,9 @@
 
 | Feature           | Cline Capability          | CodePilot v0.1.0 | Gap | Priority | Proposed Implementation    | Dependencies | Tests Required    | Status  |
 | ----------------- | ------------------------- | ---------------- | --- | -------- | -------------------------- | ------------ | ----------------- | ------- |
-| Unit Tests        | Unit test coverage        | ✅               | ✅  | -        | 521+ tests exist           | None         | Unit tests        | Already |
+| Unit Tests        | Unit test coverage        | ✅               | ✅  | -        | 2165+ tests exist          | None         | Unit tests        | Already |
 | Integration Tests | Integration tests         | via vitest       | ⚠️  | M20      | Add more integration tests | None         | Integration tests | M20     |
-| Regression Tests  | Critical regression tests | ✅               | ✅  | -        | 521+ tests                 | None         | Regression tests  | Already |
+| Regression Tests  | Critical regression tests | ✅               | ✅  | -        | 2165+ tests                | None         | Regression tests  | Already |
 | E2E Tests         | WebView E2E               | None             | ❌  | M20      | Add WebView E2E tests      | None         | E2E tests         | M20     |
 
 ---

@@ -61,6 +61,13 @@ export interface TerminalSessionOptions {
   args?: string[];
   /** Raw command string fed to the shell via stdin (shell mode). */
   stdin?: string;
+  /**
+   * Keep the stdin pipe OPEN after the initial write (interactive shells).
+   * Default false: the pipe ends immediately so the child can never block
+   * waiting for input. When true, `writeStdin` feeds the running process
+   * line by line (REPLs, prompts) until kill/dispose.
+   */
+  keepStdinOpen?: boolean;
   /** Working directory (defaults to process cwd). */
   cwd?: string;
   /** Extra environment layered over the sanitized base env. */
@@ -138,6 +145,8 @@ export class TerminalSession {
   private errorMessage: string | null = null;
   private disposed = false;
   private abortHandler: (() => void) | null = null;
+  /** True when the child has a stdin pipe (initial write or interactive). */
+  private stdinPipe = false;
 
   constructor(options: TerminalSessionOptions) {
     this.options = options;
@@ -169,25 +178,38 @@ export class TerminalSession {
     const child = spawn(command, args, {
       cwd: cwd ?? process.cwd(),
       env: this.buildEnv(env),
-      shell: process.platform === "win32" && /\\.(cmd|bat)$/i.test(command),
+      shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(command),
       windowsHide: true,
       // Shell mode keeps a stdin pipe open so the shell reads the script
       // from stdin (PowerShell source travels there — never the command line).
-      ...(stdin !== undefined
+      // Interactive sessions (keepStdinOpen) keep the pipe for writeStdin.
+      ...(stdin !== undefined || this.options.keepStdinOpen === true
         ? { stdio: ["pipe", "pipe", "pipe"] as const }
         : {}),
     });
     this.child = child;
     this.status = "running";
 
-    // Shell contract: write the raw command to stdin, then end the pipe so
-    // the child can never block waiting for input. EPIPE (early exit) is
-    // swallowed — the close handler still reports the real outcome.
-    if (stdin !== undefined && child.stdin) {
+    // Shell contract: write the raw command to stdin. One-shot sessions end
+    // the pipe so the child can never block waiting for input (EPIPE on
+    // early exit is swallowed — the close handler still reports the real
+    // outcome). Interactive sessions keep the pipe open for writeStdin.
+    // NOTE: spawn defaults to piped stdio, so child.stdin existing is NOT
+    // evidence of a requested pipe — track the flag from our own config.
+    if (stdin !== undefined || this.options.keepStdinOpen === true) {
+      this.stdinPipe = true;
+    }
+    if (child.stdin) {
       child.stdin.on("error", () => {
         // Early exit — ignored; close carries the real status.
       });
-      child.stdin.end(stdin, "utf8");
+      if (stdin !== undefined) {
+        if (this.options.keepStdinOpen === true) {
+          child.stdin.write(stdin, "utf8");
+        } else {
+          child.stdin.end(stdin, "utf8");
+        }
+      }
     }
 
     const wire = (
@@ -373,6 +395,26 @@ export class TerminalSession {
   kill(): void {
     this.cancelled = true;
     this.terminate("SIGKILL");
+  }
+
+  /** True while the child has an open stdin pipe (interactive sessions). */
+  get stdinOpen(): boolean {
+    return this.stdinPipe && this.status === "running" && !this.disposed;
+  }
+
+  /**
+   * Write one payload to the running process's stdin (interactive sessions
+   * only — the session must have been started with keepStdinOpen). Throws
+   * when there is no open stdin channel.
+   */
+  writeStdin(text: string): void {
+    if (!this.stdinOpen || !this.child?.stdin) {
+      throw new Error(
+        "TerminalSession.writeStdin: no open stdin channel " +
+          "(start the session with keepStdinOpen)",
+      );
+    }
+    this.child.stdin.write(text, "utf8");
   }
 
   // ---------------------------------------------------------------------

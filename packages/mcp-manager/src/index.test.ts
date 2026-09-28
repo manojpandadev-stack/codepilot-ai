@@ -11,6 +11,8 @@ import {
   MCPApprovalManager,
   createToolId,
   parseToolId,
+  validateMcpServerUrl,
+  DEFAULT_MCP_CALL_TIMEOUT_MS,
 } from "./index.js";
 
 // ============================================================================
@@ -766,5 +768,257 @@ describe("MCP Full Approval Lifecycle", () => {
     expect(resolution.reason).toContain("Cancelled");
 
     am.dispose();
+  });
+});
+
+// ============================================================================
+// Execution deadline and cancellation (fake in-memory clients, no network)
+// ============================================================================
+
+describe("MCP execution deadline and cancellation", () => {
+  function managerWithFakeClient(
+    behavior: "hang" | "ok",
+  ): CodePilotMCPManager {
+    const manager = new CodePilotMCPManager({ approvalTimeoutMs: 5000 });
+    const internals = manager as unknown as {
+      servers: Map<string, { name: string; enabled: boolean; transport: string; timeout?: number }>;
+      clients: Map<string, { callTool: (req: unknown) => Promise<unknown>; readResource: (req: unknown) => Promise<unknown> }>;
+      tools: Array<{
+        id: string;
+        name: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+        serverName: string;
+      }>;
+    };
+    internals.servers.set("s1", {
+      name: "s1",
+      enabled: true,
+      transport: "stdio",
+    });
+    internals.tools.push({
+      id: "s1:slow",
+      name: "slow",
+      description: "hangs or answers",
+      inputSchema: {},
+      serverName: "s1",
+    });
+    const hang = new Promise<never>(() => undefined);
+    internals.clients.set("s1", {
+      callTool: behavior === "hang" ? () => hang : async () => ({ content: [{ type: "text", text: "ok" }] }),
+      readResource: behavior === "hang" ? () => hang : async () => ({ contents: [] }),
+    });
+    return manager;
+  }
+
+  it("times out a hung tool call instead of hanging", async () => {
+    const manager = managerWithFakeClient("hang");
+    const started = Date.now();
+    const out = await manager.executeApprovedTool("s1:slow", {}, { timeoutMs: 50 });
+    expect(out.isError).toBe(true);
+    expect(JSON.stringify(out.content)).toContain("timed out");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    const audit = manager
+      .getAuditLog()
+      .find((e) => e.action === "timeout");
+    expect(audit?.tool).toBe("slow");
+    await manager.close();
+  });
+
+  it("uses the server timeout when no override is given", async () => {
+    const manager = managerWithFakeClient("hang");
+    (
+      manager as unknown as {
+        servers: Map<string, { timeout?: number }>;
+      }
+    ).servers.get("s1")!.timeout = 40;
+    const out = await manager.executeApprovedTool("s1:slow", {});
+    expect(out.isError).toBe(true);
+    expect(JSON.stringify(out.content)).toContain("40ms");
+    await manager.close();
+  });
+
+  it("aborts an in-flight call on signal", async () => {
+    const manager = managerWithFakeClient("hang");
+    const controller = new AbortController();
+    const pending = manager.executeApprovedTool("s1:slow", {}, { signal: controller.signal });
+    controller.abort();
+    const out = await pending;
+    expect(out.isError).toBe(true);
+    expect(JSON.stringify(out.content)).toContain("cancelled");
+    await manager.close();
+  });
+
+  it("honors a pre-aborted signal without calling", async () => {
+    const manager = managerWithFakeClient("ok");
+    const controller = new AbortController();
+    controller.abort();
+    const out = await manager.executeApprovedTool("s1:slow", {}, { signal: controller.signal });
+    expect(out.isError).toBe(true);
+    await manager.close();
+  });
+
+  it("applies the same deadline to resource reads", async () => {
+    const manager = managerWithFakeClient("hang");
+    const out = await manager.readResource("s1", "res://x", { timeoutMs: 40 });
+    expect(out.isError).toBe(true);
+    await manager.close();
+  });
+
+  it("default deadline constant is sane", () => {
+    expect(DEFAULT_MCP_CALL_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+  });
+});
+
+// ============================================================================
+// readResource approval parity
+// ============================================================================
+
+describe("MCP readResource approval parity", () => {
+  function managerWithResource(): CodePilotMCPManager {
+    const manager = new CodePilotMCPManager({ approvalTimeoutMs: 5000 });
+    const internals = manager as unknown as {
+      servers: Map<string, { name: string; enabled: boolean; transport: string }>;
+      clients: Map<string, { readResource: (req: unknown) => Promise<unknown> }>;
+    };
+    internals.servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
+    internals.clients.set("s1", {
+      readResource: async () => ({ contents: [{ uri: "res://a", text: "hello" }] }),
+    });
+    return manager;
+  }
+
+  it("returns a pending approval request when permission is approval", async () => {
+    const manager = managerWithResource();
+    manager.setToolPermission("server:s1", "approval");
+    const out = await manager.readResource("s1", "res://a");
+    expect(out.isError).toBe(false);
+    expect(out.contents).toEqual([]);
+    expect(out.approvalRequest?.toolName).toBe("resource");
+    expect(typeof out.approvalPromise?.then).toBe("function");
+    manager.getApprovalManager().cancelAll();
+    await manager.close();
+  });
+
+  it("reads directly when force-approved", async () => {
+    const manager = managerWithResource();
+    manager.setToolPermission("server:s1", "approval");
+    const out = await manager.readResource("s1", "res://a", { forceApproved: true });
+    expect(out.isError).toBe(false);
+    expect(out.contents).toHaveLength(1);
+    await manager.close();
+  });
+
+  it("still blocks when permission is blocked", async () => {
+    const manager = managerWithResource();
+    manager.setToolPermission("server:s1", "blocked");
+    const out = await manager.readResource("s1", "res://a");
+    expect(out.isError).toBe(true);
+    await manager.close();
+  });
+});
+
+// ============================================================================
+// MCP server URL validation (SSRF guard, injected resolver — no real DNS)
+// ============================================================================
+
+describe("validateMcpServerUrl", () => {
+  const loopback = async () => [{ address: "127.0.0.1" }];
+  const metadata = async () => [{ address: "169.254.169.254" }];
+  const failing = async () => {
+    throw new Error("ENOTFOUND");
+  };
+
+  it("accepts loopback servers (explicit local config)", async () => {
+    expect(
+      await validateMcpServerUrl("http://127.0.0.1:8787/mcp", loopback),
+    ).toEqual({ ok: true });
+    expect(await validateMcpServerUrl("http://localhost:3000/x", loopback)).toEqual({
+      ok: true,
+    });
+  });
+
+  it("rejects metadata endpoints textually and via DNS", async () => {
+    expect(
+      await validateMcpServerUrl("http://169.254.169.254/latest", loopback),
+    ).toMatchObject({ ok: false });
+    expect(
+      await validateMcpServerUrl("http://example.internal/", metadata),
+    ).toMatchObject({ ok: false });
+    expect(
+      await validateMcpServerUrl(
+        "http://metadata.google.internal/compute",
+        loopback,
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("rejects credentials in the URL and non-http protocols", async () => {
+    expect(
+      await validateMcpServerUrl("http://user:pass@example.com/", loopback),
+    ).toMatchObject({ ok: false });
+    expect(
+      await validateMcpServerUrl("ftp://example.com/x", loopback),
+    ).toMatchObject({ ok: false });
+    expect(await validateMcpServerUrl("not a url", loopback)).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("fails closed when DNS resolution fails", async () => {
+    expect(
+      await validateMcpServerUrl("http://example.com/", failing),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("allows innocent public hostnames", async () => {
+    const flip = async () => [{ address: "93.184.216.34" }];
+    expect(await validateMcpServerUrl("https://example.com/mcp", flip)).toEqual({
+      ok: true,
+    });
+  });
+});
+
+// ============================================================================
+// Audit secret redaction
+// ============================================================================
+
+describe("MCP audit secret redaction", () => {
+  it("scrubs secret-shaped text from audit details", async () => {
+    const manager = new CodePilotMCPManager({ approvalTimeoutMs: 5000 });
+    const internals = manager as unknown as {
+      servers: Map<string, { name: string; enabled: boolean; transport: string }>;
+      clients: Map<string, { callTool: (req: unknown) => Promise<unknown> }>;
+      tools: Array<{
+        id: string;
+        name: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+        serverName: string;
+      }>;
+    };
+    internals.servers.set("s1", { name: "s1", enabled: true, transport: "stdio" });
+    internals.tools.push({
+      id: "s1:boom",
+      name: "boom",
+      description: "fails with secrets",
+      inputSchema: {},
+      serverName: "s1",
+    });
+    internals.clients.set("s1", {
+      callTool: async () => {
+        throw new Error("auth failed for key sk-live-1111222233334444");
+      },
+    });
+    const out = await manager.executeApprovedTool("s1:boom", {});
+    expect(out.isError).toBe(true);
+    const errors = manager
+      .getAuditLog()
+      .filter((e) => e.action === "error");
+    expect(errors.length).toBeGreaterThan(0);
+    for (const e of errors) {
+      expect(e.detail ?? "").not.toContain("sk-live-1111222233334444");
+    }
+    await manager.close();
   });
 });

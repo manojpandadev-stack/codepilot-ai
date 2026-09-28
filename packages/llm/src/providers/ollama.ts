@@ -65,12 +65,35 @@ function toWireContent(content: LlmMessage["content"]): string {
         `[tool_result ${block.name ?? block.tool_use_id}${block.is_error ? " ERROR" : ""}] ${block.content.slice(0, 6000)}`,
       );
     } else if (block.type === "image") {
-      // Simplified text path: mark the image explicitly so it is never
-      // silently dropped (native providers carry the real bytes).
+      // Marker only: real bytes ride via the top-level `images` field
+      // (see toWireImageList) — never silently dropped.
+      if (
+        typeof block.dataBase64 !== "string" ||
+        block.dataBase64.length === 0
+      ) {
+        throw new Error(
+          "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+        );
+      }
       parts.push(`[image ${block.mime}]`);
     }
   }
   return parts.join("\n");
+}
+
+function toWireImageList(content: LlmMessage["content"]): string[] | undefined {
+  if (typeof content === "string") return undefined;
+  const images: string[] = [];
+  for (const block of content) {
+    if (block.type !== "image") continue;
+    if (typeof block.dataBase64 !== "string" || block.dataBase64.length === 0) {
+      throw new Error(
+        "image block has no inline bytes (fileRef-only blocks must be resolved to bytes by the host before the provider request)",
+      );
+    }
+    images.push(block.dataBase64);
+  }
+  return images.length > 0 ? images : undefined;
 }
 
 function toWireMessages(request: LlmRequest): Array<Record<string, unknown>> {
@@ -79,7 +102,13 @@ function toWireMessages(request: LlmRequest): Array<Record<string, unknown>> {
     out.push({ role: "system", content: request.systemPrompt });
   }
   for (const m of request.messages) {
-    out.push({ role: m.role, content: toWireContent(m.content) });
+    const wire: Record<string, unknown> = {
+      role: m.role,
+      content: toWireContent(m.content),
+    };
+    const images = toWireImageList(m.content);
+    if (images) wire.images = images;
+    out.push(wire);
   }
   return out;
 }

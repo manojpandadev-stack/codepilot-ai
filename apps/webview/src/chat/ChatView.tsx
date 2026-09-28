@@ -16,6 +16,7 @@ import {
   IconWarning,
 } from "../lib/icons";
 import { StatusDot } from "../lib/ui";
+import type { PlanView } from "../lib/messages";
 import type { Message, ToolEvent, M4ApprovalRequest } from "../types";
 import {
   M4ApprovalCard,
@@ -193,6 +194,72 @@ export interface ChatViewProps {
   healingOutcome: ReactNode;
   /** Optional continuity strip (M12 v5) rendered above the transcript. */
   continuityBar?: ReactNode;
+  /** Phase 2: structured plan stepper, rendered above the transcript. */
+  planCard?: ReactNode;
+}
+
+/**
+ * Phase 2 — structured execution plan stepper. Rendered from the host-pushed
+ * `plan/updated` payload after validation in lib/messages (never raw).
+ */
+export function PlanCard({ plan }: { plan: PlanView }) {
+  const done = plan.steps.filter((s) => s.status === "completed").length;
+  return (
+    <div className="px-3 pt-3">
+      <div className="rounded border border-vscode-border bg-vscode-editor-bg px-2.5 py-2 text-[11px] space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold text-vscode-fg truncate">
+            Plan: {plan.objective}
+          </span>
+          <span className="text-[9px] text-vscode-desc flex-shrink-0">
+            {done}/{plan.steps.length}
+          </span>
+        </div>
+        <ol className="space-y-1">
+          {plan.steps.map((step) => (
+            <li key={step.id} className="flex items-start gap-1.5">
+              <span
+                aria-hidden="true"
+                className={
+                  step.status === "completed"
+                    ? "text-green-400"
+                    : step.status === "failed"
+                      ? "text-red-400"
+                      : step.status === "running"
+                        ? "text-blue-400"
+                        : "text-vscode-desc"
+                }
+              >
+                {step.status === "completed"
+                  ? "[x]"
+                  : step.status === "failed"
+                    ? "[!]"
+                    : step.status === "running"
+                      ? "[~]"
+                      : "[ ]"}
+              </span>
+              <span
+                className={
+                  step.status === "running"
+                    ? "text-vscode-fg font-medium"
+                    : step.status === "completed"
+                      ? "text-vscode-desc line-through"
+                      : "text-vscode-fg"
+                }
+              >
+                {step.title}
+              </span>
+              {step.attempts > 1 && (
+                <span className="text-[9px] text-orange-300 flex-shrink-0">
+                  attempt {step.attempts}
+                </span>
+              )}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
 }
 
 export function ChatView({
@@ -208,6 +275,7 @@ export function ChatView({
   executionStatus,
   healingOutcome,
   continuityBar,
+  planCard,
 }: ChatViewProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -236,6 +304,7 @@ export function ChatView({
       {executionStatus}
       {healingOutcome}
       {continuityBar}
+      {planCard}
       <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
         {messages.length === 0 &&
         !streamingText &&

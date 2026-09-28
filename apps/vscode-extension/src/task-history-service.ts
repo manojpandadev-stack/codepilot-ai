@@ -24,7 +24,11 @@
  *   → PathGuard). This module only enforces checkpoint OWNERSHIP checks.
  */
 
-import type { TaskStore, PersistedTask } from "@codepilot/agent-runtime";
+import type {
+  TaskStore,
+  PersistedTask,
+  TaskPlan,
+} from "@codepilot/agent-runtime";
 import type { Checkpoint, TrackedChange } from "@codepilot/changeset-engine";
 import { computeDiff } from "@codepilot/changeset-engine";
 
@@ -57,6 +61,11 @@ export interface TaskSummary {
   checkpointCount: number;
   hasErrors: boolean;
   resultExcerpt?: string;
+  /** Token usage recorded for this task (agentState counters). */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Catalogue-ESTIMATED USD cost — absent when pricing was unavailable. */
+  estimatedCostUsd?: number;
 }
 
 export interface TimelineEvent {
@@ -107,6 +116,8 @@ export interface TaskCheckpointView {
 export interface TaskDetails extends TaskSummary {
   timeline: TimelineEvent[];
   files: TaskFileSummary;
+  /** Structured execution plan (Phase 2), when the task has one. */
+  plan?: TaskPlan;
   checkpoints: TaskCheckpointView[];
   /** Bounded message excerpts (oldest→newest, capped). */
   messages: Array<{ role: string; excerpt: string; timestampMs: number }>;
@@ -308,6 +319,7 @@ interface AgentStateCounters {
   filesChanged?: string[];
   inputTokens?: number;
   outputTokens?: number;
+  estimatedCostUsd?: number;
   lastError?: string;
 }
 
@@ -350,6 +362,11 @@ function readCounters(task: PersistedTask): AgentStateCounters {
       : {}),
     ...(typeof c.outputTokens === "number"
       ? { outputTokens: c.outputTokens }
+      : {}),
+    ...(typeof c.estimatedCostUsd === "number" &&
+    Number.isFinite(c.estimatedCostUsd) &&
+    c.estimatedCostUsd >= 0
+      ? { estimatedCostUsd: c.estimatedCostUsd }
       : {}),
     ...(typeof c.lastError === "string"
       ? { lastError: c.lastError.slice(0, 500) }
@@ -458,6 +475,7 @@ export class TaskHistoryService {
         : {}),
       timeline,
       files,
+      ...(record.plan ? { plan: record.plan } : {}),
       checkpoints,
       messages,
       tools,
@@ -476,6 +494,7 @@ export class TaskHistoryService {
     };
     if (
       summary.status === "interrupted" ||
+      summary.status === "paused" ||
       (live == null && summary.status === "running")
     ) {
       details.interruption = this.interruptionInfo(
@@ -1036,7 +1055,8 @@ export class TaskHistoryService {
       record.status === "completed" ||
       record.status === "failed" ||
       record.status === "cancelled" ||
-      record.status === "interrupted"
+      record.status === "interrupted" ||
+      record.status === "paused"
         ? Math.max(0, record.updatedAtMs - record.createdAtMs)
         : undefined;
     const toolCallCount =
@@ -1075,6 +1095,15 @@ export class TaskHistoryService {
       filesChangedCount,
       checkpointCount: checkpoints.length,
       hasErrors: errors.length > 0 || !!counters.lastError,
+      ...(typeof counters.inputTokens === "number"
+        ? { inputTokens: counters.inputTokens }
+        : {}),
+      ...(typeof counters.outputTokens === "number"
+        ? { outputTokens: counters.outputTokens }
+        : {}),
+      ...(typeof counters.estimatedCostUsd === "number"
+        ? { estimatedCostUsd: counters.estimatedCostUsd }
+        : {}),
       ...(result ? { resultExcerpt: clean(result, 500) } : {}),
     };
   }

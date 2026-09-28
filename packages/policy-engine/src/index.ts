@@ -36,6 +36,7 @@ const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   git_status: "read",
   git_log: "read",
   git_show: "read",
+  read_tool_output: "read",
 
   // Write tools
   write_file: "write",
@@ -70,6 +71,10 @@ const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   // MCP tools
   ask_question: "read",
   skills: "read",
+  // Structured task-plan metadata — read-class (allowed in plan mode).
+  plan: "read",
+  // Structural outline of workspace files (read-only; allowed in plan mode).
+  inspect_symbols: "read",
 };
 
 // MCP tool default classification by tool name pattern

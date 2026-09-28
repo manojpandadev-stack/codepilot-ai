@@ -47,7 +47,7 @@ docker compose ps
 ```bash
 # Build all packages
 for pkg in shared agent-runtime model-gateway policy-engine context-engine \
-  event-engine memory-engine tool-engine git-engine repository-engine \
+  event-engine memory-engine tool-engine git-engine \\
   rag-engine mcp-manager; do
   (cd packages/$pkg && npx tsc -p tsconfig.json)
 done
@@ -173,7 +173,7 @@ netstat -ano | grep :8081
 ```bash
 # Clean and rebuild
 for pkg in shared agent-runtime model-gateway policy-engine context-engine \
-  event-engine memory-engine tool-engine git-engine repository-engine \
+  event-engine memory-engine tool-engine git-engine \\
   rag-engine mcp-manager; do
   (cd packages/$pkg && rm -rf dist && npx tsc -p tsconfig.json)
 done

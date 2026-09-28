@@ -15,6 +15,12 @@
  * capability metadata, configuration, caching).
  */
 
+// ---- Tool-calling truth (CodePilot LLM catalogue tri-state) ----
+export type {
+  LlmToolCallingSupport,
+} from "@codepilot/llm";
+export { modelToolCallingSupport } from "@codepilot/llm";
+
 // ---- Core types and interface ----
 export type {
   ModelProvider,

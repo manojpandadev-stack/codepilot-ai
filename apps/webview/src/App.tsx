@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { DiffViewer, type FileChange } from "./DiffViewer";
-import { ChatView } from "./chat/ChatView";
+import { ChatView, PlanCard } from "./chat/ChatView";
 import { ContinuityBar } from "./chat/ContinuityBar";
 import { Composer } from "./chat/Composer";
 import { ProviderSelector } from "./ProviderSelector";
@@ -63,10 +63,12 @@ import type {
 } from "./types";
 import {
   applyDiffResult,
+  reconcileDiffStatus,
   parseSlashCommand,
   SLASH_COMMANDS,
   normalizeModelList,
-  normalizeToolList,
+  normalizeProviderList,
+  type ProviderListPayload,
   normalizePluginList,
   normalizePluginDetails,
   validatePluginAction,
@@ -89,10 +91,15 @@ import {
   normalizeDashboard,
   normalizeDiagnosticSummary,
   validateMetricsAction,
+  normalizeUsageSummary,
+  formatUsageCost,
+  validateUsageAction,
+  type UsageSummaryPayload,
   buildDashboardFilterPayload,
   formatMetricValue,
   normalizeTaskHistoryList,
   normalizeTaskDetails,
+  normalizeTaskPlan,
   validateHistoryAction,
   normalizeRunCompare,
   normalizeCheckpointCompare,
@@ -109,12 +116,17 @@ import {
   addFolderEntriesToContext,
   addImagesToContext,
   addUrlToContext,
+  addDiffToContext,
+  addTerminalToContext,
+  appendToolEvent,
   setProblemsInContext,
   setSelectionInContext,
   removeContextEntry,
   buildChatSendPayload,
   buildRetryPayload,
   createRequestId,
+  createStableId,
+  classifyToolRegistryState,
   validateContinuityState,
   validateTerminalOutput,
   appendTerminalOutput,
@@ -129,7 +141,10 @@ import {
   reduceHealingState,
   type HealingStatusState,
   type DiffResultKind,
+  type DiffStatusPayload,
+  type ToolRegistryState,
   type ModelInfoLite,
+  type ProviderInfo,
   type CatalogProviderLite,
   type ProviderStatusLite,
   type ProviderHealthLite,
@@ -149,6 +164,7 @@ import {
   type DiagnosticSummary,
   type TaskSummary,
   type TaskDetails,
+  type PlanView,
   type TaskHistoryFilter,
   type CompareRow,
   type CheckpointCompareView,
@@ -1269,7 +1285,8 @@ function TaskHistoryRow({
         </button>
         {(task.status === "interrupted" ||
           task.status === "running" ||
-          task.status === "failed") && (
+          task.status === "failed" ||
+          task.status === "paused") && (
           <button
             onClick={onResume}
             className="text-[10px] text-vscode-btn-fg hover:underline"
@@ -1362,7 +1379,8 @@ function HistoryDetailsView({
   const canResume =
     details.status === "interrupted" ||
     details.status === "running" ||
-    details.status === "failed";
+    details.status === "failed" ||
+    details.status === "paused";
   const terminal = details.status !== "running";
   return (
     <div className="rounded border border-vscode-text-link bg-vscode-editor-bg px-3 py-2 space-y-2">
@@ -1382,6 +1400,39 @@ function HistoryDetailsView({
         </span>
       </div>
 
+      {details.plan && details.plan.steps.length > 0 && (
+        <div className="rounded border border-vscode-border bg-vscode-editor-bg px-2 py-1.5 text-[10px] space-y-1">
+          <div className="font-semibold text-vscode-fg">
+            Plan: {details.plan.objective.slice(0, 120)}
+          </div>
+          <ol className="space-y-0.5">
+            {details.plan.steps.map((s) => (
+              <li key={s.id} className="flex items-center gap-1.5">
+                <span
+                  className={
+                    s.status === "completed"
+                      ? "text-green-400"
+                      : s.status === "failed"
+                        ? "text-red-400"
+                        : s.status === "running"
+                          ? "text-blue-400"
+                          : "text-vscode-desc"
+                  }
+                >
+                  {s.status === "completed"
+                    ? "[x]"
+                    : s.status === "failed"
+                      ? "[!]"
+                      : s.status === "running"
+                        ? "[>]"
+                        : "[ ]"}
+                </span>
+                <span className="text-vscode-fg truncate">{s.title}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
       {details.interruption && (
         <div className="rounded border border-orange-800 bg-orange-950 px-2 py-1.5 text-[10px]">
           <div className="font-semibold text-orange-300 mb-0.5">
@@ -1724,6 +1775,19 @@ function HistoryDetailsView({
           <dd className="text-vscode-fg">{details.metrics.checkpointCount}</dd>
           <dt className="text-vscode-desc">Messages</dt>
           <dd className="text-vscode-fg">{details.metrics.messageCount}</dd>
+          <dt className="text-vscode-desc">Tokens (in→out)</dt>
+          <dd className="text-vscode-fg font-mono">
+            {typeof details.inputTokens === "number" &&
+            typeof details.outputTokens === "number"
+              ? `${details.inputTokens.toLocaleString()}→${details.outputTokens.toLocaleString()}`
+              : "—"}
+          </dd>
+          <dt className="text-vscode-desc">Est. cost</dt>
+          <dd className="text-vscode-fg font-mono">
+            {typeof details.estimatedCostUsd === "number"
+              ? `$${details.estimatedCostUsd.toFixed(4)} (est.)`
+              : "—"}
+          </dd>
         </dl>
       </HistorySection>
 
@@ -1867,7 +1931,16 @@ export function App() {
     }>
   >([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Phase 2: structured execution plan pushed by the host (plan/updated).
+  const [taskPlan, setTaskPlan] = useState<PlanView | null>(null);
   const [toolRegistry, setToolRegistry] = useState<ToolRegistryEntry[]>([]);
+  /**
+   * Tool-registry state machine (never show "0 tools" for a not-ready or
+   * failed registry): loading → runtime-not-ready → available | error.
+   * Classification logic lives in lib/messages (pure, unit-tested).
+   */
+  const [toolRegistryState, setToolRegistryState] =
+    useState<ToolRegistryState>("loading");
   const [lastPrompt, setLastPrompt] = useState("");
   // Composer context: structured attachments separate from user text.
   const [composerContext, setComposerContext] = useState<ComposerContext>(
@@ -1881,6 +1954,13 @@ export function App() {
     totalCost?: number;
   } | null>(null);
   const [fileChanges, setFileChanges] = useState<FileChange[]>([]);
+  /** Live per-provider connection state (host `provider/list`, authoritative). */
+  const [providerConnections, setProviderConnections] = useState<
+    ProviderInfo[]
+  >([]);
+  /** Fresh host verdict for the SELECTED provider (BUG 1 header input). */
+  const [providerSelectedState, setProviderSelectedState] =
+    useState<ProviderInfo | null>(null);
   const [pendingApproval, setPendingApproval] = useState(false);
   const [mcpApprovals, setMcpApprovals] = useState<
     Array<{
@@ -1978,6 +2058,10 @@ export function App() {
     mode: "all",
   });
   const [exported, setExported] = useState<DiagnosticSummary | null>(null);
+  // Phase 3 — host usage/cost ledger (usage/summary). Cost stays honest:
+  // null when the ledger has no pricing data (never rendered as $0.00).
+  const [usagePayload, setUsagePayload] =
+    useState<UsageSummaryPayload | null>(null);
   const [copied, setCopied] = useState(false);
   const [metricsSections, setMetricsSections] = useState<
     Record<string, boolean>
@@ -2051,7 +2135,7 @@ export function App() {
   const [skillsSkipped, setSkillsSkipped] = useState<
     Array<{ path: string; reason: string }>
   >([]);
-  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(true);
   const [skillError, setSkillError] = useState<string | null>(null);
   const [skillNotice, setSkillNotice] = useState<string | null>(null);
   const [skillQuery, setSkillQuery] = useState("");
@@ -2060,7 +2144,7 @@ export function App() {
   );
   // M14 teams (backend-authoritative; event-driven updates, no polling).
   const [teams, setTeams] = useState<TeamView[]>([]);
-  const [teamsLoading, setTeamsLoading] = useState(false);
+  const [teamsLoading, setTeamsLoading] = useState(true);
   const [teamError, setTeamError] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [teamDetails, setTeamDetails] = useState<TeamView | null>(null);
@@ -2147,7 +2231,6 @@ export function App() {
     null,
   );
   const lastDiffActionRef = useRef<{ kind: DiffResultKind } | null>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
   // Mirrors selectedTaskId for use inside the (long-lived) message listener
   const selectedTaskIdRef = useRef<string | null>(null);
   // Mirrors fileChanges for use inside the (long-lived) message listener
@@ -2212,7 +2295,7 @@ export function App() {
       setMessages((prev) => [
         ...prev,
         {
-          id: `assistant-${Date.now()}`,
+          id: createStableId("assistant"),
           role: "assistant",
           content,
           timestamp: Date.now(),
@@ -2237,19 +2320,26 @@ export function App() {
       switch (msg.type) {
         case "chat/stream_delta":
           if (isStaleEvent(msg.payload?.requestId)) break;
+          // CHAT UX: first real text token flips the label to Generating…
+          // (from an actual runtime delta — never a fabricated percentage).
+          if (!streamingTextRef.current) setStatusMessage("Generating…");
           appendStreamingText(msg.payload.text ?? "");
           break;
-        case "tool/started":
+        case "tool/started": {
           if (isStaleEvent(msg.payload?.requestId)) break;
-          setToolEvents((prev) => [
-            ...prev,
-            {
+          // Idempotent: duplicate/replayed events must not create a second
+          // card (same React key) or resurrect one that already completed.
+          setToolEvents((prev) =>
+            appendToolEvent(prev, {
               id: msg.payload.toolCallId,
               name: msg.payload.toolName,
-              status: "started",
-            },
-          ]);
+              status: "started" as const,
+            }),
+          );
+          // CHAT UX: label comes from the ACTUAL runtime event.
+          setStatusMessage(`Executing tool ${msg.payload.toolName}…`);
           break;
+        }
         case "tool/completed":
           if (isStaleEvent(msg.payload?.requestId)) break;
           setToolEvents((prev) =>
@@ -2323,9 +2413,12 @@ export function App() {
         }
         case "agent/status":
           if (isStaleEvent(msg.payload?.requestId)) break;
+          // CHAT UX: labels are ONLY runtime-emitted states — Thinking… from
+          // real reasoning_delta, Generating… from the first text delta,
+          // Completed with real token usage. No fabricated progress.
           setStatusMessage(
             msg.payload.status === "running"
-              ? (msg.payload.message ?? "Agent running…")
+              ? (msg.payload.message ?? "Generating…")
               : msg.payload.status === "completed"
                 ? `Completed${msg.payload.usage ? ` · ${msg.payload.usage.inputTokens}→${msg.payload.usage.outputTokens} tok` : ""}`
                 : "Idle",
@@ -2390,8 +2483,29 @@ export function App() {
           break;
         }
         case "provider/health":
+          // Kept for older hosts; the authoritative path is provider/test_result.
           setProviderHealth(msg.payload as ProviderHealthLite);
           break;
+        case "provider/test_result": {
+          // BUG 1: authoritative result of an explicit Refresh/Test probe.
+          const h = msg.payload as ProviderHealthLite;
+          setProviderHealth(h);
+          if (
+            h?.providerId &&
+            h.providerId === settingsRef.current.provider
+          ) {
+            const derivedState = h.state === "invalid-config" ? "unverified" : h.state;
+            setProviderSelectedState({
+              id: h.providerId,
+              name: h.providerId,
+              state: derivedState,
+              connected: derivedState === "connected",
+              ...(h.message ? { detail: h.message } : {}),
+              ...(h.latencyMs !== undefined ? { latencyMs: h.latencyMs } : {}),
+            });
+          }
+          break;
+        }
         case "provider/usage":
           setProviderUsage(msg.payload as ProviderUsageLite);
           break;
@@ -2436,9 +2550,27 @@ export function App() {
           setModels(normalizeModelList(msg.payload));
           setModelsLoading(false);
           break;
-        case "tools/list_result":
-          setToolRegistry(normalizeToolList(msg.payload));
+        case "runtime/ready": {
+          // Authoritative lifecycle push: the runtime just became ready.
+          // Auto-refresh everything that depends on it so a webview opened
+          // before runtime start populates WITHOUT a manual reload.
+          setToolRegistryState("loading");
+          sendMessage("tools/list", {});
+          setSkillsLoading(true);
+          sendMessage("skills/list", {});
+          setTeamsLoading(true);
+          sendMessage("team/list", {});
           break;
+        }
+        case "tools/list_result": {
+          // Host distinguishes: runtime not ready vs. registry payload vs.
+          // failure. "0 tools" must only ever mean a genuinely empty
+          // registry on a READY runtime.
+          const classified = classifyToolRegistryState(msg.payload);
+          setToolRegistry(classified.tools);
+          setToolRegistryState(classified.state);
+          break;
+        }
         case "healing/started":
           // Single healing status object — every event updates it in place,
           // never appends duplicate status messages.
@@ -2541,7 +2673,7 @@ export function App() {
           setMessages((prev) => [
             ...prev,
             {
-              id: `err-${Date.now()}`,
+              id: createStableId("err"),
               role: "system",
               content: `Error: ${msg.payload.message}`,
               timestamp: Date.now(),
@@ -2562,7 +2694,7 @@ export function App() {
           setMessages((prev) => [
             ...prev,
             {
-              id: `settings-err-${Date.now()}`,
+              id: createStableId("settings-err"),
               role: "system",
               content: `Settings: ${msg.payload?.error ?? "unknown error"}`,
               timestamp: Date.now(),
@@ -2574,6 +2706,56 @@ export function App() {
             setSessions(msg.payload);
           }
           break;
+        case "provider/list": {
+          // BUG 1: host-authoritative, per-provider connection truth (typed
+          // ConnectionState; credential presence is "configured", never
+          // "connected"). selectedState (fresh probe of the SELECTED
+          // provider) wins for the header; entries merge by id. A partial
+          // selectedState-only push must NOT wipe the full list.
+          const p = msg.payload as ProviderListPayload;
+          const providers = normalizeProviderList(p?.providers);
+          if (providers.length > 0) {
+            setProviderConnections((prev) => {
+              const next = new Map(prev.map((c) => [c.id, c]));
+              for (const c of providers) next.set(c.id, c);
+              return [...next.values()];
+            });
+          }
+          if (p?.selectedState && typeof p.selectedState === "object") {
+            setProviderSelectedState(p.selectedState);
+          }
+          break;
+        }
+        case "session/deleted": {
+          // Host is authoritative: the session was retired — remove it from
+          // the list so the UI matches backend state (previously dropped,
+          // leaving deleted sessions visible until reload).
+          const deletedId = (msg.payload as { sessionId?: unknown } | null)
+            ?.sessionId;
+          if (typeof deletedId === "string") {
+            setSessions((prev) => prev.filter((s) => s.id !== deletedId));
+          }
+          break;
+        }
+        case "session/renamed": {
+          const renamed = msg.payload as
+            | { sessionId?: unknown; title?: unknown }
+            | null;
+          if (
+            renamed &&
+            typeof renamed.sessionId === "string" &&
+            typeof renamed.title === "string"
+          ) {
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.id === renamed.sessionId
+                  ? { ...s, title: renamed.title as string }
+                  : s,
+              ),
+            );
+          }
+          break;
+        }
         case "continuity/state": {
           // Strictly validated; malformed snapshots keep previous state.
           const next = validateContinuityState(msg.payload);
@@ -2633,7 +2815,7 @@ export function App() {
             setMessages((prev) => [
               ...prev,
               {
-                id: `diff-error-${Date.now()}`,
+                id: createStableId("diff-error"),
                 role: "system",
                 content: `Change could not be applied: ${reduced.error}`,
                 timestamp: Date.now(),
@@ -2648,6 +2830,31 @@ export function App() {
             setFileChanges([]);
           }
           break;
+        case "diff/status": {
+          // Host-side ChangeSetManager status push (applied / rolled back /
+          // conflicts). Previously dropped, so host-side transitions never
+          // reached the Changes tab.
+          setFileChanges((prev) =>
+            reconcileDiffStatus(prev, msg.payload as DiffStatusPayload),
+          );
+          break;
+        }
+        case "recovery/classified": {
+          // Runtime recovery classification — previously dropped silently.
+          const rc = msg.payload as {
+            category?: unknown;
+            reason?: unknown;
+            attempt?: unknown;
+          } | null;
+          if (rc && typeof rc.reason === "string" && rc.reason.length > 0) {
+            setStatusMessage(
+              `Recovery: ${rc.reason} (attempt ${
+                typeof rc.attempt === "number" ? rc.attempt : 1
+              })`,
+            );
+          }
+          break;
+        }
         case "mcp/approval_required":
           if (msg.payload.status === "cancelled") {
             // Approval was cancelled — remove from pending list
@@ -2655,6 +2862,8 @@ export function App() {
               prev.filter((a) => a.requestId !== msg.payload.requestId),
             );
           } else {
+            // CHAT UX: an actual pending approval is a distinct state.
+            setStatusMessage("Waiting for approval…");
             setMcpApprovals((prev) => {
               if (prev.some((a) => a.requestId === msg.payload.requestId))
                 return prev;
@@ -2671,6 +2880,11 @@ export function App() {
             });
           }
           break;
+        case "plan/updated": {
+          // Phase 2: host-pushed structured plan (validated, bounded).
+          setTaskPlan(normalizeTaskPlan(msg.payload));
+          break;
+        }
         case "checkpoint/list": {
           const cp = msg.payload as {
             checkpoints?: Array<{
@@ -3068,6 +3282,19 @@ export function App() {
           setSkillError(err);
           setStatusMessage(`Skills: ${err}`);
           setSkillsLoading(false);
+          // Distinguish failure from a genuinely empty workspace: a failed
+          // discovery must NOT render as "No skills discovered".
+          if (res?.action === "list") setSkills([]);
+          break;
+        }
+        case "rules/list": {
+          // PART 10 contract fix: the host answers rules/reload with this
+          // event; previously the webview dropped it, so "Reload rules" gave
+          // zero feedback. Surface a bounded, secret-free confirmation.
+          const rules = Array.isArray(msg.payload?.rules)
+            ? (msg.payload!.rules as unknown[]).length
+            : 0;
+          setStatusMessage(`Rules reloaded — ${rules} rule${rules === 1 ? "" : "s"} active.`);
           break;
         }
         // M14 — teams (backend-authoritative, event-driven; malformed rows dropped).
@@ -3094,17 +3321,20 @@ export function App() {
           const ok = msg.payload?.success === true;
           if (ok) {
             setTeamError(null);
-            if (
-              msg.payload?.action === "create" &&
-              typeof msg.payload?.teamId === "string"
-            ) {
-              setSelectedTeamId(msg.payload.teamId);
-              setSelectedTeamTaskId(null);
+            if (msg.payload?.action === "create") {
+              setStatusMessage("Team created successfully.");
+              if (typeof msg.payload?.teamId === "string") {
+                setSelectedTeamId(msg.payload.teamId);
+                setSelectedTeamTaskId(null);
+              }
             }
           } else {
             const err = msg.payload?.error ?? "failed";
             setTeamError(err);
             setStatusMessage(`Team: ${err}`);
+            // A failed LIST must end the loading state — otherwise the panel
+            // stays stuck on "Loading teams…" forever (silent-failure fix).
+            if (msg.payload?.action === "list") setTeamsLoading(false);
           }
           // Every mutation re-syncs from the backend; refresh details too.
           setTeamsLoading(true);
@@ -3168,6 +3398,13 @@ export function App() {
           if (summary) setExported(summary);
           break;
         }
+        case "usage/summary": {
+          // Phase 3: replace-on-valid — a malformed reply never clears the
+          // previous view (same discipline as normalizeDashboard).
+          const usage = normalizeUsageSummary(msg.payload);
+          if (usage) setUsagePayload(usage);
+          break;
+        }
       }
     };
     window.addEventListener("message", handler);
@@ -3189,15 +3426,16 @@ export function App() {
     sendMessage("team/list", {});
     sendMessage("history/list", {});
     sendMessage("metrics/get", {});
+    sendMessage("usage/summary", {});
     sendMessage("continuity/get", {});
     return () => window.removeEventListener("message", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handler reads state through refs by design
   }, []);
 
-  // Auto-scroll
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingText, toolEvents]);
+  // Scrolling is owned by ChatView (stick-to-bottom with manual-scroll
+  // preservation). App-level auto-scroll was removed: its ref was never
+  // attached to any element, so the effect was dead code that still ran on
+  // every stream delta.
 
   // ---- M15 plugin actions (validated before posting; backend decides) ----
   const refreshPlugins = useCallback(() => {
@@ -3366,7 +3604,7 @@ export function App() {
       setMessages((prev) => [
         ...prev,
         {
-          id: `help-${Date.now()}`,
+          id: createStableId("help"),
           role: "system",
           content: ["Available commands:", ...lines].join("\n"),
           timestamp: Date.now(),
@@ -3382,7 +3620,7 @@ export function App() {
         setMessages((prev) => [
           ...prev,
           {
-            id: `mode-${Date.now()}`,
+            id: createStableId("mode"),
             role: "system",
             content: `Mode switched to ${def.mode}.`,
             timestamp: Date.now(),
@@ -3396,7 +3634,7 @@ export function App() {
     const finalPrompt = instruction ? `${instruction}${prompt}` : prompt;
 
     const userMsg: Message = {
-      id: `user-${Date.now()}`,
+      id: createStableId("user"),
       role: "user",
       content: finalPrompt,
       timestamp: Date.now(),
@@ -3406,6 +3644,10 @@ export function App() {
     streamingTextRef.current = "";
     setStreamingText("");
     setIsRunning(true);
+    // CHAT UX: honest lifecycle label from the moment the turn is handed to
+    // the host. Real runtime states (Thinking…/tool/approval) overwrite this
+    // as they arrive — never a fabricated progress percentage.
+    setStatusMessage("Starting local model…");
     setLastPrompt(finalPrompt);
     // Request-ID correlation: one unique ID per chat turn. The host adopts it
     // and stamps every streamed event, so stale turns cannot interfere.
@@ -3766,6 +4008,20 @@ export function App() {
     sendMessage("context/selection", {});
   }, []);
 
+  const handleAttachDiff = useCallback((scope: "working" | "staged") => {
+    setMentionMenuOpen(false);
+    // Structured @diff chip — the host runs the bounded git diff at send
+    // time; no diff text ever enters the composer input.
+    setComposerContext((prev) => addDiffToContext(prev, scope));
+  }, []);
+
+  const handleAttachTerminal = useCallback(() => {
+    setMentionMenuOpen(false);
+    // Structured @terminal chip — the host injects its bounded command
+    // history (tails only) at send time.
+    setComposerContext((prev) => addTerminalToContext(prev));
+  }, []);
+
   const handleImagesSelected = useCallback(
     (images: Array<{ name?: string; mime?: string; dataUrl: string }>) => {
       setMentionMenuOpen(false);
@@ -3775,6 +4031,18 @@ export function App() {
     },
     [],
   );
+
+  // Phase 2: pause = abort + persist the task as PAUSED (resumable). The
+  // host clears the pause intent on the next run/resume, so a later stop is
+  // never misclassified.
+  const handlePause = useCallback(() => {
+    sendMessage("agent/pause", {});
+    streamingTextRef.current = "";
+    setStreamingText("");
+    activeRequestIdRef.current = null;
+    setIsRunning(false);
+    setStatusMessage("Paused - resume from Task History or send to continue.");
+  }, []);
 
   const handleStop = useCallback(() => {
     sendMessage("agent/stop", {});
@@ -3792,6 +4060,7 @@ export function App() {
   // fresh model context. Guarded while a turn runs (button disabled there).
   const handleNewConversation = useCallback(() => {
     sendMessage("continuity/reset", {});
+    setTaskPlan(null);
     streamingTextRef.current = "";
     setStreamingText("");
     setMessages([]);
@@ -3825,12 +4094,17 @@ export function App() {
       clearApiKey?: boolean;
     }) => {
       sendMessage("provider/configure", input);
+      // BUG 1: configuration change → re-verify the affected provider. The
+      // fresh verdict arrives via provider/test_result and only a positive
+      // probe may flip the header to Connected.
+      sendMessage("provider/test", { providerId: input.providerId });
     },
     [],
   );
 
   const handleProviderTest = useCallback((providerId: string) => {
     setProviderHealth(null);
+    setProviderSelectedState(null); // verdict arrives via provider/test_result
     sendMessage("provider/test", { providerId });
   }, []);
 
@@ -3850,6 +4124,12 @@ export function App() {
 
   const handleUseProvider = useCallback((providerId: string) => {
     setSettings((s) => ({ ...s, provider: providerId }));
+    // BUG 1: a provider switch invalidates the previous provider's verdict —
+    // stale health from the old provider must never leak into the new one.
+    setProviderSelectedState(null);
+    // Fresh authoritative probe for the NEW selection (provider/list with
+    // selectedState for the new id).
+    sendMessage("provider/test", { providerId });
     // Clear the model list immediately: the old provider's models must never
     // linger under the new provider (prevents stale model selection).
     setModels([]);
@@ -4032,6 +4312,11 @@ export function App() {
     health: selectedHealth,
     credentialConfigured: selectedCredential,
     modelCount: models.length,
+    liveConnections: providerConnections,
+    selectedState:
+      providerSelectedState?.id === selectedProviderId
+        ? providerSelectedState
+        : undefined,
   });
   const privacyText = privacyClaim(
     settings.privacyMode,
@@ -4077,6 +4362,7 @@ export function App() {
               toolEvents={toolEvents}
               m4Approvals={m4Approvals}
               mcpApprovals={mcpApprovals}
+              planCard={taskPlan ? <PlanCard plan={taskPlan} /> : undefined}
               onM4Decision={handleM4Approval}
               onMcpDecision={handleMCPApproval}
               onPickSuggestion={(command) => {
@@ -4092,6 +4378,7 @@ export function App() {
                     handleSend();
                   }}
                   onStop={handleStop}
+                  onPause={handlePause}
                   onRetry={
                     lastPrompt
                       ? () => {
@@ -4130,6 +4417,8 @@ export function App() {
                   onAttachUrl={handleAttachUrl}
                   onAttachProblems={handleAttachProblems}
                   onAttachSelection={handleAttachSelection}
+                  onAttachDiff={handleAttachDiff}
+                  onAttachTerminal={handleAttachTerminal}
                   onImagesSelected={handleImagesSelected}
                   onPickMention={(attach) => {
                     closeMentionMenuAndStripKeyword();
@@ -4207,20 +4496,41 @@ export function App() {
                   title="Registered tools"
                   count={toolRegistry.length}
                   actions={
-                    <Button
-                      size="xs"
-                      onClick={() => sendMessage("tools/list", {})}
-                      aria-label="Refresh tool registry"
-                    >
-                      <IconRefresh size={10} /> Refresh
-                    </Button>
+                    <>
+                      {/* PART 13: visible runtime truth for manual verification. */}
+                      <span
+                        className="text-[10px] text-vscode-desc mr-1 self-center"
+                        title="Authoritative runtime state from the host"
+                      >
+                        Runtime: {toolRegistryState === "available" ? "Ready" : toolRegistryState === "runtime-not-ready" ? "Not started" : toolRegistryState === "error" ? "Error" : "Checking…"}
+                      </span>
+                      <Button
+                        size="xs"
+                        onClick={() => sendMessage("tools/list", {})}
+                        aria-label="Refresh tool registry"
+                      >
+                        <IconRefresh size={10} /> Refresh
+                      </Button>
+                    </>
                   }
                 />
                 <div className="mt-2 space-y-1">
-                  {toolRegistry.length === 0 ? (
+                  {toolRegistryState === "loading" ? (
+                    <EmptyState title="Loading tools…" />
+                  ) : toolRegistryState === "runtime-not-ready" ? (
                     <EmptyState
-                      title="Registry unavailable"
-                      hint="The runtime has not started yet, so no tools are registered."
+                      title="Runtime not started"
+                      hint="The agent runtime initializes on first use. Tools appear here automatically once it is ready — or press Refresh."
+                    />
+                  ) : toolRegistryState === "error" ? (
+                    <EmptyState
+                      title="Unable to load the tool registry"
+                      hint="The host reported a failure while resolving registered tools. Press Refresh to retry."
+                    />
+                  ) : toolRegistry.length === 0 ? (
+                    <EmptyState
+                      title="Registry loaded — no tools registered"
+                      hint="The runtime is ready but exposed no tools. Built-in tools and discovered MCP tools appear here."
                     />
                   ) : (
                     toolRegistry.map((tool) => (
@@ -4538,6 +4848,7 @@ export function App() {
                       "failed",
                       "cancelled",
                       "interrupted",
+                      "paused",
                       "archived",
                     ].map((s) => (
                       <option key={s} value={s}>
@@ -5118,10 +5429,18 @@ export function App() {
                 </div>
               )}
 
-              {skillsLoading && skills.length === 0 ? (
+              {skillError && skills.length === 0 ? (
+                <EmptyState
+                  title="Unable to load skills"
+                  hint={`${skillError} — press Refresh to retry.`}
+                />
+              ) : skillsLoading && skills.length === 0 ? (
                 <EmptyState title="Loading skills…" />
               ) : skills.length === 0 ? (
-                <EmptyState title="No skills discovered" />
+                <EmptyState
+                  title="No skills discovered"
+                  hint={`No skills found in .codepilot/skills/ in this workspace or ~/.codepilot/skills/. Add a SKILL.md to discover one.`}
+                />
               ) : (
                 <div className="space-y-2">
                   {skills
@@ -5325,7 +5644,12 @@ export function App() {
                 </div>
               </Card>
 
-              {teamsLoading && teams.length === 0 ? (
+              {teamError && teams.length === 0 ? (
+                <EmptyState
+                  title="Unable to load teams"
+                  hint={`${teamError} — press Refresh to retry.`}
+                />
+              ) : teamsLoading && teams.length === 0 ? (
                 <EmptyState title="Loading teams…" />
               ) : teams.length === 0 ? (
                 <EmptyState
@@ -5780,6 +6104,7 @@ export function App() {
                       "failed",
                       "cancelled",
                       "interrupted",
+                      "paused",
                       "archived",
                     ].map((s) => (
                       <option key={s} value={s}>
@@ -6560,6 +6885,100 @@ export function App() {
                           </span>
                           <span className="text-vscode-desc flex-shrink-0">
                             {m.value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </section>
+
+              {/* ADVANCED — Usage & cost ledger (Phase 3) */}
+              <section>
+                <SectionHeader
+                  title="Advanced · Usage & cost (local ledger)"
+                  actions={
+                    <div className="flex gap-1">
+                      <Button
+                        size="xs"
+                        onClick={() => sendMessage("usage/summary", {})}
+                      >
+                        <IconRefresh size={10} /> Refresh
+                      </Button>
+                      <Button
+                        size="xs"
+                        onClick={() => {
+                          if (validateUsageAction("usage/clear").ok) {
+                            sendMessage("usage/clear", {});
+                          }
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  }
+                />
+                <Card className="mt-1.5 px-3 py-2.5">
+                  {usagePayload === null ? (
+                    <p className="text-[10px] text-vscode-desc">
+                      No usage recorded yet — totals appear after the first
+                      model turn. Estimated cost is never invented when the
+                      catalogue has no pricing.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 font-mono text-[10px]">
+                      <div className="flex justify-between gap-2">
+                        <span className="text-vscode-fg">
+                          {usagePayload.summary.totalRequests.toLocaleString()}{" "}
+                          requests
+                        </span>
+                        <span className="text-vscode-desc">
+                          {usagePayload.summary.totalInputTokens.toLocaleString()}{" "}
+                          in →{" "}
+                          {usagePayload.summary.totalOutputTokens.toLocaleString()}{" "}
+                          out
+                        </span>
+                        <span
+                          className={
+                            usagePayload.summary.pricingCoverage === "none"
+                              ? "text-vscode-desc"
+                              : "text-vscode-fg"
+                          }
+                        >
+                          {formatUsageCost(usagePayload.summary).text}
+                        </span>
+                      </div>
+                      {usagePayload.summary.byProvider.map((p) => (
+                        <div
+                          key={p.providerId}
+                          className="flex justify-between gap-2"
+                        >
+                          <span className="text-vscode-fg truncate">
+                            {p.providerId}
+                          </span>
+                          <span className="text-vscode-desc flex-shrink-0">
+                            {p.requests}× · {p.inputTokens.toLocaleString()}→
+                            {p.outputTokens.toLocaleString()}
+                            {p.estimatedCostUsd !== null
+                              ? ` · $${p.estimatedCostUsd.toFixed(4)}`
+                              : " · no pricing"}
+                          </span>
+                        </div>
+                      ))}
+                      {usagePayload.recent.slice(0, 5).map((r, i) => (
+                        <div
+                          key={`${r.ts}-${i}`}
+                          className="flex justify-between gap-2 text-vscode-desc"
+                        >
+                          <span className="truncate">
+                            {r.providerId}/{r.modelId}
+                          </span>
+                          <span className="flex-shrink-0">
+                            {r.inputTokens}→{r.outputTokens}
+                            {r.estimatedCostUsd !== null
+                              ? ` · $${r.estimatedCostUsd.toFixed(4)}`
+                              : ""}
+                            {r.reason !== "agent" ? ` · ${r.reason}` : ""}
                           </span>
                         </div>
                       ))}

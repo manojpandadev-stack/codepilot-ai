@@ -38,17 +38,28 @@ license cannot be confirmed from the artifacts alone. However:
 their author. The missing metadata on three packages is an upstream packaging
 gap, not evidence of a proprietary license.
 
-### Apache-2.0 attribution
+### Apache-2.0 attribution (historically-scoped)
 
-Portions of this software are derived from the Cline SDK
-(https://github.com/cline/cline), licensed under the Apache License, Version 2.0
-(http://www.apache.org/licenses/LICENSE-2.0).
+**Provenance statement (current tree):** the CodePilot AI agent runtime is an
+independent implementation. The current tree contains **no Cline source code,
+no `@cline/*` runtime dependencies, and no ClineCore instantiation**; the
+product's multi-step agent workflow (plan → act → review, tool approval,
+checkpointing) is **inspired by Cline's workflows at the product level only**.
+This file deliberately distinguishes "inspired by Cline workflows" from
+"uses Cline source/runtime": only the latter triggers the attribution below.
 
-Apache-2.0 requires that derivative distributions include a copy of the license
-and carry required notices. Because the upstream npm tarballs omit the license
-text, a copy of the Apache License 2.0 must accompany any redistribution of
-CodePilot AI that includes these packages (the canonical text is available at
-the URL above).
+The attribution below applies to **earlier revisions** that distributed the
+`@cline/*` npm packages listed above as dependencies (Apache-2.0 requires
+that derivative distributions of those packages include the license and carry
+notices). It does not describe the current source tree:
+
+> Portions of **earlier revisions** of this software were derived from the
+> Cline SDK (https://github.com/cline/cline), licensed under the Apache
+> License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
+
+Because the upstream npm tarballs omit the license text, a copy of the Apache
+License 2.0 must accompany any redistribution that still includes those
+historical packages (the canonical text is available at the URL above).
 
 **Action item before general distribution:** confirm the license directly with
 the Cline project (or via their repository's LICENSE files for the exact

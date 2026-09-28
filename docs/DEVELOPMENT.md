@@ -16,7 +16,6 @@ codepilot-ai/
 │   ├── tool-engine/           # Tool definitions and execution
 │   ├── policy-engine/         # Tool permission governance
 │   ├── context-engine/        # Context budgeting and management
-│   ├── repository-engine/     # Repository intelligence
 │   ├── rag-engine/            # RAG with pgvector + Ollama embeddings
 │   ├── memory-engine/         # Project/user/task memory
 │   ├── mcp-manager/           # MCP server management
@@ -67,7 +66,7 @@ ollama serve
 ```bash
 # Build all TypeScript packages
 for pkg in shared agent-runtime model-gateway policy-engine context-engine \
-  event-engine memory-engine tool-engine git-engine repository-engine \
+  event-engine memory-engine tool-engine git-engine \\
   rag-engine mcp-manager; do
   (cd packages/$pkg && npx tsc -p tsconfig.json)
 done

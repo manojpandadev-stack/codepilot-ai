@@ -1,6 +1,11 @@
 /**
  * Native engine — session manager.
  *
+ * PRODUCTION PATH: this class is the runtime's real session manager —
+ * CodePilotRuntime (packages/agent-runtime/src/runtime.ts) constructs and
+ * drives it for every session. It is NOT legacy/dead code and there is no
+ * second or duplicate engine beside it.
+ *
  * Owns the runtime session lifecycle the previous engine exposed:
  * create (start) / send / abort / stop / list / dispose, with a bounded
  * in-memory transcript per session and synchronous event fan-out.
@@ -56,6 +61,12 @@ export class NativeSessionManager {
     private readonly providerConfigs: LlmProviderConfig[],
     private readonly fetchImpl?: typeof fetch,
     private readonly maxTranscriptMessages = 400,
+    /**
+     * BUG 5 — transport for the local Ollama provider ("fetch" default =
+     * global fetch seam; "node-http" = zero-transport-timeout adapter, see
+     * native/llm/node-http-fetch.ts). Only honored when no fetchImpl is set.
+     */
+    private readonly transport: "fetch" | "node-http" = "fetch",
   ) {}
 
   /** List sessions (newest first), bounded. */
@@ -109,6 +120,11 @@ export class NativeSessionManager {
               : {}),
           })),
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+          // BUG 5: pass the node-http transport for local Ollama when the
+          // host opted in (and no fetchImpl seam is present).
+          ...(!this.fetchImpl && this.transport === "node-http"
+            ? { transport: "node-http" as const }
+            : {}),
         },
       );
       this.providers.set(cacheKey, provider);

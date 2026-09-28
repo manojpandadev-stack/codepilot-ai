@@ -52,7 +52,9 @@ type FailureCode =
   | "CLOSED"
   | "INVALID"
   | "LIMIT"
-  | "INTERNAL";
+  | "INTERNAL"
+  | "NO_SHELL"
+  | "SHELL_CLOSED";
 
 type Failure = { ok: false; error: string; code: FailureCode };
 
@@ -135,6 +137,13 @@ export function createAgentTerminalSessionTools(
             "Optional working directory for all commands in this session " +
             "(relative to the workspace).",
         },
+        interactive: {
+          type: "boolean",
+          description:
+            "Open a persistent interactive shell (for REPLs, prompts, " +
+            "debuggers) whose stdin can be fed line-by-line with " +
+            "terminal_session_write_stdin. Default false.",
+        },
       },
       additionalProperties: false,
     },
@@ -147,13 +156,13 @@ export function createAgentTerminalSessionTools(
           "FORBIDDEN",
         );
       }
+      const rec = (input ?? {}) as Record<string, unknown>;
       const cwdRaw =
-        input && typeof (input as Record<string, unknown>).cwd === "string"
-          ? ((input as Record<string, unknown>).cwd as string).trim()
-          : undefined;
+        typeof rec.cwd === "string" ? rec.cwd.trim() : undefined;
       const created = manager.startAgentSession({
         taskId,
         ...(cwdRaw ? { cwd: cwdRaw } : {}),
+        ...(rec.interactive === true ? { interactive: true } : {}),
       });
       if (!created.ok) {
         return fail(created.error, "LIMIT");
@@ -163,7 +172,11 @@ export function createAgentTerminalSessionTools(
         sessionId: created.sessionId,
         taskId: created.taskId,
         createdAt: created.createdAt,
-        note: "Use terminal_session_exec with this sessionId to run commands.",
+        note:
+          "Use terminal_session_exec with this sessionId to run commands." +
+          (rec.interactive === true
+            ? " Interactive shell open — write to it with terminal_session_write_stdin."
+            : ""),
       };
     },
   };
@@ -389,7 +402,66 @@ export function createAgentTerminalSessionTools(
     },
   };
 
-  return [sessionStart, sessionExec, sessionStatus, sessionStop, sessionClose];
+  // ---- terminal_session_write_stdin ------------------------------------------
+
+  const sessionWriteStdin: AgentTool = {
+    name: "terminal_session_write_stdin",
+    description:
+      "Write a line of STDIN to the persistent interactive shell of a " +
+      "tracked terminal session created with interactive:true. Use for " +
+      "interactive programs (REPLs, prompts, debuggers). A newline is " +
+      "appended when missing. Output streams live to the terminal UI — " +
+      "poll terminal_session_status to read it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "Session id from terminal_session_start.",
+        },
+        text: {
+          type: "string",
+          description: "Line to write to the shell's stdin.",
+        },
+      },
+      required: ["sessionId", "text"],
+      additionalProperties: false,
+    },
+    timeoutMs: TOOL_TIMEOUT_MS,
+    execute: async (input, ctx) => {
+      const taskId = callerTaskId(ctx);
+      if (!taskId) {
+        return fail("No task identity available", "FORBIDDEN");
+      }
+      const rec = (input ?? {}) as Record<string, unknown>;
+      const sessionId = rec.sessionId;
+      if (typeof sessionId !== "string" || sessionId.length === 0) {
+        return fail("sessionId is required", "INVALID");
+      }
+      const text = rec.text;
+      if (typeof text !== "string" || text.length === 0) {
+        return fail("text is required", "INVALID");
+      }
+      const result = manager.writeSessionStdin({ sessionId, taskId, text });
+      if (!result.ok) {
+        return fail(result.error, result.code);
+      }
+      return {
+        ok: true as const,
+        bytesWritten: result.bytesWritten,
+        note: "Output streams live to the terminal UI.",
+      };
+    },
+  };
+
+  return [
+    sessionStart,
+    sessionExec,
+    sessionStatus,
+    sessionStop,
+    sessionClose,
+    sessionWriteStdin,
+  ];
 }
 
 /**

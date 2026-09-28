@@ -16,6 +16,7 @@ import {
   TerminalSessionManager,
   type M4DecisionToken,
 } from "../apps/vscode-extension/src/terminal-session-manager";
+import { createAgentTerminalSessionTools } from "../apps/vscode-extension/src/agent-terminal-session-tools";
 import type { LiveToolPermissionBridge } from "../packages/tool-engine/src/m4/live-bridge";
 import type { TerminalStreamEventWithCorrelation } from "../packages/tool-engine/src/m3/terminal-stream";
 
@@ -590,5 +591,142 @@ describe("agent tracked terminal sessions — argument validation", () => {
     }
     expect(created).toBe(4); // MAX_AGENT_SESSIONS
     expect(lastError).toContain("limit");
+  });
+});
+
+
+describe("agent tracked terminal sessions — interactive stdin (row 13)", () => {
+  it("interactive shell echoes stdin lines as correlated terminal events", async () => {
+    const mgr = new TerminalSessionManager(process.cwd());
+    const sink = makeSink();
+    sink.attach(mgr);
+    const created = mgr.startAgentSession({ taskId: TASK_A, interactive: true });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const { sessionId } = created;
+    const written = mgr.writeSessionStdin({
+      sessionId,
+      taskId: TASK_A,
+      text: "echo MARKER-777",
+    });
+    expect(written.ok).toBe(true);
+    const deadline = Date.now() + 10_000;
+    while (
+      !sink.events.some((e) => JSON.stringify(e.event).includes("MARKER-777"))
+    ) {
+      if (Date.now() > deadline) {
+        throw new Error("no interactive output observed at the event sink");
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const interactiveEvents = sink.events.filter(
+      (e) => e.event.executionId === "interactive",
+    );
+    expect(interactiveEvents.length).toBeGreaterThan(0);
+    const corr = interactiveEvents[0]!.event;
+    expect(corr.sessionId).toBe(sessionId);
+    expect(corr.taskId).toBe(TASK_A);
+    // stop sends Ctrl+C without tearing down the persistent shell.
+    expect(mgr.stopAgentSessionCommand(sessionId, TASK_A)).toBe(true);
+    expect(mgr.closeAgentSession(sessionId, TASK_A)).toBe(true);
+    const after = mgr.writeSessionStdin({
+      sessionId,
+      taskId: TASK_A,
+      text: "echo late",
+    });
+    expect(after.ok).toBe(false);
+  });
+
+  it("appends a newline so the shell executes the line", async () => {
+    const mgr = new TerminalSessionManager(process.cwd());
+    const sink = makeSink();
+    sink.attach(mgr);
+    const created = mgr.startAgentSession({ taskId: TASK_A, interactive: true });
+    if (!created.ok) throw new Error(created.error);
+    const w = mgr.writeSessionStdin({
+      sessionId: created.sessionId,
+      taskId: TASK_A,
+      text: "echo NL-888",
+    });
+    expect(w.ok).toBe(true);
+    if (w.ok) expect(w.bytesWritten).toBe("echo NL-888\n".length);
+    const deadline = Date.now() + 10_000;
+    while (
+      !sink.events.some((e) => JSON.stringify(e.event).includes("NL-888"))
+    ) {
+      if (Date.now() > deadline) throw new Error("no output observed");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    mgr.closeAgentSession(created.sessionId, TASK_A);
+  });
+
+  it("writeSessionStdin rejects non-interactive sessions, foreign tasks, and bad input", async () => {
+    const mgr = new TerminalSessionManager(process.cwd());
+    mgr.setEventSink(() => {});
+    const plain = mgr.startAgentSession({ taskId: TASK_A });
+    if (!plain.ok) throw new Error(plain.error);
+    const r1 = mgr.writeSessionStdin({
+      sessionId: plain.sessionId,
+      taskId: TASK_A,
+      text: "echo x",
+    });
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.code).toBe("NO_SHELL");
+    const r2 = mgr.writeSessionStdin({
+      sessionId: plain.sessionId,
+      taskId: TASK_B,
+      text: "echo x",
+    });
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.code).toBe("FORBIDDEN");
+    const r3 = mgr.writeSessionStdin({
+      sessionId: plain.sessionId,
+      taskId: TASK_A,
+      text: "",
+    });
+    expect(r3.ok).toBe(false);
+    if (!r3.ok) expect(r3.code).toBe("INVALID");
+    const r4 = mgr.writeSessionStdin({
+      sessionId: plain.sessionId,
+      taskId: TASK_A,
+      text: "x".repeat(9000),
+    });
+    expect(r4.ok).toBe(false);
+    if (!r4.ok) expect(r4.code).toBe("INVALID");
+    mgr.closeAgentSession(plain.sessionId, TASK_A);
+  });
+});
+
+describe("terminal_session_write_stdin tool (row 13)", () => {
+  it("writes stdin through the tool surface and reports bytes", async () => {
+    const mgr = new TerminalSessionManager(process.cwd());
+    mgr.setEventSink(() => {});
+    const tools = createAgentTerminalSessionTools({ manager: mgr });
+    const start = tools.find((t) => t.name === "terminal_session_start")!;
+    const write = tools.find(
+      (t) => t.name === "terminal_session_write_stdin",
+    )!;
+    expect(write).toBeDefined();
+    const started = await start.execute(
+      { interactive: true },
+      { conversationId: TASK_A },
+    );
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const sessionId = (started as { sessionId: string }).sessionId;
+    const w = await write.execute(
+      { sessionId, text: "echo TOOL-999" },
+      { conversationId: TASK_A },
+    );
+    expect(w.ok).toBe(true);
+    if (w.ok) expect(w.bytesWritten).toBeGreaterThan(0);
+    const bad = await write.execute(
+      { sessionId: "nope", text: "x" },
+      { conversationId: TASK_A },
+    );
+    expect(bad.ok).toBe(false);
+    const noText = await write.execute({ sessionId }, { conversationId: TASK_A });
+    expect(noText.ok).toBe(false);
+    mgr.closeAgentSession(sessionId, TASK_A);
   });
 });

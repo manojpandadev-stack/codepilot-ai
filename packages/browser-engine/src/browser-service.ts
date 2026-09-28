@@ -21,10 +21,32 @@ import {
   safeTargetOf,
   type UrlPolicyOptions,
 } from "./url-policy.js";
+import { scrubSecretsText } from "@codepilot/shared";
 
 // ============================================================================
 // Types
 // ============================================================================
+
+/** One captured console message (secret-redacted, bounded text). */
+export interface BrowserConsoleMessage {
+  type: string;
+  text: string;
+  timestamp: number;
+}
+
+/**
+ * One captured network exchange. SECURITY: headers are NEVER captured —
+ * no Authorization, Cookie, or proxy-auth values can leak into tool
+ * output, history, or logs. URLs are scrubbed of query-string credentials.
+ */
+export interface BrowserNetworkEntry {
+  method: string;
+  url: string;
+  status?: number;
+  contentType?: string;
+  durationMs: number;
+  timestamp: number;
+}
 
 export interface PageSnapshot {
   url: string;
@@ -77,7 +99,14 @@ interface BrowserSession {
   redirectHops: number;
   /** URLs allowed by policy for THIS page load (route interceptor cache). */
   validatedUrls: Map<string, boolean>;
+  /** Console messages captured since session start (bounded, redacted). */
+  consoleMessages: BrowserConsoleMessage[];
+  /** Network exchanges captured since session start (bounded, header-free). */
+  networkRequests: BrowserNetworkEntry[];
 }
+
+/** Bounded capture buffers (console + network). */
+const MAX_CAPTURE_ENTRIES = 200;
 
 // ============================================================================
 // Lazy playwright import — keeps the module loadable without browsers
@@ -235,8 +264,11 @@ export class BrowserService {
       lastUsedAt: Date.now(),
       redirectHops: 0,
       validatedUrls: new Map(),
+      consoleMessages: [],
+      networkRequests: [],
     };
-    this.installRouteInterceptor(session);
+    this.installCaptureListeners(session);
+    await this.installRouteInterceptor(session);
     this.sessions.set(key, session);
     this.audit({
       taskId,
@@ -343,8 +375,12 @@ export class BrowserService {
    * policy before Chromium connects. Non-http(s) schemes and private targets
    * are aborted.
    */
-  private installRouteInterceptor(session: BrowserSession): void {
-    void session.page.route("**/*", async (route) => {
+  private async installRouteInterceptor(session: BrowserSession): Promise<void> {
+    // Awaited by session creation: a session must NEVER be handed out before
+    // the SSRF interceptor is active (fail-closed), and install failures
+    // surface as normal session-creation errors instead of unhandled
+    // rejections during teardown races.
+    await session.page.route("**/*", async (route) => {
       const url = route.request().url();
       try {
         // Resource-type policy: navigation + XHR/fetch validated fully;
@@ -398,6 +434,47 @@ export class BrowserService {
           // route may already be handled
         }
       }
+    });
+  }
+
+  /**
+   * Install console + network capture listeners (Phase 13-16, rows 19-20).
+   * Console messages are secret-redacted at capture time. Network entries
+   * NEVER include headers — auth values cannot leak into any sink.
+   */
+  private installCaptureListeners(session: BrowserSession): void {
+    session.page.on("console", (msg) => {
+      session.consoleMessages.push({
+        type: msg.type(),
+        text: scrubSecretsText(msg.text()).slice(0, 2000),
+        timestamp: Date.now(),
+      });
+      if (session.consoleMessages.length > MAX_CAPTURE_ENTRIES) {
+        session.consoleMessages.shift();
+      }
+    });
+    session.page.on("request", (req) => {
+      const started = Date.now();
+      const entry: BrowserNetworkEntry = {
+        method: req.method(),
+        url: scrubSecretsText(req.url()).slice(0, 2000),
+        durationMs: 0,
+        timestamp: started,
+      };
+      session.networkRequests.push(entry);
+      if (session.networkRequests.length > MAX_CAPTURE_ENTRIES) {
+        session.networkRequests.shift();
+      }
+      void req.response().then(
+        (res) => {
+          entry.status = res?.status();
+          entry.contentType = res?.headers()["content-type"];
+          entry.durationMs = Date.now() - started;
+        },
+        () => {
+          entry.durationMs = Date.now() - started;
+        },
+      );
     });
   }
 
@@ -590,6 +667,68 @@ export class BrowserService {
       });
       return { ok: false, error: message };
     }
+  }
+
+  /** Select an option in a <select> dropdown (row 18). */
+  async selectOption(
+    taskId: string,
+    sessionId: string,
+    selector: string,
+    value: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const started = Date.now();
+    const session = await this.getSession(taskId, sessionId);
+    try {
+      await withAbort(
+        () =>
+          session.page.selectOption(selector, value, {
+            timeout: 10_000,
+          }),
+        signal,
+      );
+      session.lastUsedAt = Date.now();
+      this.audit({
+        taskId,
+        sessionId,
+        action: "select",
+        target: safeTargetOf(session.page.url()),
+        outcome: "ok",
+        detail: `selector ${selector.slice(0, 80)}`,
+        durationMs: Date.now() - started,
+      });
+      return { ok: true };
+    } catch (err) {
+      const message = sanitizeError(err);
+      this.audit({
+        taskId,
+        sessionId,
+        action: "select",
+        target: safeTargetOf(session.page.url()),
+        outcome: "error",
+        detail: message,
+        durationMs: Date.now() - started,
+      });
+      return { ok: false, error: message };
+    }
+  }
+
+  /** Console messages captured since session start (bounded, redacted). */
+  consoleMessages(
+    taskId: string,
+    sessionId = "default",
+  ): readonly BrowserConsoleMessage[] {
+    const session = this.sessions.get(sessionKey(taskId, sessionId));
+    return session ? session.consoleMessages : [];
+  }
+
+  /** Network exchanges captured since session start (bounded, header-free). */
+  networkRequests(
+    taskId: string,
+    sessionId = "default",
+  ): readonly BrowserNetworkEntry[] {
+    const session = this.sessions.get(sessionKey(taskId, sessionId));
+    return session ? session.networkRequests : [];
   }
 
   /** Fill a form field (clears existing value first). */

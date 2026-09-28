@@ -166,6 +166,7 @@ const KNOWN_STATUSES = new Set([
   "failed",
   "cancelled",
   "interrupted",
+  "paused",
   "archived",
 ]);
 

@@ -109,6 +109,8 @@ export interface ComposerProps {
   onInputChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
+  /** Phase 2: pause = stop + the task persists as PAUSED (resumable). */
+  onPause?: () => void;
   onRetry: (() => void) | null;
   isRunning: boolean;
   // menus
@@ -120,6 +122,8 @@ export interface ComposerProps {
   onAttachUrl: () => void;
   onAttachProblems: () => void;
   onAttachSelection: () => void;
+  onAttachDiff: (scope: "working" | "staged") => void;
+  onAttachTerminal: () => void;
   /** Delivers validated-in-browser image payloads (host re-validates). */
   onImagesSelected: (
     images: Array<{ name?: string; mime?: string; dataUrl: string }>,
@@ -132,7 +136,13 @@ export interface ComposerProps {
   onRemoveContext: (id: string) => void;
   // settings
   settings: Settings;
-  models: Array<{ id: string; name: string; contextWindow?: number }>;
+  models: Array<{
+    id: string;
+    name: string;
+    contextWindow?: number;
+    /** Catalogue tool-calling tri-state (true/false/unknown). */
+    toolCalling?: "true" | "false" | "unknown";
+  }>;
   modelsLoading: boolean;
   onModeChange: (mode: string) => void;
   onModelChange: (model: string) => void;
@@ -282,6 +292,21 @@ export function Composer(props: ComposerProps) {
                 <IconFolder size={11} key="d" />,
               ],
               ["URL", props.onAttachUrl, <IconLink size={11} key="u" />],
+              [
+                "Diff: working tree",
+                () => props.onAttachDiff("working"),
+                <IconFile size={11} key="dw" />,
+              ],
+              [
+                "Diff: staged",
+                () => props.onAttachDiff("staged"),
+                <IconFile size={11} key="ds" />,
+              ],
+              [
+                "Terminal output",
+                props.onAttachTerminal,
+                <IconFile size={11} key="t" />,
+              ],
               [
                 "Problems",
                 props.onAttachProblems,
@@ -445,14 +470,25 @@ export function Composer(props: ComposerProps) {
                   <option value="qwen3:8b">qwen3:8b</option>
                 </>
               ) : (
-                props.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                    {m.contextWindow
-                      ? ` · ${Math.round(m.contextWindow / 1024)}k`
-                      : ""}
-                  </option>
-                ))
+                props.models.map((m) => {
+                  // PART 3/13: per-model tool-calling truth in the picker —
+                  // "unknown" must never read as supported.
+                  const cap =
+                    m.toolCalling === "true"
+                      ? " \u2713 tools"
+                      : m.toolCalling === "false"
+                        ? " \u2715 tools"
+                        : " ? tools";
+                  return (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                      {m.contextWindow
+                        ? ` · ${Math.round(m.contextWindow / 1024)}k`
+                        : ""}
+                      {cap}
+                    </option>
+                  );
+                })
               )}
             </Select>
             <button
@@ -486,15 +522,28 @@ export function Composer(props: ComposerProps) {
 
             {/* Stop / Send */}
             {props.isRunning ? (
-              <Button
-                variant="danger"
-                onClick={props.onStop}
-                aria-label="Stop the running agent"
-                title="Stop"
-                className="flex-shrink-0"
-              >
-                <IconStop size={11} /> Stop
-              </Button>
+              <>
+                {props.onPause && (
+                  <Button
+                    variant="secondary"
+                    onClick={props.onPause}
+                    aria-label="Pause the running agent (resumable)"
+                    title="Pause (resumable)"
+                    className="flex-shrink-0"
+                  >
+                    Pause
+                  </Button>
+                )}
+                <Button
+                  variant="danger"
+                  onClick={props.onStop}
+                  aria-label="Stop the running agent"
+                  title="Stop"
+                  className="flex-shrink-0"
+                >
+                  <IconStop size={11} /> Stop
+                </Button>
+              </>
             ) : (
               <Button
                 variant="primary"

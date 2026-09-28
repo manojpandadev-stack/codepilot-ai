@@ -111,6 +111,49 @@ export type {
   StreamingShellHooks,
 } from "./streaming-shell.js";
 
+// ---- Shell platform selection ----
+export {
+  getDefaultShell,
+  getShellKind,
+  getShellInvocation,
+} from "./shell-platform.js";
+export type { ShellInvocation, ShellKind } from "./shell-platform.js";
+
+// ---- Terminal environments (local/wsl/ssh transports) ----
+export {
+  localTerminalEnvironment,
+  wslTerminalEnvironment,
+  sshTerminalEnvironment,
+  parseTerminalEnvironment,
+  describeTerminalEnvironment,
+} from "./terminal-environment.js";
+export type {
+  TerminalEnvironment,
+  TerminalEnvironmentKind,
+} from "./terminal-environment.js";
+
+// ---- WSL distro discovery ----
+export {
+  WSL_LIST_TIMEOUT_MS,
+  parseWslDistroList,
+  listWslDistros,
+  selectWslDistro,
+} from "./wsl-distros.js";
+export type { WslListRunner } from "./wsl-distros.js";
+
+// ---- outputRef sidecar (full output behind truncated results) ----
+export {
+  OUTPUT_REF_PATTERN,
+  OUTPUT_SIDECAR_MAX_FILES,
+  OUTPUT_SIDECAR_MAX_BYTES,
+  OUTPUT_SIDECAR_MAX_FILE_CHARS,
+  getOutputSidecarDir,
+  isValidOutputRef,
+  persistToolOutput,
+  readToolOutput,
+} from "./output-sidecar.js";
+export type { OutputSidecarOptions } from "./output-sidecar.js";
+
 // ---- Execution service ----
 export { ToolExecutionService } from "./executor.js";
 export type { ToolExecutorOptions, ExecuteOptions } from "./executor.js";

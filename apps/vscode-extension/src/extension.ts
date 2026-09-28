@@ -45,6 +45,7 @@ import type {
   ContinuityStatePayload,
   ContinuityTurnState,
   DiagnosticsContextPayload,
+  DiffContext,
   FileContext,
   FolderContext,
   RawDiagnosticInput,
@@ -53,6 +54,8 @@ import type {
   SkillsListPayload,
   SkillResultPayload,
 } from "@codepilot/shared";
+import { keepAliveMinutesToDuration } from "@codepilot/agent-runtime";
+import { GitEngine } from "@codepilot/git-engine";
 import { createObservability, type Observability } from "@codepilot/shared";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -77,7 +80,10 @@ import {
 import type { PathGuard } from "@codepilot/changeset-engine";
 import { AgentContextService } from "./agent-context-service";
 import { createSkillGatedApproval } from "./agent-context-service";
-import { TerminalSessionManager } from "./terminal-session-manager";
+import {
+  TerminalSessionManager,
+  type SessionCommandRecord,
+} from "./terminal-session-manager";
 import { BUILTIN_TOOL_DISPLAY_CONTRACT } from "./tool-contract";
 import {
   createAgentTerminalSessionTools,
@@ -112,7 +118,13 @@ import {
   type ToolAuditSink,
   type UserApprovalChoice,
 } from "@codepilot/tool-engine";
-import { UsageLedger, type CatalogProvider } from "@codepilot/model-gateway";
+import {
+  UsageLedger,
+  estimateCost,
+  modelToolCallingSupport,
+  type CatalogProvider,
+  type LlmToolCallingSupport,
+} from "@codepilot/model-gateway";
 import {
   ProviderService,
   ProviderPreferenceStore,
@@ -649,7 +661,12 @@ function getPluginService(): PluginService {
 let taskHistoryService: TaskHistoryService | null = null;
 function getTaskHistoryService(): TaskHistoryService | null {
   if (taskHistoryService) return taskHistoryService;
-  if (!changeSetManager) return null;
+  // PERSISTENCE FIX (live-verified): history was gated on changeSetManager,
+  // which is only created inside ensureRuntime() — so history/list failed
+  // with "backend unavailable (workspace not initialized)" until the first
+  // agent run. History is a PERSISTENCE concern: it needs only the task
+  // store (created on activation) and null-safe decorations below.
+  if (!extensionContext) return null;
   taskHistoryService = new TaskHistoryService({
     taskStore: getTaskStore(),
     listCheckpoints: (taskId) =>
@@ -863,11 +880,37 @@ async function pushTeamDetails(teamId: string): Promise<void> {
   }
 }
 
-/** Push the authoritative team list (never throws into the handler). */
+/**
+ * Push the authoritative team list (never throws into the handler).
+ *
+ * BUG FIX: the bootstrap `team/list` is the FIRST team request a fresh
+ * WebView sends. It must LAZY-INITIALIZE the authoritative TeamService
+ * (and its event subscription) instead of answering "service not
+ * initialized" — a fresh install has no teams yet but must still render
+ * an empty list, and any later team/create must be able to persist.
+ * Only a genuine construction/list failure produces team/result success:false.
+ */
 async function pushTeamList(correlationId?: string): Promise<void> {
-  if (!teamService) return;
+  let svc: TeamService;
   try {
-    const teams = await teamService.listTeams();
+    svc = getTeamService();
+  } catch (err) {
+    // Fail LOUD, not silent: an unanswered request would leave the webview's
+    // loading state stuck on "Loading teams…" forever.
+    sendToWebview({
+      type: "team/result",
+      id: correlationId ?? genId(),
+      payload: {
+        success: false,
+        action: "list",
+        error: `backend unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      timestamp: Date.now(),
+    });
+    return;
+  }
+  try {
+    const teams = await svc.listTeams();
     sendToWebview({
       type: "team/list_result",
       id: correlationId ?? genId(),
@@ -961,12 +1004,35 @@ function buildMcpAgentTools(): AgentTool[] {
 function buildBrowserAgentTools(): AgentTool[] {
   if (!m4Pipeline) return [];
   const svc = ensureBrowserService({
+    allowLoopbackForTests: vscode.workspace
+      .getConfiguration("codepilot")
+      .get<boolean>("localAI.browser.allowLoopbackForTests", false),
     workspaceRoot:
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
     m4: m4Pipeline,
     observability: {
       increment: (name, tags) => observability.metrics.increment(name, tags),
       observeMs: (name, ms) => observability.metrics.observeMs(name, ms),
+    },
+    // Row 21: stage screenshot bytes into the task store so they hydrate
+    // into the provider conversation (vision-gated upstream).
+    onImageCaptured: (taskId, image) => {
+      try {
+        const store = getTaskStore();
+        if (!store) return;
+        store.stageImage(taskId, {
+          mime: image.mime,
+          name: image.name,
+          sizeBytes: image.sizeBytes,
+          bytes: image.bytes,
+        });
+      } catch (err) {
+        outputChannel.appendLine(
+          `[Browser] screenshot staging failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     },
   });
   if (!svc) {
@@ -1565,6 +1631,76 @@ async function runAgent(): Promise<void> {
  * an honest record. Idempotent: only transitions `running` → `interrupted`,
  * serialized through the same persistence queue as every other status write.
  */
+/**
+ * Shared cleanup for `agent/stop` and `agent/pause`: abort the runtime,
+ * close agent-owned terminal sessions, cancel healing + MCP/M4 approvals,
+ * then reconcile the persisted task status (running -> interrupted/paused).
+ * Pause and stop differ ONLY in the pause-intent flag set before calling.
+ */
+async function stopAndReconcileAgent(): Promise<void> {
+  await runtime?.abort();
+  // Agent-initiated tracked terminal sessions: close sessions owned by
+  // the stopping task and cancel their running commands. Sessions of
+  // other tasks (none today — one runtime) are untouched.
+  const stoppedSessionId = runtime?.getState().sessionId;
+  if (stoppedSessionId && terminalSessions) {
+    const closed =
+      terminalSessions.cancelAgentSessionsForTask(stoppedSessionId);
+    if (closed > 0) {
+      outputChannel.appendLine(
+        `[M7] Agent stop: closed ${closed} tracked session(s) for task`,
+      );
+    }
+  }
+  // Cancel active self-healing
+  if (activeHealingEngine) {
+    activeHealingEngine.cancel();
+    activeHealingEngine = null;
+    outputChannel.appendLine(
+      "[Auto-Heal] Cancelled active healing engine",
+    );
+  }
+  // Cancel all pending MCP approval requests
+  const cancelled = mcpManager?.cancelAllApprovals() ?? [];
+  if (cancelled.length > 0) {
+    outputChannel.appendLine(
+      `[MCP] Cancelled ${cancelled.length} pending approval requests`,
+    );
+    for (const req of cancelled) {
+      sendToWebview({
+        type: "mcp/approval_required",
+        id: genId(),
+        payload: { ...req, status: "cancelled" },
+        timestamp: Date.now(),
+      });
+    }
+  }
+  // Cancel all pending M4 approval requests
+  if (m4Pipeline) {
+    const pending = m4Pipeline.approvalManager.listPending();
+    for (const req of pending) {
+      m4Pipeline.approvalManager.cancel(req.approvalId, "Agent stopped");
+    }
+    if (pending.length > 0) {
+      outputChannel.appendLine(
+        `[M4] Cancelled ${pending.length} pending approval requests`,
+      );
+    }
+  }
+  // A stopped task must never remain `running` (see helper doc).
+  await reconcileStoppedTaskStatus();
+}
+
+/**
+ * Phase 2 - pause intent. `agent/pause` aborts exactly like `agent/stop`
+ * but asks BOTH persistence paths (persistTaskEvent "cancelled" and this
+ * reconcile helper) to record the task as PAUSED (resumable, never running)
+ * instead of interrupted. Never consumed here - it is cleared when a new
+ * run starts, on resume, or on an explicit stop - so whichever path runs
+ * first, both agree on the final status.
+ */
+let pauseIntentTaskId: string | null = null;
+
 async function reconcileStoppedTaskStatus(): Promise<void> {
   const taskId = activeTaskId;
   if (!taskId) return;
@@ -1572,18 +1708,21 @@ async function reconcileStoppedTaskStatus(): Promise<void> {
     const store = getTaskStore();
     const task = await store.get(taskId);
     if (task?.status !== "running") return;
+    const paused = pauseIntentTaskId === taskId;
     await taskPersistenceQueue.run(taskId, async () => {
       // Re-check inside the queue: a completion/cancellation write that
       // raced ahead of us in the same queue must win.
       const current = await store.get(taskId);
       if (current?.status !== "running") return;
-      await store.update(taskId, {
-        status: "interrupted",
-        lastStep: "run_interrupted",
-      });
+      await store.update(
+        taskId,
+        paused
+          ? { status: "paused", lastStep: "task_paused" }
+          : { status: "interrupted", lastStep: "run_interrupted" },
+      );
     });
     outputChannel.appendLine(
-      `[M12] Stop reconciliation: task ${taskId} marked interrupted`,
+      `[M12] Stop reconciliation: task ${taskId} marked ${paused ? "paused" : "interrupted"}`,
     );
   } catch {
     // best-effort — a reconciliation failure must never block stop
@@ -1615,6 +1754,73 @@ async function stopAgent(): Promise<void> {
     // best effort
   }
   await reconcileStoppedTaskStatus();
+  // BUG 1 (connection truth): an explicit stop re-verifies the selected
+  // provider so the header never outlives the provider's real state.
+  void pushSelectedProviderState();
+}
+
+/**
+ * BUG 4 helper — read the VS Code Ollama settings and convert keepAlive
+ * minutes to a Go duration. Undefined means "omit from the request".
+ */
+function readOllamaRuntimeSettings(config: vscode.WorkspaceConfiguration): {
+  contextLength?: number;
+  numPredict?: number;
+  keepAliveDuration?: string;
+  think?: boolean;
+} {
+  const ctx = config.get<number>("localAI.ollama.contextLength");
+  const numPredict = config.get<number>("localAI.ollama.numPredict");
+  const keepAliveMinutes = config.get<number>("localAI.ollama.keepAlive");
+  // Three-state thinking control: "default" → undefined (server decides,
+  // never a blind disable); "enabled"/"disabled" map to true/false.
+  const thinkSetting = config.get<string>("localAI.ollama.think", "default");
+  const think =
+    thinkSetting === "enabled"
+      ? true
+      : thinkSetting === "disabled"
+        ? false
+        : undefined;
+  return {
+    ...(ctx !== undefined && Number.isFinite(ctx) && ctx > 0
+      ? { contextLength: Math.floor(ctx) }
+      : {}),
+    ...(numPredict !== undefined &&
+    Number.isFinite(numPredict) &&
+    numPredict > 0
+      ? { numPredict: Math.floor(numPredict) }
+      : {}),
+    ...(keepAliveMinutes !== undefined
+      ? { keepAliveDuration: keepAliveMinutesToDuration(keepAliveMinutes) }
+      : {}),
+    ...(think !== undefined ? { think } : {}),
+  };
+}
+
+/**
+ * BUG 1 — push the selected provider's FRESH connection verdict to the
+ * webview (host-side probe → provider/list with selectedState). Used after
+ * events that can change connection truth (chat failure, explicit stop) so
+ * the header can never keep a stale "Connected".
+ */
+async function pushSelectedProviderState(): Promise<void> {
+  try {
+    const svc = getProviderService();
+    const selectedId = activeProviderLabel();
+    const state = await svc.connectionState(selectedId);
+    sendToWebview({
+      type: "provider/list",
+      id: genId(),
+      payload: {
+        providers: [state],
+        selectedProviderId: selectedId,
+        selectedState: state,
+      },
+      timestamp: Date.now(),
+    });
+  } catch {
+    // best effort — the next explicit probe re-establishes truth
+  }
 }
 
 /**
@@ -1916,7 +2122,16 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
   // getTerminalSessions() (workspace root only; no LLM runtime needed), so
   // tracked sessions work before any chat runtime exists.
   // M5 CheckpointManager: restore/revert also flow through FileMutationService.
-  checkpointManager = new CheckpointManager({ mutation: mutationService });
+  // Phase 8 durability: checkpoint metadata + snapshots persist under the
+  // extension's global storage so restores survive a host/extension restart
+  // (corrupt files are quarantined by the manager, never thrown).
+  checkpointManager = new CheckpointManager({
+    mutation: mutationService,
+    storageDir: path.join(
+      extensionContext?.globalStorageUri?.fsPath ?? process.cwd(),
+      "checkpoints",
+    ),
+  });
   fileMutationService = mutationService;
 
   // NOTE: M4 pipeline is initialized in activate() at the earliest safe point.
@@ -2021,6 +2236,11 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
     };
   };
 
+  // BUG 4: the VS Code Ollama settings must reach the native runtime's
+  // /api/chat body (num_ctx/num_predict/keep_alive). Previously only
+  // temperature/baseUrl were threaded; contextLength/numPredict/keepAlive
+  // were dead configuration.
+  const ollamaRuntime = readOllamaRuntimeSettings(config);
   runtime = new CodePilotRuntime({
     workspaceRoot,
     providerId,
@@ -2031,6 +2251,35 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
     agentMode: config.get("agentMode", "act") as CodePilotAgentMode,
     maxIterations: config.get("maxIterations", 50),
     temperature: config.get("localAI.ollama.temperature", 0.7),
+    // Phase 12 (row 14): persisted command-repair history under global
+    // storage (bounded, atomic, corrupt-quarantined by the loop).
+    ...(extensionContext?.globalStorageUri?.fsPath
+      ? {
+          commandRepairPersistPath: path.join(
+            extensionContext.globalStorageUri.fsPath,
+            "command-repair.json",
+          ),
+        }
+      : {}),
+    ...(ollamaRuntime.contextLength !== undefined
+      ? { ollamaContextLength: ollamaRuntime.contextLength }
+      : {}),
+    ...(ollamaRuntime.numPredict !== undefined
+      ? { ollamaNumPredict: ollamaRuntime.numPredict }
+      : {}),
+    ...(ollamaRuntime.keepAliveDuration !== undefined
+      ? { ollamaKeepAlive: ollamaRuntime.keepAliveDuration }
+      : {}),
+    ...(ollamaRuntime.think !== undefined
+      ? { ollamaThink: ollamaRuntime.think }
+      : {}),
+    // BUG 5: local Ollama chat can bypass undici's 300s HEADERS timeout by
+    // opting into the node:http transport, so a slow CPU prefill is governed
+    // only by the provider's first-token inactivity window (default 15m).
+    // Global fetch remains the default/testable transport; this explicit
+    // setting is false unless the user opts in. It no-ops for cloud providers.
+    ollamaUseNodeHttpTransport:
+      config.get<boolean>("localAI.ollama.useNodeHttpTransport", false) === true,
     // ChangeSet staging bridge: write-tool proposals become pending ChangeSets.
     // The file is written ONLY when the user approves in the Changes tab.
     onWriteProposal: async (toolName, proposals) => {
@@ -2043,6 +2292,7 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
         proposals.map((p) => ({
           filePath: p.relativePath,
           proposedContent: p.proposedContent,
+          ...(p.delete === true ? { delete: true as const } : {}),
         })),
       );
       outputChannel.appendLine(
@@ -2059,6 +2309,7 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
             diff: c.diff,
             status: c.status,
             isNew: !c.originalContent,
+            isDelete: c.delete === true,
           })),
         },
         timestamp: Date.now(),
@@ -2090,6 +2341,17 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
   });
 
   await runtime.initialize();
+
+  // Authoritative lifecycle push: a webview opened BEFORE the runtime existed
+  // shows "runtime not started" states; when the runtime becomes ready, tell
+  // it immediately so Tools/Skills/Teams auto-populate without a manual
+  // refresh (or a webview reload).
+  sendToWebview({
+    type: "runtime/ready",
+    id: genId(),
+    payload: {},
+    timestamp: Date.now(),
+  });
 
   // Initialize recovery manager for auto-healing
   recoveryManager = new RecoveryManager(workspaceRoot, {
@@ -2293,10 +2555,21 @@ async function sendPromptToAgent(
         modelId: activeModelLabel(),
         mode,
       });
+      pauseIntentTaskId = null; // a new run supersedes any stale pause intent
       activeTaskId = task.id;
       trackTurnChain(task.id);
       // The chain grew: tell the UI which turns the next seed will carry.
       void pushContinuityState();
+      // Phase 2: carry the current structured plan onto the chained turn's
+      // task record so THIS turn's history/details shows the same plan.
+      const carriedPlan = runtime?.getTaskPlan() ?? null;
+      if (carriedPlan) {
+        void taskPersistenceQueue
+          .run(task.id, () => store.update(task.id, { plan: carriedPlan }))
+          .then((outcome) => {
+            reportPersistenceOutcome(outcome, "plan-seed", task.id);
+          });
+      }
       if (rawTurnImages.length > 0) {
         const staged = await stageTurnImages(store, task.id, rawTurnImages);
         if ("error" in staged) {
@@ -2539,6 +2812,18 @@ async function resumePersistedTask(
   // from the resumed conversation (dedupe keeps one entry per task).
   trackTurnChain(persisted.id);
   void pushContinuityState();
+  // Phase 2: re-hydrate this task's structured plan into the runtime so the
+  // continuation keeps ITS plan, and push it to the WebView stepper.
+  pauseIntentTaskId = null;
+  const resumedPlan = persisted.plan ?? null;
+  runtime.setTaskPlan(resumedPlan);
+  // Always push (a null plan clears a stale stepper from a prior task).
+  sendToWebview({
+    type: "plan/updated",
+    id: genId(),
+    payload: { plan: resumedPlan, requestId: activeRequestId },
+    timestamp: Date.now(),
+  });
   try {
     await runtime.startSession(prompt, {
       agentMode: "act",
@@ -2732,6 +3017,20 @@ async function recordTaskRunCounters(
       count: t.count,
       totalDurationMs: t.totalDurationMs,
     }));
+    // Per-task cost estimate from catalogue pricing. Undefined pricing means
+    // NO field is written — the UI must show "unavailable", never a number.
+    let estimatedCostUsd: number | undefined;
+    try {
+      const cfg = vscode.workspace.getConfiguration("codepilot");
+      estimatedCostUsd = estimateCost(
+        String(cfg.get("provider", "ollama")),
+        activeModelLabel(),
+        state.usage.inputTokens,
+        state.usage.outputTokens,
+      );
+    } catch {
+      estimatedCostUsd = undefined;
+    }
     await store.update(taskId, {
       agentState: {
         ...((agentState as Record<string, unknown> | undefined) ?? {}),
@@ -2741,6 +3040,7 @@ async function recordTaskRunCounters(
         filesChanged: state.filesChanged.slice(0, 100),
         inputTokens: state.usage.inputTokens,
         outputTokens: state.usage.outputTokens,
+        ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
         ...(extra?.lastError
           ? { lastError: scrubSecretsText(extra.lastError).slice(0, 500) }
           : {}),
@@ -3390,6 +3690,22 @@ function persistTaskEvent(event: AgentEvent): void {
         enqueueCaptureFlush(taskId, capture);
         return;
       }
+      case "agent.plan_created":
+      case "agent.plan_updated": {
+        // Phase 2: persist the structured plan (metadata only) through the
+        // per-task queue; redaction happens in the store on write.
+        const plan = event.taskPlan;
+        if (plan && typeof plan === "object") {
+          void taskPersistenceQueue
+            .run(taskId, async () => {
+              await store.update(taskId, { plan });
+            })
+            .then((outcome) => {
+              reportPersistenceOutcome(outcome, "plan-update", taskId);
+            });
+        }
+        return;
+      }
       case "completed": {
         // Final flush FIRST (pending text + tool_use/tool_result blocks),
         // then the legacy text log, status, and counters — all in ONE queued
@@ -3459,12 +3775,15 @@ function persistTaskEvent(event: AgentEvent): void {
         void taskPersistenceQueue
           .run(taskId, async () => {
             if (capture) await flushCapture(taskId, capture);
-            await store.update(taskId, {
-              status: "interrupted",
-              lastStep: "run_interrupted",
-            });
+            const paused = pauseIntentTaskId === taskId;
+            await store.update(
+              taskId,
+              paused
+                ? { status: "paused", lastStep: "task_paused" }
+                : { status: "interrupted", lastStep: "run_interrupted" },
+            );
             observability.metrics.increment("codepilot_tasks_total", {
-              status: "interrupted",
+              status: paused ? "paused" : "interrupted",
             });
           })
           .then((outcome) => {
@@ -3559,9 +3878,45 @@ function recordAgentEventMetrics(event: AgentEvent): void {
 }
 
 function forwardAgentEvent(event: AgentEvent): void {
+  // Phase 1/2 tool-automation diagnostics: the RUNTIME is authoritative for
+  // mode/provider/model/tool-count truth. Its structured status lines are
+  // mirrored to the output channel in the diagnostic format (no prompt text,
+  // no secrets — ids and counts only). Everything else is unchanged.
+  if (event.type === "status") {
+    const truth = /^(AGENT_REQUEST|AGENT_COMPLETED_WITHOUT_TOOL_CALL|AGENT_TOOLS_FILTERED) (.+)$/.exec(
+      event.message,
+    );
+    if (truth) {
+      const detail = truth[2]!.replace(
+        /mode=(\w+)/,
+        (_s, mo: string) => `mode=${mo.toUpperCase()}`,
+      );
+      outputChannel.appendLine(
+        truth[1] === "AGENT_REQUEST"
+          ? `[agent] request ${detail}`
+          : truth[1] === "AGENT_COMPLETED_WITHOUT_TOOL_CALL"
+            ? `[agent] completed without tool call ${detail}`
+            : `[agent] tools filtered ${detail}`,
+      );
+    }
+  }
   persistTaskEvent(event);
   recordAgentEventMetrics(event);
   switch (event.type) {
+    case "agent.plan_created":
+    case "agent.plan_updated": {
+      // Phase 2: push the structured plan to the WebView stepper live.
+      outputChannel.appendLine(
+        `[agent] plan ${event.type === "agent.plan_created" ? "created" : "updated"} steps=${event.taskPlan.steps.length}`,
+      );
+      sendToWebview({
+        type: "plan/updated",
+        id: genId(),
+        payload: { plan: event.taskPlan, requestId: activeRequestId },
+        timestamp: Date.now(),
+      });
+      break;
+    }
     case "text_delta":
       logChat("ASSISTANT_DELTA", { chars: event.text.length });
       sendToWebview({
@@ -3727,6 +4082,12 @@ function forwardAgentEvent(event: AgentEvent): void {
         },
         timestamp: Date.now(),
       });
+
+      // BUG 1 (connection truth): a real provider failure invalidates any
+      // cached "Connected" verdict — push the selected provider's FRESH
+      // probe result so the header shows unavailable/auth-invalid instead
+      // of a stale positive state.
+      void pushSelectedProviderState();
 
       // Auto-trigger self-healing for recoverable errors in act mode
       if (event.recoverable && recoveryManager) {
@@ -4232,6 +4593,74 @@ async function formatSelectionBlock(
 }
 
 /**
+ * Attach a bounded git diff for the @diff composer chip. Scope is coerced —
+ * anything but "staged" is the working tree, so a malformed payload can
+ * never smuggle arguments into git. Exported for unit tests.
+ */
+export async function formatDiffContextBlock(
+  diff: DiffContext,
+  root: string | null,
+): Promise<string> {
+  const staged = diff.scope === "staged";
+  const header = `[Attached diff — ${staged ? "staged changes" : "working tree"}]`;
+  if (!root) return `${header}\n(no workspace open — diff unavailable)`;
+  try {
+    const engine = new GitEngine(root);
+    if (!(await engine.isRepository())) {
+      return `${header}\n(not a git repository — diff unavailable)`;
+    }
+    const raw = staged ? await engine.getStagedDiff() : await engine.getDiff();
+    const text = raw.trim();
+    if (!text) {
+      return `${header}\n(no ${staged ? "staged" : "unstaged"} changes)`;
+    }
+    const bounded =
+      text.length > CONTEXT_MAX_INLINE_CHARS
+        ? `${text.slice(0, CONTEXT_MAX_INLINE_CHARS)}\n... [diff truncated, ${text.length} chars total — use your git_diff tool to inspect the remainder]`
+        : text;
+    return `${header}\n\`\`\`diff\n${bounded}\n\`\`\``;
+  } catch (err) {
+    return `${header}\n(unavailable: ${err instanceof Error ? err.message : String(err)})`;
+  }
+}
+
+/**
+ * Attach recent terminal command history for the @terminal composer chip.
+ * Input is the host's bounded, redacted command history — never raw
+ * buffers. Exported for unit tests.
+ */
+export function formatTerminalContextBlock(
+  records: readonly SessionCommandRecord[],
+): string {
+  const header = "[Attached terminal output — recent commands]";
+  const recent = records.slice(-5);
+  if (recent.length === 0) {
+    return `${header}\n(no recent terminal commands)`;
+  }
+  const parts: string[] = [header];
+  let budget = CONTEXT_MAX_INLINE_CHARS;
+  for (const rec of recent) {
+    const exit = rec.exitCode === null ? "" : ` (exit ${rec.exitCode})`;
+    const entry = [
+      `$ ${rec.command}${exit}`,
+      rec.stdoutTail,
+      rec.stderrTail ? `stderr:\n${rec.stderrTail}` : "",
+      rec.outputTruncated ? "... [output truncated]" : "",
+    ]
+      .filter((s) => s && s.length > 0)
+      .join("\n");
+    const chunk = entry.length > budget ? entry.slice(0, budget) : entry;
+    parts.push(chunk);
+    budget -= chunk.length;
+    if (budget <= 0) {
+      parts.push("... [terminal context budget reached]");
+      break;
+    }
+  }
+  return parts.join("\n");
+}
+
+/**
  * Compose the final agent prompt: the user's text verbatim, plus M6
  * repository retrieval, M9 rules/skills, and composer context appended as
  * labeled, untrusted-metadata blocks. The visible chat message in the
@@ -4299,6 +4728,14 @@ async function buildPromptWithComposerContext(
   }
   if (ctx.selection) {
     blocks.push(await formatSelectionBlock(ctx.selection));
+  }
+  for (const diff of ctx.diffs ?? []) {
+    blocks.push(await formatDiffContextBlock(diff, workspaceRoot));
+  }
+  if ((ctx.terminals ?? []).length > 0) {
+    blocks.push(
+      formatTerminalContextBlock(getTerminalSessions().listHistory()),
+    );
   }
 
   if (blocks.length === 0) return text;
@@ -4434,58 +4871,17 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         }
         break;
       }
+      case "agent/pause": {
+        // Phase 2: pause aborts exactly like stop, but the persistence
+        // paths record the task as PAUSED (resume-ready), never "running".
+        pauseIntentTaskId = activeTaskId ?? null;
+        await stopAndReconcileAgent();
+        break;
+      }
       case "agent/stop": {
-        await runtime?.abort();
-        // Agent-initiated tracked terminal sessions: close sessions owned by
-        // the stopping task and cancel their running commands. Sessions of
-        // other tasks (none today — one runtime) are untouched.
-        const stoppedSessionId = runtime?.getState().sessionId;
-        if (stoppedSessionId && terminalSessions) {
-          const closed =
-            terminalSessions.cancelAgentSessionsForTask(stoppedSessionId);
-          if (closed > 0) {
-            outputChannel.appendLine(
-              `[M7] Agent stop: closed ${closed} tracked session(s) for task`,
-            );
-          }
-        }
-        // Cancel active self-healing
-        if (activeHealingEngine) {
-          activeHealingEngine.cancel();
-          activeHealingEngine = null;
-          outputChannel.appendLine(
-            "[Auto-Heal] Cancelled active healing engine",
-          );
-        }
-        // Cancel all pending MCP approval requests
-        const cancelled = mcpManager?.cancelAllApprovals() ?? [];
-        if (cancelled.length > 0) {
-          outputChannel.appendLine(
-            `[MCP] Cancelled ${cancelled.length} pending approval requests`,
-          );
-          for (const req of cancelled) {
-            sendToWebview({
-              type: "mcp/approval_required",
-              id: genId(),
-              payload: { ...req, status: "cancelled" },
-              timestamp: Date.now(),
-            });
-          }
-        }
-        // Cancel all pending M4 approval requests
-        if (m4Pipeline) {
-          const pending = m4Pipeline.approvalManager.listPending();
-          for (const req of pending) {
-            m4Pipeline.approvalManager.cancel(req.approvalId, "Agent stopped");
-          }
-          if (pending.length > 0) {
-            outputChannel.appendLine(
-              `[M4] Cancelled ${pending.length} pending approval requests`,
-            );
-          }
-        }
-        // A stopped task must never remain `running` (see helper doc).
-        await reconcileStoppedTaskStatus();
+        // An explicit stop is never a pause: drop any stale pause intent.
+        pauseIntentTaskId = null;
+        await stopAndReconcileAgent();
         break;
       }
       case "settings/get": {
@@ -4577,6 +4973,23 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
               break;
             case "localAI.ollama.temperature":
               patch.temperature = value;
+              break;
+            case "localAI.ollama.contextLength":
+              patch.ollamaContextLength = value;
+              break;
+            case "localAI.ollama.numPredict":
+              patch.ollamaNumPredict = value;
+              break;
+            case "localAI.ollama.keepAlive":
+              // Minutes → Go duration; never persists a malformed value.
+              patch.ollamaKeepAlive = keepAliveMinutesToDuration(
+                typeof value === "number" ? value : Number(value),
+              );
+              break;
+            case "localAI.ollama.think":
+              // Three-state: "default" → clear back to server default.
+              patch.ollamaThink =
+                value === "enabled" ? true : value === "disabled" ? false : undefined;
               break;
             case "maxIterations":
               patch.maxIterations = value;
@@ -4685,39 +5098,29 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       case "provider/list": {
         // Authoritative provider list — derived from the SAME catalogue the
         // runtime routes through (@codepilot/model-gateway), not a hard-coded
-        // probe. Connection truth comes from the per-provider health check:
-        //   local providers   → live endpoint probe
-        //   key-based cloud   → SecretStorage credential presence (no network)
-        // Everything else reports neutrally; the UI's provider/test message
-        // performs the live probe for the selected provider.
+        // probe. BUG 1 FIX: every entry now carries an honest, host-verified
+        // ConnectionState derived ONLY from an actual probe of that
+        // provider's OWN endpoint (per-provider catalogue probePath +
+        // effective base URL). Credential presence maps to "configured" /
+        // "unverified" — NEVER "connected" ("API key exists" is not
+        // "provider connected"). Selection never gates the probe: every
+        // provider reports its own live truth, so the selected provider can
+        // never inherit another provider's verdict.
         try {
           const svc = getProviderService();
-          const cfg = vscode.workspace.getConfiguration("codepilot");
-          const selectedProvider = cfg.get<string>("provider", "ollama");
-          const providers = await Promise.all(
-            svc.listProviders().map(async (p) => {
-              let connected = false;
-              if (p.id === selectedProvider) {
-                if (p.category === "local") {
-                  connected = (
-                    await probeOllama(
-                      cfg.get(
-                        "localAI.ollama.baseUrl",
-                        "http://localhost:11434",
-                      ),
-                    )
-                  ).connected;
-                } else {
-                  connected = await svc.hasCredential(p.id);
-                }
-              }
-              return { id: p.id, name: p.displayName, connected };
-            }),
-          );
+          const providers = await svc.listConnectionStates();
+          const selectedId = activeProviderLabel();
+          // The SELECTED provider is always probed fresh — this response is
+          // the host's authoritative verdict the header must display.
+          const selected = providers.find((s) => s.id === selectedId);
           sendToWebview({
             type: "provider/list",
             id,
-            payload: providers,
+            payload: {
+              providers,
+              selectedProviderId: selectedId,
+              selectedState: selected,
+            },
             timestamp: Date.now(),
           });
         } catch (err) {
@@ -4729,7 +5132,84 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           sendToWebview({
             type: "provider/list",
             id,
-            payload: [],
+            payload: { providers: [] },
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
+      case "provider/test": {
+        // Explicit Refresh/Test: run the REAL probe and answer with the
+        // per-provider result (provider/test_result) plus the updated
+        // selected-state verdict for the header.
+        try {
+          const p = message.payload as { providerId?: unknown };
+          const providerId =
+            typeof p.providerId === "string" ? p.providerId : "";
+          if (!providerId) throw new Error("Invalid provider id.");
+          const result = await getProviderService().testConnection(providerId);
+          sendToWebview({
+            type: "provider/test_result",
+            id,
+            payload: { providerId, ...result },
+            timestamp: Date.now(),
+          });
+          if (providerId === activeProviderLabel()) {
+            const verdictState: string =
+              result.state === "invalid-config" ? "unverified" : result.state;
+            const detail =
+              result.message !== "Connected." ? result.message : undefined;
+            sendToWebview({
+              type: "provider/list",
+              id: genId(),
+              payload: {
+                providers: [
+                  {
+                    id: providerId,
+                    name:
+                      getProviderService()
+                        .listProviders()
+                        .find((x) => x.id === providerId)?.displayName ??
+                      providerId,
+                    state: verdictState,
+                    connected: verdictState === "connected",
+                    ...(detail ? { detail } : {}),
+                    ...(result.latencyMs !== undefined
+                      ? { latencyMs: result.latencyMs }
+                      : {}),
+                    checkedAt: new Date().toISOString(),
+                  },
+                ],
+                selectedProviderId: providerId,
+                selectedState: {
+                  id: providerId,
+                  name: providerId,
+                  state: verdictState,
+                  connected: verdictState === "connected",
+                  ...(detail ? { detail } : {}),
+                  ...(result.latencyMs !== undefined
+                    ? { latencyMs: result.latencyMs }
+                    : {}),
+                  checkedAt: new Date().toISOString(),
+                },
+              },
+              timestamp: Date.now(),
+            });
+          }
+        } catch (err) {
+          sendToWebview({
+            type: "provider/test_result",
+            id,
+            payload: {
+              providerId:
+                typeof (message.payload as { providerId?: unknown })
+                  ?.providerId === "string"
+                  ? (message.payload as { providerId: string }).providerId
+                  : "",
+              state: "unavailable",
+              message:
+                err instanceof Error ? err.message : "Connection test failed.",
+            },
             timestamp: Date.now(),
           });
         }
@@ -4862,38 +5342,7 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         }
         break;
       }
-      case "provider/test": {
-        try {
-          const p = message.payload as { providerId?: unknown };
-          const providerId =
-            typeof p.providerId === "string" ? p.providerId : "";
-          if (!providerId) throw new Error("Invalid provider id.");
-          const result = await getProviderService().testConnection(providerId);
-          sendToWebview({
-            type: "provider/health",
-            id,
-            payload: { providerId, ...result },
-            timestamp: Date.now(),
-          });
-        } catch (err) {
-          sendToWebview({
-            type: "provider/health",
-            id,
-            payload: {
-              providerId:
-                typeof (message.payload as { providerId?: unknown })
-                  ?.providerId === "string"
-                  ? (message.payload as { providerId: string }).providerId
-                  : "",
-              state: "unavailable",
-              message:
-                err instanceof Error ? err.message : "Connection test failed.",
-            },
-            timestamp: Date.now(),
-          });
-        }
-        break;
-      }
+
       case "provider/models": {
         // Models for a specific provider: dynamic discovery for
         // OpenAI-compatible/local endpoints, static catalogue otherwise.
@@ -5186,6 +5635,9 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
       }
       case "continuity/reset": {
         resetTurnChain();
+        // Phase 2: a new conversation starts without a structured plan.
+        runtime?.setTaskPlan(null);
+        pauseIntentTaskId = null;
         // New conversation also resets session skill toggles so the next
         // turn starts from deterministic file defaults (no stale actives).
         // Persisted tasks/audit/checkpoints/resume are untouched.
@@ -6819,12 +7271,13 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         // Real tool registry: built-in display entries (tool-contract.ts:
         // display name → native callable name) resolved through the
         // PolicyEngine (mode-aware) plus discovered MCP tools with their
-        // permission level.
+        // permission level. runtimeStatus distinguishes not-created from
+        // genuinely-empty so the UI never lies.
         if (!runtime) {
           sendToWebview({
             type: "tools/list_result",
             id,
-            payload: { tools: [], runtimeReady: false },
+            payload: { tools: [], runtimeReady: false, runtimeStatus: "not-created" },
             timestamp: Date.now(),
           });
           break;
@@ -6859,6 +7312,7 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           payload: {
             tools: [...builtInTools, ...mcpTools],
             runtimeReady: true,
+            runtimeStatus: "ready",
           },
           timestamp: Date.now(),
         });
@@ -7287,6 +7741,11 @@ interface ProviderModelLite {
   reasoning: boolean;
   vision: boolean;
   tools: boolean;
+  /**
+   * Tool-calling tri-state from the CodePilot catalogue (true/false/unknown).
+   * "unknown" must NEVER be rendered as supported.
+   */
+  toolCalling: LlmToolCallingSupport;
   inputPerMtok?: number;
   outputPerMtok?: number;
 }
@@ -7361,6 +7820,8 @@ async function modelsForProvider(
               reasoning: m.capabilities?.reasoning ?? false,
               vision: m.capabilities?.vision ?? false,
               tools: m.capabilities?.tools ?? false,
+              // Authoritative tri-state — NEVER inferred from the name.
+              toolCalling: modelToolCallingSupport(providerId, m.id),
             }));
           }
         } catch {
@@ -7377,6 +7838,7 @@ async function modelsForProvider(
       reasoning: m.reasoning,
       vision: m.vision,
       tools: m.tools,
+      toolCalling: m.toolCalling,
       inputPerMtok: m.inputPerMtok,
       outputPerMtok: m.outputPerMtok,
     }));
