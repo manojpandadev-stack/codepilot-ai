@@ -646,7 +646,35 @@ export class TaskStore {
     const final = JSON.stringify(redactForPersistence(task), null, 2);
     const tmp = `${file}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, final, "utf8");
-    fs.renameSync(tmp, file);
+    this.renameWithRetry(tmp, file);
+  }
+
+  /**
+   * Atomic rename with a bounded retry for transient file locks.
+   *
+   * On Windows, antivirus/indexer hooks can briefly hold the destination
+   * file, making the tmp+rename step fail with EPERM/EACCES/EBUSY for a
+   * moment. A few short synchronous backoffs keep the crash-safe
+   * tmp+rename contract (durability still guaranteed on return); any
+   * non-transient error — or a lock that outlives the retries — surfaces
+   * immediately, exactly as before.
+   */
+  private renameWithRetry(tmp: string, file: string): void {
+    const backoffsMs = [10, 25, 50];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.renameSync(tmp, file);
+        return;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const transient =
+          code === "EPERM" || code === "EACCES" || code === "EBUSY";
+        const backoffMs = backoffsMs[attempt];
+        if (!transient || backoffMs === undefined) throw err;
+        // Synchronous sleep: write() callers rely on durability-on-return.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, backoffMs);
+      }
+    }
   }
 
   /** Redact + bound one conversation entry before it reaches disk. */
