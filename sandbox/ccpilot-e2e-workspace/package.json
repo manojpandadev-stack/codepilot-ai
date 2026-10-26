@@ -1,0 +1,10 @@
+{
+  "name": "ccpilot-e2e-calc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Disposable validation workspace for CodePilot E2E product testing",
+  "scripts": {
+    "test": "node tests/run.test.js",
+    "build": "node scripts/build.js"
+  }
+}

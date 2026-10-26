@@ -35,7 +35,10 @@ import {
   sleep,
   type FreshHost,
 } from "./vscode-integration-harness";
-import { runVerification, planVerification } from "../packages/tool-engine/src/verification-engine.js";
+import {
+  runVerification,
+  planVerification,
+} from "../packages/tool-engine/src/verification-engine.js";
 import type {
   WebviewMessage,
   VerificationStatePayload,
@@ -46,7 +49,61 @@ import type {
 // never observe each other's edits through shared mutable state.
 const TEMPLATE = path.resolve(__dirname, "..", "sandbox/ccpilot-e2e-workspace");
 const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "ccpilot-e2e-ws-"));
-fs.cpSync(TEMPLATE, WORKSPACE, { recursive: true });
+
+function initWorkspace(
+  targetDir: string,
+  templatePath: string = TEMPLATE,
+): void {
+  if (fs.existsSync(templatePath)) {
+    fs.cpSync(templatePath, targetDir, { recursive: true });
+    return;
+  }
+  // Resilient fallback: synthesize the template files if missing
+  fs.mkdirSync(path.join(targetDir, "src"), { recursive: true });
+  fs.mkdirSync(path.join(targetDir, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(targetDir, "tests"), { recursive: true });
+  fs.writeFileSync(
+    path.join(targetDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "ccpilot-e2e-calc",
+        version: "1.0.0",
+        private: true,
+        description:
+          "Disposable validation workspace for CodePilot E2E product testing",
+        scripts: {
+          test: "node tests/run.test.js",
+          build: "node scripts/build.js",
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(targetDir, "src", "calc.js"),
+    "function add(a, b) {\n  return a - b;\n}\nfunction multiply(a, b) {\n  return a * b;\n}\nmodule.exports = { add, multiply };\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(targetDir, "src", "greet.js"),
+    "function greet(name) {\n  return `Hello, ${name}!`;\n}\nmodule.exports = { greet };\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(targetDir, "scripts", "build.js"),
+    'const fs = require("node:fs");\nconst path = require("node:path");\nconst srcDir = path.join(__dirname, "..", "src");\nconst outDir = path.join(__dirname, "..", "dist");\nfs.mkdirSync(outDir, { recursive: true });\nconst files = fs.readdirSync(srcDir).filter((f) => f.endsWith(".js")).sort();\nconst body = files.map((f) => fs.readFileSync(path.join(srcDir, f), "utf8")).join("\\n");\nfs.writeFileSync(path.join(outDir, "bundle.js"), body, "utf8");\nprocess.exit(0);\n',
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(targetDir, "tests", "run.test.js"),
+    'const assert = require("node:assert");\nconst { add, multiply } = require("../src/calc.js");\nconst { greet } = require("../src/greet.js");\nassert.strictEqual(add(2, 2), 4, "add(2, 2) === 4");\nassert.strictEqual(add(0, 5), 5, "add(0, 5) === 5");\nassert.strictEqual(add(-1, 1), 0, "add(-1, 1) === 0");\nassert.strictEqual(multiply(3, 4), 12, "multiply(3, 4) === 12");\nassert.strictEqual(greet("Dev"), "Hello, Dev!", "greet returns a greeting");\nconsole.log("5/5 tests passed");\nprocess.exit(0);\n',
+    "utf8",
+  );
+}
+
+initWorkspace(WORKSPACE);
 const CALC = path.join(WORKSPACE, "src", "calc.js");
 const Buggy = "return a - b;";
 const Fixed = "return a + b;";
@@ -64,8 +121,7 @@ const OLLAMA_UP = await fetch(`${OLLAMA_URL}/api/tags`, {
 // is therefore gated behind CCPILOT_E2E_LIVE=1: the deterministic suite
 // validates everything else; the live leg runs on demand (it PASSED 6/6
 // standalone — see vfy-e2e3.log). skipIf keeps the file runnable both ways.
-const LIVE_LEG =
-  OLLAMA_UP && process.env.CCPILOT_E2E_LIVE === "1";
+const LIVE_LEG = OLLAMA_UP && process.env.CCPILOT_E2E_LIVE === "1";
 
 // ============================================================================
 // Harness state
@@ -74,8 +130,7 @@ const LIVE_LEG =
 let host: FreshHost;
 const sent: WebviewMessage[] = [];
 let approvalResolver:
-  | ((approvalId: string, decision: "allow" | "deny") => void)
-  | null = null;
+  ((approvalId: string, decision: "allow" | "deny") => void) | null = null;
 
 function agentStatuses(): string[] {
   return sent
@@ -85,7 +140,12 @@ function agentStatuses(): string[] {
 
 function toolEvents(): Array<{ type: string; name: string }> {
   return sent
-    .filter((m) => m.type === "tool/started" || m.type === "tool/completed" || m.type === "tool_failed")
+    .filter(
+      (m) =>
+        m.type === "tool/started" ||
+        m.type === "tool/completed" ||
+        m.type === "tool_failed",
+    )
     .map((m) => ({
       type: m.type,
       name: (m.payload as { toolName?: string }).toolName ?? "?",
@@ -297,6 +357,28 @@ describe("PHASE 7 — verification engine (real commands)", () => {
     expect(security!.reason).toContain("no security script");
   });
 
+  it("initializes a valid fallback workspace even if template directory is absent", () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "ccpilot-fallback-test-"),
+    );
+    try {
+      initWorkspace(tempDir, path.join(tempDir, "nonexistent-template"));
+      expect(fs.existsSync(path.join(tempDir, "package.json"))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, "src", "calc.js"))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, "tests", "run.test.js"))).toBe(
+        true,
+      );
+      expect(fs.existsSync(path.join(tempDir, "scripts", "build.js"))).toBe(
+        true,
+      );
+      const plan = planVerification(tempDir);
+      expect(plan.checks.map((c) => c.type)).toContain("tests");
+      expect(plan.checks.map((c) => c.type)).toContain("build");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("tests + build run for real; exit statuses map honestly", async () => {
     // This phase shares the workspace with the agent leg, which (when it
     // succeeds) FIXES calc.js on disk. Reset the bug so the phase under
@@ -441,4 +523,10 @@ describe("PHASE 11 — reload continuity", () => {
       first.vscodeStub.configOverrides.delete("model");
     }
   });
+});
+
+afterAll(() => {
+  try {
+    fs.rmSync(WORKSPACE, { recursive: true, force: true });
+  } catch {}
 });
