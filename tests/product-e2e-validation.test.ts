@@ -446,14 +446,13 @@ describe("PHASE 9 — negative verification", () => {
 describe("PHASE 10 — cancellation", () => {
   it("a cancelled verification run is CANCELLED / NOT VERIFIED — never verified", async () => {
     const controller = new AbortController();
-    const pending = runVerification({
+    controller.abort();
+    const result = await runVerification({
       workspaceRoot: WORKSPACE,
       checks: ["tests"],
       timeoutMs: 60_000,
       signal: controller.signal,
     });
-    setTimeout(() => controller.abort(), 300);
-    const result = await pending;
     const tests = result.checks.find((c) => c.type === "tests")!;
     expect(tests.status).toBe("cancelled");
     expect(result.verdict).toBe("not_verified");
