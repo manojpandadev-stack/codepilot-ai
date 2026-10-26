@@ -112,7 +112,20 @@ function MessageBubble({
               {message.content}
             </div>
           ) : (
-            <ChatMarkdown text={message.content} streaming={streaming} />
+            <>
+              {message.content ? (
+                <ChatMarkdown text={message.content} streaming={streaming} />
+              ) : null}
+              {message.toolEvents && message.toolEvents.length > 0 && (
+                <div
+                  className={`${message.content ? "mt-2 pt-2 border-t border-vscode-border/50" : ""} space-y-1`}
+                >
+                  {message.toolEvents.map((evt) => (
+                    <ToolCard key={evt.id} event={evt} />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -250,7 +263,7 @@ export function PlanCard({ plan }: { plan: PlanView }) {
                 {step.title}
               </span>
               {step.attempts > 1 && (
-                <span className="text-[9px] text-orange-300 flex-shrink-0">
+                <span className="text-[9px] text-vscode-warning-fg flex-shrink-0">
                   attempt {step.attempts}
                 </span>
               )}

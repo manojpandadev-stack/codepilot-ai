@@ -15,7 +15,7 @@ import {
   type ToolPermission,
   type ToolPermissionPolicy,
   type ToolCategory,
-  BLOCKED_COMMANDS,
+  CommandValidator,
   DEFAULT_TOOL_POLICIES,
 } from "@codepilot/shared";
 
@@ -101,73 +101,19 @@ function classifyMCPTool(toolId: string): ToolCategory {
 }
 
 // ============================================================================
-// Command Validator
+// Command Validator — canonical implementation lives in @codepilot/shared
 // ============================================================================
 
 /**
  * Validates shell commands against security policies.
+ *
+ * Re-exported from @codepilot/shared (where BLOCKED_COMMANDS and the ONE
+ * canonical pattern set live) so the runtime policy gate and the M4
+ * permission pipeline enforce an identical rule set from a single source.
+ * This package's public API is unchanged: `import { CommandValidator } from
+ * "@codepilot/policy-engine"` keeps working.
  */
-export class CommandValidator {
-  private blockedPatterns: RegExp[] = BLOCKED_COMMANDS.map(
-    (cmd) => new RegExp(cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
-  );
-
-  private additionalBlockedPatterns: RegExp[] = [
-    /\brm\s+-rf\s+[\/~]/i, // rm -rf from root or home
-    /\bmkfs\b/i,
-    /\bdd\b.*\bof=\/dev\//i,
-    /\bformat\b.*\b[Cc]:/i,
-    />\s*\/dev\/[sh]da/i,
-    /\bchmod\s+777\b/i,
-    /\bchown\s+.*\/\b/i,
-    /curl.*\|\s*bash/i, // pipe to bash
-    /wget.*\|\s*sh/i, // pipe to shell
-    /\bsudo\b/i, // block sudo by default
-    /\b(kill|killall)\s+-9\s+(?!self|current)/i,
-    /\bnc\s+-l/i, // netcat listener
-    /\bpython\s*-c\s*.*import\s+os.*system/i, // suspicious python
-  ];
-
-  /**
-   * Validate a command before execution.
-   */
-  validate(command: string): { allowed: boolean; reason?: string } {
-    const trimmed = command.trim();
-
-    if (!trimmed) {
-      return { allowed: false, reason: "Empty command" };
-    }
-
-    // Check explicitly blocked commands
-    for (const pattern of this.blockedPatterns) {
-      if (pattern.test(trimmed)) {
-        return {
-          allowed: false,
-          reason: `Command matches blocked pattern: ${pattern.source}`,
-        };
-      }
-    }
-
-    // Check additional blocked patterns
-    for (const pattern of this.additionalBlockedPatterns) {
-      if (pattern.test(trimmed)) {
-        return {
-          allowed: false,
-          reason: `Command matches security policy: ${pattern.source}`,
-        };
-      }
-    }
-
-    return { allowed: true };
-  }
-
-  /**
-   * Add a custom blocked pattern.
-   */
-  addBlockedPattern(pattern: RegExp): void {
-    this.additionalBlockedPatterns.push(pattern);
-  }
-}
+export { CommandValidator };
 
 // ============================================================================
 // Policy Engine

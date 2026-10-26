@@ -42,6 +42,22 @@ export class FileLockRegistry {
   private waiters: Array<() => void> = [];
 
   /**
+   * Getter for the read-only snapshot of the per-file lock entries (file ->
+   * holder task id), as a map. Provided so the orchestrator can observe lock
+   * contention without going through the acquire/release API. It is a separate
+   * read-only view with its own name so it does not collide with the private
+   * `locks` storage field.
+   */
+  get locksView(): ReadonlyMap<string, string> {
+    return new Map(
+      [...this.locks.entries()].map(([file, entry]) => [
+        file,
+        entry.holderTaskId,
+      ]),
+    );
+  }
+
+  /**
    * Try to acquire ALL files for a task atomically. Either every file is
    * locked or none are. Returns the list of locked (normalized) files.
    * Throws FileConflictError if any file is held by another live task.

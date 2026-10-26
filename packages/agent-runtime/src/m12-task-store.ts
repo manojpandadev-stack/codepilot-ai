@@ -486,9 +486,7 @@ export class TaskStore {
     if (patch.plan !== undefined) {
       // Plan text is model-authored — redact like every other persisted
       // model-authored field (titles/notes can echo secrets incidentally).
-      task.plan = patch.plan
-        ? redactForPersistence(patch.plan)
-        : undefined;
+      task.plan = patch.plan ? redactForPersistence(patch.plan) : undefined;
     }
     task.updatedAtMs = this.nextWriteMs();
     await this.write(task);

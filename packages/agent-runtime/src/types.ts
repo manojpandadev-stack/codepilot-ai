@@ -19,6 +19,27 @@ export interface CodePilotAgentConfig {
   maxIterations?: number;
   temperature?: number;
   systemPrompt?: string;
+  /**
+   * H2 credential boundary: scrub secret-shaped spans from tool results
+   * before they persist into the next provider request. Unset → the
+   * canonical provider classification applies (isRemoteProvider): remote
+   * providers are redacted, local providers pass output through verbatim.
+   */
+  redactToolResults?: boolean;
+  /**
+   * Selected model's context window (tokens). Bounds the per-request output
+   * budget to the remaining context. Unset/invalid → the curated model
+   * catalogue is consulted; if it has no entry either, the loop's
+   * documented default output cap applies (the window is never used as an
+   * output budget).
+   */
+  modelContextWindow?: number;
+  /**
+   * Selected model's declared per-request output-token limit. Unset/invalid
+   * → catalogue lookup, then the loop's documented default; limits are
+   * never invented.
+   */
+  maxOutputTokens?: number;
   toolPolicies?: Record<string, { enabled?: boolean; autoApprove?: boolean }>;
   extraTools?: AgentTool[];
   enableTools?: boolean;
@@ -33,6 +54,24 @@ export interface CodePilotAgentConfig {
     toolName: string;
     input: unknown;
   }) => Promise<{ approved: boolean; reason?: string }>;
+  /**
+   * Same ChangeSet staging bridge, on the lightweight `CodePilotAgent` config
+   * used by the multi-agent orchestrator's role agents. Inherited unchanged
+   * from the orchestrator base config, so a child agent's edit creates the
+   * same pending ChangeSet as the main agent's and is applied only after the
+   * user approves it. When absent the child agent is built WITHOUT any write
+   * tool (fail closed) — never with a direct-to-disk write.
+   */
+  onWriteProposal?: (
+    toolName: string,
+    proposals: Array<{
+      filePath: string;
+      relativePath: string;
+      proposedContent: string;
+      /** Staged deletion marker (delete_file). */
+      delete?: boolean;
+    }>,
+  ) => Promise<{ changeSetId: string }>;
   /**
    * Persisted command-repair history (Phase 12, row 14). When set, bounded
    * command-failure repair attempts survive restarts. Omit for in-memory.
@@ -56,6 +95,24 @@ export interface CodePilotRuntimeOptions {
   maxIterations?: number;
   temperature?: number;
   systemPrompt?: string;
+  /**
+   * H2 credential boundary override for the whole runtime. Unset → the
+   * canonical provider classification (isRemoteProvider) decides per run:
+   * remote providers are redacted, local providers pass tool output
+   * through verbatim.
+   */
+  redactToolResults?: boolean;
+  /**
+   * Selected model's context window (tokens) — bounds the per-request
+   * output budget. Unset → the curated model catalogue is consulted; if it
+   * has no entry either, the loop's documented default cap applies.
+   */
+  modelContextWindow?: number;
+  /**
+   * Selected model's declared per-request output-token limit. Unset →
+   * catalogue lookup, then the loop's documented default; never invented.
+   */
+  maxOutputTokens?: number;
   /**
    * Maximum number of transient-error retries before giving up.
    * Defaults to 2. Set to 0 to disable retry.
@@ -228,6 +285,13 @@ export interface RuntimeError {
 /** Optional correlation metadata mixed into every event. */
 type WithCorrelation = EventCorrelation;
 
+/**
+ * Stable, machine-readable causes for an `error` event. Hosts branch on this
+ * instead of matching error text. Extend deliberately: a new value is a
+ * product-visible behaviour change for every consumer of the event stream.
+ */
+export type AgentErrorCode = "privacy-blocked" | "provider-unsupported";
+
 export type AgentEvent =
   // ---- Pre-existing events (verbatim — do not change field names) ----
   | ({ type: "started"; sessionId: string } & WithCorrelation)
@@ -279,7 +343,22 @@ export type AgentEvent =
       failed: number;
       duration: number;
     } & WithCorrelation)
-  | ({ type: "error"; error: string; recoverable: boolean } & WithCorrelation)
+  | ({
+      type: "error";
+      error: string;
+      recoverable: boolean;
+      /**
+       * Machine-readable cause, set by the runtime when it KNOWS why the run
+       * failed. Hosts must never infer this from the error text.
+       *
+       * "privacy-blocked" means the Local Only guard refused the run BEFORE any
+       * request left the machine — materially different from a provider
+       * failure, and it must reach the user as an actionable privacy card.
+       */
+      code?: AgentErrorCode;
+      /** Provider the failure is attributed to (an id, never a credential). */
+      providerId?: string;
+    } & WithCorrelation)
   | ({ type: "completed"; result: string; usage: AgentUsage } & WithCorrelation)
   | ({ type: "cancelled" } & WithCorrelation)
   | ({

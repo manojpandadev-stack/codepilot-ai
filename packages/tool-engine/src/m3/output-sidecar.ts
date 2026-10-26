@@ -80,8 +80,8 @@ function enforceBounds(dir: string, options?: OutputSidecarOptions): void {
           return null;
         }
       })
-      .filter((x): x is { file: string; size: number; mtime: number } =>
-        x !== null,
+      .filter(
+        (x): x is { file: string; size: number; mtime: number } => x !== null,
       );
     let total = names.reduce((sum, n) => sum + n.size, 0);
     if (names.length <= maxFiles && total <= maxBytes) {

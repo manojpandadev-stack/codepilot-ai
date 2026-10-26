@@ -19,7 +19,6 @@ import {
   OpenAiCompatibleLlmProvider,
   type OpenAiCompatibleOptions,
 } from "./openai-compatible.js";
-import { AnthropicLlmProvider } from "./anthropic.js";
 import { GoogleLlmProvider } from "./google.js";
 import { LlmError, type LlmProvider, type LlmRequest } from "./types.js";
 
@@ -35,7 +34,6 @@ export {
   OpenAiCompatibleLlmProvider,
   toOpenAiMessages,
 } from "./openai-compatible.js";
-export { AnthropicLlmProvider } from "./anthropic.js";
 export { GoogleLlmProvider } from "./google.js";
 
 export interface LlmProviderConfig {
@@ -76,6 +74,16 @@ export interface LlmProviderConfig {
    * shown real reasoning spans via agent/status "Thinking…".
    */
   ollamaThink?: boolean;
+  /**
+   * Effective privacy mode of the current run.
+   *
+   * Local Only must never follow an HTTP redirect: the privacy gate can only
+   * validate the CONFIGURED endpoint, so a permitted loopback server answering
+   * `302 Location: https://…` would otherwise send the prompt (and the stored
+   * credential) to a destination the policy never inspected. Omitted → the
+   * provider default ("follow").
+   */
+  privacyMode?: "local" | "hybrid" | "cloud";
 }
 
 export interface CreateLlmProviderOptions {
@@ -93,19 +101,16 @@ export interface CreateLlmProviderOptions {
 }
 
 const DEFAULT_ENDPOINTS: Record<string, string> = {
+  "openai-native": "https://api.openai.com/v1",
   openai: "https://api.openai.com/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-  deepseek: "https://api.deepseek.com/v1",
-  mistral: "https://api.mistral.ai/v1",
-  groq: "https://api.groq.com/openai/v1",
-  together: "https://api.together.xyz/v1",
-  xai: "https://api.x.ai/v1",
+  gemini: "https://generativelanguage.googleapis.com",
+  google: "https://generativelanguage.googleapis.com",
 };
 
 /**
  * Create a native LLM provider for the given provider id.
  * Throws LlmError when the provider cannot be constructed (missing key for a
- * remote provider) — the engine treats that as a permanent run failure.
+ * remote provider, or unsupported provider id) — the engine treats that as a permanent run failure.
  */
 export function createLlmProvider(
   request: Pick<LlmRequest, "providerId" | "modelId">,
@@ -117,56 +122,55 @@ export function createLlmProvider(
   const baseUrl = config?.baseUrl;
 
   const fetchImpl = options.fetchImpl ?? fetch;
+  // Local Only must never follow a redirect off the machine (see
+  // LlmProviderConfig.privacyMode). Omitted for every other mode so cloud
+  // providers keep their existing follow behaviour.
+  const localOnlyRedirect: "follow" | "manual" | undefined =
+    config?.privacyMode === "local" ? "manual" : undefined;
   const openAiOptions = (
     extra?: Partial<OpenAiCompatibleOptions>,
   ): OpenAiCompatibleOptions => ({
     baseUrl: baseUrl ?? DEFAULT_ENDPOINTS[request.providerId] ?? "",
     apiKey,
     fetchImpl,
+    ...(localOnlyRedirect !== undefined ? { redirect: localOnlyRedirect } : {}),
     ...(extra ?? {}),
   });
 
   switch (request.providerId) {
-    case "ollama":
-    case "lmstudio": {
-      // LM Studio also exposes Ollama-style local endpoints only via its own
-      // OpenAI-compatible server — treat any baseUrl-bearing local id as
-      // Ollama when it points at the Ollama port, else OpenAI-compatible.
-      if (request.providerId === "ollama") {
-        // TRANSPORT SELECTION (BUG 5): default stays global fetch — the
-        // documented test/embedding seam (vi.stubGlobal("fetch")). An
-        // explicit fetchImpl always wins. `transport: "node-http"` (only
-        // honored without a fetchImpl) selects the zero-transport-timeout
-        // adapter, bypassing undici's 300s HEADERS timeout so a slow CPU
-        // prefill is governed ONLY by the provider's first-token inactivity
-        // window (measured, live qwen3:8b; see node-http-fetch.ts).
-        return new OllamaLlmProvider({
-          baseUrl: baseUrl ?? OLLAMA_DEFAULT_HOST,
-          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-          ...(options.transport && !options.fetchImpl
-            ? { transport: options.transport }
-            : {}),
-          ...(config?.ollamaFirstTokenTimeoutMs !== undefined
-            ? { firstTokenTimeoutMs: config.ollamaFirstTokenTimeoutMs }
-            : {}),
-          ...(config?.ollamaKeepAlive !== undefined
-            ? { keepAlive: config.ollamaKeepAlive }
-            : {}),
-          ...(config?.ollamaContextLength !== undefined
-            ? { numCtx: config.ollamaContextLength }
-            : {}),
-          ...(config?.ollamaNumPredict !== undefined
-            ? { numPredict: config.ollamaNumPredict }
-            : {}),
-          ...(config?.ollamaThink !== undefined
-            ? { think: config.ollamaThink }
-            : {}),
-        });
-      }
-      if (!baseUrl) {
+    case "ollama": {
+      return new OllamaLlmProvider({
+        baseUrl: baseUrl ?? OLLAMA_DEFAULT_HOST,
+        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        ...(localOnlyRedirect !== undefined
+          ? { redirect: localOnlyRedirect }
+          : {}),
+        ...(options.transport && !options.fetchImpl
+          ? { transport: options.transport }
+          : {}),
+        ...(config?.ollamaFirstTokenTimeoutMs !== undefined
+          ? { firstTokenTimeoutMs: config.ollamaFirstTokenTimeoutMs }
+          : {}),
+        ...(config?.ollamaKeepAlive !== undefined
+          ? { keepAlive: config.ollamaKeepAlive }
+          : {}),
+        ...(config?.ollamaContextLength !== undefined
+          ? { numCtx: config.ollamaContextLength }
+          : {}),
+        ...(config?.ollamaNumPredict !== undefined
+          ? { numPredict: config.ollamaNumPredict }
+          : {}),
+        ...(config?.ollamaThink !== undefined
+          ? { think: config.ollamaThink }
+          : {}),
+      });
+    }
+    case "openai-native":
+    case "openai": {
+      if (!apiKey) {
         throw new LlmError(
           request.providerId,
-          "baseUrl is required for lmstudio",
+          "API key is required for OpenAI",
         );
       }
       return new OpenAiCompatibleLlmProvider(
@@ -174,74 +178,27 @@ export function createLlmProvider(
         openAiOptions(),
       );
     }
-    case "openai":
-    case "openai-native":
-      if (!apiKey)
-        throw new LlmError(
-          request.providerId,
-          "API key is required for OpenAI",
-        );
-      return new OpenAiCompatibleLlmProvider(
-        request.providerId,
-        openAiOptions(),
-      );
-    case "openrouter":
-      if (!apiKey)
-        throw new LlmError(
-          request.providerId,
-          "API key is required for OpenRouter",
-        );
-      return new OpenAiCompatibleLlmProvider(
-        request.providerId,
-        openAiOptions({
-          headers: {
-            "HTTP-Referer": "https://github.com/codepilot-ai",
-            "X-Title": "CodePilot AI",
-          },
-        }),
-      );
-    case "deepseek":
-    case "mistral":
-    case "groq":
-    case "together":
-    case "xai":
-      if (!apiKey)
-        throw new LlmError(
-          request.providerId,
-          `API key is required for ${request.providerId}`,
-        );
-      return new OpenAiCompatibleLlmProvider(
-        request.providerId,
-        openAiOptions(),
-      );
-    case "anthropic":
-      if (!apiKey)
-        throw new LlmError(
-          request.providerId,
-          "API key is required for Anthropic",
-        );
-      return new AnthropicLlmProvider({ apiKey, baseUrl, fetchImpl });
-    case "google":
     case "gemini":
-      if (!apiKey)
+    case "google": {
+      if (!apiKey) {
         throw new LlmError(
           request.providerId,
-          "API key is required for Google",
-        );
-      return new GoogleLlmProvider({ apiKey, baseUrl, fetchImpl });
-    default: {
-      // Unknown provider id: require an explicit base URL and speak
-      // OpenAI-compatible (the de-facto interchange protocol).
-      if (!baseUrl) {
-        throw new LlmError(
-          request.providerId,
-          `Unknown provider "${request.providerId}" and no baseUrl configured`,
-          { transient: false },
+          "API key is required for Gemini",
         );
       }
-      return new OpenAiCompatibleLlmProvider(
+      if (!request.modelId) {
+        throw new LlmError(
+          request.providerId,
+          "Model ID is required for Gemini",
+        );
+      }
+      return new GoogleLlmProvider({ apiKey, baseUrl, fetchImpl });
+    }
+    default: {
+      throw new LlmError(
         request.providerId,
-        openAiOptions(),
+        `Unsupported provider "${request.providerId}". CodePilot supports only OpenAI, Gemini, and Ollama.`,
+        { transient: false },
       );
     }
   }

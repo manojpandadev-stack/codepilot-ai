@@ -41,7 +41,8 @@ function makeAutoApprovingPipeline(
       const m = manager!;
       const idx = seen++;
       queueMicrotask(() => {
-        if (idx < opts.approveFirst) m.approve(presentation.approvalId, "session");
+        if (idx < opts.approveFirst)
+          m.approve(presentation.approvalId, "session");
         else m.reject(presentation.approvalId);
       });
       return { decision: idx < opts.approveFirst ? "allow" : "deny" };
@@ -225,5 +226,164 @@ describe("M4 scoped-grant leak regression", () => {
       metadata: {},
     });
     expect(noCmd).not.toBe(operationFingerprintOf(base));
+  });
+});
+
+describe("M4 operation fingerprint binds TOOL IDENTITY (metadata-less collision fix)", () => {
+  it("approve metadata-less tool A (session) does NOT authorize metadata-less tool B", async () => {
+    const { pipeline, presentations } = makeAutoApprovingPipeline("/ws", {
+      approveFirst: 1,
+    });
+    // Unknown tool ids fail closed to write_file; the input carries NO
+    // path/command metadata, so the operation scope is unknowable.
+    const a = await pipeline.evaluate({
+      toolId: "mystery_tool_a",
+      executionId: "exec-A",
+      sessionId: "s-meta",
+      input: { query: "whatever" },
+    });
+    expect(a.approved).toBe(true);
+    expect(presentations).toHaveLength(1);
+
+    // A DIFFERENT tool id with the identical metadata-less shape must
+    // re-enter ASK — A's session grant can never authorize B.
+    const b = await pipeline.evaluate({
+      toolId: "mystery_tool_b",
+      executionId: "exec-B",
+      sessionId: "s-meta",
+      input: { query: "whatever" },
+    });
+    expect(b.approved).toBe(false);
+    expect(presentations).toHaveLength(2);
+  });
+
+  it("metadata-less reuse is refused even for the SAME tool id (scope unknowable)", async () => {
+    const { pipeline, presentations } = makeAutoApprovingPipeline("/ws", {
+      approveFirst: 1,
+    });
+    const first = await pipeline.evaluate({
+      toolId: "mystery_tool_a",
+      executionId: "exec-1",
+      sessionId: "s-meta",
+      input: { query: "first" },
+    });
+    expect(first.approved).toBe(true);
+    const second = await pipeline.evaluate({
+      toolId: "mystery_tool_a",
+      executionId: "exec-2",
+      sessionId: "s-meta",
+      input: { query: "a completely different query" },
+    });
+    // The grant cannot prove WHICH operation of this tool was approved, so
+    // the second operation prompts again (reject → denied).
+    expect(second.approved).toBe(false);
+    expect(presentations).toHaveLength(2);
+  });
+
+  it("same tool + SAME security scope metadata still reuses (supported, safe)", async () => {
+    const { pipeline, presentations } = makeAutoApprovingPipeline("/ws", {
+      approveFirst: 1,
+    });
+    const first = await pipeline.evaluate({
+      toolId: "run_commands",
+      executionId: "exec-1",
+      sessionId: "s-same",
+      input: { command: "node --version" },
+    });
+    expect(first.approved).toBe(true);
+    const repeat = await pipeline.evaluate({
+      toolId: "run_commands",
+      executionId: "exec-2",
+      sessionId: "s-same",
+      input: { command: "node   --version" },
+    });
+    expect(repeat.approved).toBe(true);
+    expect(presentations).toHaveLength(1); // no second card for the same op
+  });
+
+  it("cross-tool collision with IDENTICAL path metadata does not leak", async () => {
+    const { pipeline, presentations } = makeAutoApprovingPipeline("/ws", {
+      approveFirst: 1,
+    });
+    // Both unknown ids map to write_file — same action, same path, only the
+    // tool id differs. (Relative path: an absolute one trips the Risk
+    // Engine's outside-the-workspace hard boundary, which is a DENY.)
+    const a = await pipeline.evaluate({
+      toolId: "writer_alpha",
+      executionId: "exec-A",
+      sessionId: "s-path",
+      input: { path: "a.txt" },
+    });
+    expect(a.approved).toBe(true);
+    const b = await pipeline.evaluate({
+      toolId: "writer_beta",
+      executionId: "exec-B",
+      sessionId: "s-path",
+      input: { path: "a.txt" },
+    });
+    expect(b.approved).toBe(false);
+    expect(presentations).toHaveLength(2);
+  });
+
+  it("malformed metadata (non-string path) takes the ASK path — never auto-allows", async () => {
+    const { pipeline, presentations } = makeAutoApprovingPipeline("/ws", {
+      approveFirst: 0, // the presenter rejects everything
+    });
+    const outcome = await pipeline.evaluate({
+      toolId: "writer_alpha",
+      executionId: "exec-malformed",
+      sessionId: "s-malformed",
+      input: { path: 123_456 }, // NOT a string → dropped by buildMetadata
+    });
+    expect(outcome.approved).toBe(false);
+    expect(presentations).toHaveLength(1); // a human was actually asked
+  });
+
+  it("fingerprint: cross-action and cross-tool collision resistance (pure)", () => {
+    // Tool identity distinguishes two metadata-less ops of the SAME action.
+    expect(
+      operationFingerprintOf({
+        action: "write_file",
+        toolId: "a",
+        metadata: {},
+      }),
+    ).not.toBe(
+      operationFingerprintOf({
+        action: "write_file",
+        toolId: "b",
+        metadata: {},
+      }),
+    );
+    // Cross-action stays distinct with identical metadata.
+    expect(
+      operationFingerprintOf({
+        action: "write_file",
+        toolId: "a",
+        metadata: { path: "/ws/x" },
+      }),
+    ).not.toBe(
+      operationFingerprintOf({
+        action: "delete_file",
+        toolId: "a",
+        metadata: { path: "/ws/x" },
+      }),
+    );
+    // Missing/malformed metadata never equals a scoped fingerprint.
+    expect(
+      operationFingerprintOf({ action: "write_file", toolId: "a" }),
+    ).not.toBe(
+      operationFingerprintOf({
+        action: "write_file",
+        toolId: "a",
+        metadata: { path: "/ws/x" },
+      }),
+    );
+    // Deterministic for identical inputs (no unstable values).
+    const base = {
+      action: "execute_command" as const,
+      toolId: "run_commands",
+      metadata: { command: "node --version", cwd: "/ws" },
+    };
+    expect(operationFingerprintOf(base)).toBe(operationFingerprintOf(base));
   });
 });

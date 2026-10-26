@@ -16,9 +16,7 @@
  */
 
 // ---- Tool-calling truth (CodePilot LLM catalogue tri-state) ----
-export type {
-  LlmToolCallingSupport,
-} from "@codepilot/llm";
+export type { LlmToolCallingSupport } from "@codepilot/llm";
 export { modelToolCallingSupport } from "@codepilot/llm";
 
 // ---- Core types and interface ----
@@ -52,6 +50,7 @@ export {
   validateProviderConfig,
   resolveProviderConfig,
   apiKeyFromEnv,
+  isSupportedProviderId,
 } from "./config.js";
 export type { BuiltinProviderId, ConfigValidationResult } from "./config.js";
 
@@ -161,6 +160,7 @@ export type {
 } from "./provider-catalog.js";
 export {
   getProviderCatalog,
+  getCuratedProviderCatalog,
   getCatalogProvider,
   sortCatalog,
   searchCatalog,

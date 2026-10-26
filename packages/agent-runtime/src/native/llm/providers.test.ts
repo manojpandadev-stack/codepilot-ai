@@ -13,7 +13,8 @@ import { toOpenAiMessages } from "./openai-compatible.js";
 import { toAnthropicMessages } from "./anthropic.js";
 import { toGeminiContents } from "./google.js";
 
-const IMG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const IMG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 function userWithImage(text = "look"): AgentMessage[] {
   return [
@@ -55,7 +56,9 @@ describe("ollama image mapping", () => {
       toOllamaMessages([
         {
           role: "user",
-          content: [{ type: "image", mime: "image/png", fileRef: "images/x.bin" }],
+          content: [
+            { type: "image", mime: "image/png", fileRef: "images/x.bin" },
+          ],
         },
       ]),
     ).toThrow(/no inline bytes/);
@@ -100,7 +103,9 @@ describe("openai-compatible image mapping", () => {
       toOpenAiMessages([
         {
           role: "user",
-          content: [{ type: "image", mime: "image/png", fileRef: "images/x.bin" }],
+          content: [
+            { type: "image", mime: "image/png", fileRef: "images/x.bin" },
+          ],
         },
       ]),
     ).toThrow(/no inline bytes/);
@@ -136,7 +141,9 @@ describe("anthropic image mapping", () => {
       toAnthropicMessages([
         {
           role: "user",
-          content: [{ type: "image", mime: "image/jpeg", fileRef: "images/x.bin" }],
+          content: [
+            { type: "image", mime: "image/jpeg", fileRef: "images/x.bin" },
+          ],
         },
       ]),
     ).toThrow(/no inline bytes/);
@@ -169,7 +176,9 @@ describe("gemini image mapping", () => {
       toGeminiContents([
         {
           role: "user",
-          content: [{ type: "image", mime: "image/webp", fileRef: "images/x.bin" }],
+          content: [
+            { type: "image", mime: "image/webp", fileRef: "images/x.bin" },
+          ],
         },
       ]),
     ).toThrow(/no inline bytes/);

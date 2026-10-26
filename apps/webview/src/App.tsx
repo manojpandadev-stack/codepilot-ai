@@ -16,10 +16,11 @@ import {
   AppHeader,
   SideNav,
   StatusBar,
-  type NavItem,
+  type NavEntry,
   type TabId,
 } from "./shell/Shell";
 import { ExecutionStatus, HealingOutcome } from "./shell/ExecutionStatus";
+import { VerificationPanel } from "./shell/VerificationPanel";
 import {
   Badge,
   Button,
@@ -127,6 +128,9 @@ import {
   createRequestId,
   createStableId,
   classifyToolRegistryState,
+  describeErrorCard,
+  describePrivacyResult,
+  describeProviderVerdict,
   validateContinuityState,
   validateTerminalOutput,
   appendTerminalOutput,
@@ -168,7 +172,12 @@ import {
   type TaskHistoryFilter,
   type CompareRow,
   type CheckpointCompareView,
+  reduceVerificationState,
+  isTerminalToolName,
+  type VerificationCheckMsg,
+  type VerificationStateMsg,
 } from "./lib/messages.js";
+import { deriveVerificationState } from "./lib/controlcenter.js";
 import type { ComposerContext } from "@codepilot/shared";
 
 // ============================================================================
@@ -220,11 +229,13 @@ function inferKind(payload: {
 // ============================================================================
 
 const TRUST_BADGE_CLASS: Record<string, string> = {
-  green: "bg-green-900 text-green-200 border-green-700",
-  blue: "bg-blue-900 text-blue-200 border-blue-700",
-  yellow: "bg-yellow-900 text-yellow-200 border-yellow-700",
-  orange: "bg-orange-900 text-orange-200 border-orange-700",
-  red: "bg-red-900 text-red-200 border-red-700",
+  green: "bg-vscode-badge-bg text-vscode-badge-fg border-vscode-border",
+  blue: "bg-vscode-btn text-vscode-btn-fg border-vscode-border",
+  yellow:
+    "bg-vscode-warning-fg/15 text-vscode-warning-fg border-vscode-warning-fg/30",
+  orange:
+    "bg-vscode-warning-fg/20 text-vscode-warning-fg border-vscode-warning-fg/40",
+  red: "bg-vscode-error-fg/15 text-vscode-error-fg border-vscode-error-fg/30",
 };
 
 function TrustBadge({ trust }: { trust: PluginDisplayTrust }) {
@@ -330,7 +341,7 @@ function PluginRow({
           onEnableUntrusted && (
             <button
               onClick={onEnableUntrusted}
-              className="text-[10px] text-orange-300 hover:underline"
+              className="text-[10px] text-vscode-warning-fg hover:underline"
             >
               Review & enable
             </button>
@@ -448,7 +459,7 @@ function PluginDetailsView({
               <span className="text-vscode-fg">
                 {c.capability}
                 {c.sensitive && (
-                  <span className="text-orange-300"> ⚠ broad</span>
+                  <span className="text-vscode-warning-fg"> ⚠ broad</span>
                 )}
               </span>
               <span className="text-vscode-desc">
@@ -486,7 +497,7 @@ function PluginDetailsView({
       {plugin.warnings.length > 0 && (
         <div className="mb-1.5">
           {plugin.warnings.map((w, i) => (
-            <div key={i} className="text-[10px] text-orange-300">
+            <div key={i} className="text-[10px] text-vscode-warning-fg">
               ⚠ {w}
             </div>
           ))}
@@ -684,7 +695,7 @@ function TeamRow({
         {canCancel && (
           <button
             onClick={onCancel}
-            className="text-[10px] text-orange-300 hover:underline"
+            className="text-[10px] text-vscode-warning-fg hover:underline"
           >
             Cancel
           </button>
@@ -1434,13 +1445,13 @@ function HistoryDetailsView({
         </div>
       )}
       {details.interruption && (
-        <div className="rounded border border-orange-800 bg-orange-950 px-2 py-1.5 text-[10px]">
-          <div className="font-semibold text-orange-300 mb-0.5">
+        <div className="rounded border border-vscode-warning-fg/40 bg-vscode-warning-fg/10 px-2 py-1.5 text-[10px]">
+          <div className="font-semibold text-vscode-warning-fg mb-0.5">
             ⏸ Interrupted{" "}
             {new Date(details.interruption.interruptedAtMs).toLocaleString()} —
             last phase: {details.interruption.lastPhase}
           </div>
-          <div className="text-orange-200/90">
+          <div className="text-vscode-warning-fg/90">
             {details.interruption.pendingSummary}
           </div>
           {details.interruption.error && (
@@ -1616,7 +1627,7 @@ function HistoryDetailsView({
               </button>
             )}
             {cpCompareSelect.length > 2 && (
-              <p className="text-[10px] text-orange-300">
+              <p className="text-[10px] text-vscode-warning-fg">
                 Select exactly two checkpoints to compare.
               </p>
             )}
@@ -1893,6 +1904,14 @@ function DashboardSection({
 export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
+  const toolEventsRef = useRef<ToolEvent[]>([]);
+  const [sessionToolEvents, setSessionToolEvents] = useState<ToolEvent[]>([]);
+  const [verificationChecks, setVerificationChecks] = useState<
+    VerificationCheckMsg[] | null
+  >(null);
+  const [agentOutcome, setAgentOutcome] = useState<
+    "completed" | "stopped" | "paused" | "failed" | null
+  >(null);
   const [input, setInput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [settings, setSettings] = useState<Settings>({
@@ -1917,7 +1936,7 @@ export function App() {
   });
   const [currentTab, setCurrentTab] = useState<TabId>("chat");
   // Sidebar collapse (icon-only navigation on narrow panels).
-  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(true);
   const [sessions, setSessions] = useState<
     Array<{ id: string; title?: string; updatedAt?: number }>
   >([]);
@@ -1946,7 +1965,6 @@ export function App() {
   const [composerContext, setComposerContext] = useState<ComposerContext>(
     createEmptyComposerContext(),
   );
-  const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [usage, setUsage] = useState<{
     inputTokens: number;
@@ -2060,8 +2078,9 @@ export function App() {
   const [exported, setExported] = useState<DiagnosticSummary | null>(null);
   // Phase 3 — host usage/cost ledger (usage/summary). Cost stays honest:
   // null when the ledger has no pricing data (never rendered as $0.00).
-  const [usagePayload, setUsagePayload] =
-    useState<UsageSummaryPayload | null>(null);
+  const [usagePayload, setUsagePayload] = useState<UsageSummaryPayload | null>(
+    null,
+  );
   const [copied, setCopied] = useState(false);
   const [metricsSections, setMetricsSections] = useState<
     Record<string, boolean>
@@ -2291,7 +2310,8 @@ export function App() {
         : (fallbackResult ?? "").trim();
     streamingTextRef.current = "";
     setStreamingText("");
-    if (content.length > 0) {
+    const turnTools = [...toolEventsRef.current];
+    if (content.length > 0 || turnTools.length > 0) {
       setMessages((prev) => [
         ...prev,
         {
@@ -2299,8 +2319,11 @@ export function App() {
           role: "assistant",
           content,
           timestamp: Date.now(),
+          toolEvents: turnTools.length > 0 ? turnTools : undefined,
         },
       ]);
+      toolEventsRef.current = [];
+      setToolEvents([]);
     }
   }, []);
 
@@ -2329,20 +2352,24 @@ export function App() {
           if (isStaleEvent(msg.payload?.requestId)) break;
           // Idempotent: duplicate/replayed events must not create a second
           // card (same React key) or resurrect one that already completed.
-          setToolEvents((prev) =>
-            appendToolEvent(prev, {
-              id: msg.payload.toolCallId,
-              name: msg.payload.toolName,
-              status: "started" as const,
-            }),
-          );
+          const newEvt: ToolEvent = {
+            id: msg.payload.toolCallId,
+            name: msg.payload.toolName,
+            status: "started" as const,
+          };
+          setToolEvents((prev) => {
+            const next = appendToolEvent(prev, newEvt);
+            toolEventsRef.current = next;
+            return next;
+          });
+          setSessionToolEvents((prev) => appendToolEvent(prev, newEvt));
           // CHAT UX: label comes from the ACTUAL runtime event.
           setStatusMessage(`Executing tool ${msg.payload.toolName}…`);
           break;
         }
-        case "tool/completed":
+        case "tool/completed": {
           if (isStaleEvent(msg.payload?.requestId)) break;
-          setToolEvents((prev) =>
+          const updateFn = (prev: ToolEvent[]) =>
             prev.map((e) =>
               e.id === msg.payload.toolCallId
                 ? {
@@ -2355,9 +2382,15 @@ export function App() {
                     ...terminalCompletionDetail(e.name, msg.payload.output),
                   }
                 : e,
-            ),
-          );
+            );
+          setToolEvents((prev) => {
+            const next = updateFn(prev);
+            toolEventsRef.current = next;
+            return next;
+          });
+          setSessionToolEvents(updateFn);
           break;
+        }
         case "terminal/output": {
           if (isStaleEvent(msg.payload?.requestId)) break;
           const chunk = validateTerminalOutput(msg.payload);
@@ -2390,7 +2423,7 @@ export function App() {
             );
             break;
           }
-          setToolEvents((prev) =>
+          const applyChunk = (prev: ToolEvent[]) =>
             prev.map((e) => {
               if (e.id !== chunk.toolCallId) return e;
               const next = appendTerminalOutput(
@@ -2407,25 +2440,43 @@ export function App() {
                 outputTruncated: next.outputTruncated,
                 outputSeq: next.lastSeq,
               };
-            }),
-          );
+            });
+          setToolEvents((prev) => {
+            const next = applyChunk(prev);
+            toolEventsRef.current = next;
+            return next;
+          });
+          setSessionToolEvents(applyChunk);
           break;
         }
-        case "agent/status":
+        case "agent/status": {
           if (isStaleEvent(msg.payload?.requestId)) break;
-          // CHAT UX: labels are ONLY runtime-emitted states — Thinking… from
-          // real reasoning_delta, Generating… from the first text delta,
-          // Completed with real token usage. No fabricated progress.
-          setStatusMessage(
-            msg.payload.status === "running"
-              ? (msg.payload.message ?? "Generating…")
-              : msg.payload.status === "completed"
-                ? `Completed${msg.payload.usage ? ` · ${msg.payload.usage.inputTokens}→${msg.payload.usage.outputTokens} tok` : ""}`
-                : "Idle",
-          );
-          if (msg.payload.status === "completed") {
-            // ONE assistant message per turn: promote accumulated deltas,
-            // falling back to the host's final result for non-streamed runs.
+          const st = msg.payload?.status;
+          if (st === "running") {
+            setAgentOutcome(null);
+            setStatusMessage(msg.payload.message ?? "Generating…");
+          } else if (st === "completed") {
+            setAgentOutcome("completed");
+            setStatusMessage(
+              `Completed${msg.payload.usage ? ` · ${msg.payload.usage.inputTokens}→${msg.payload.usage.outputTokens} tok` : ""}`,
+            );
+          } else if (st === "stopped") {
+            setAgentOutcome("stopped");
+            setStatusMessage(msg.payload.message ?? "Stopped");
+          } else if (st === "failed") {
+            setAgentOutcome("failed");
+            setStatusMessage(msg.payload.message ?? "Failed");
+          } else if (st === "cancelled" || st === "canceled") {
+            setAgentOutcome("stopped");
+            setStatusMessage(msg.payload.message ?? "Cancelled");
+          } else if (st === "paused") {
+            setAgentOutcome("paused");
+            setStatusMessage(msg.payload.message ?? "Paused");
+          } else {
+            setStatusMessage("Idle");
+          }
+
+          if (st === "completed") {
             promoteStreamingToMessage(
               typeof msg.payload.result === "string"
                 ? msg.payload.result
@@ -2435,12 +2486,40 @@ export function App() {
             if (msg.payload.usage) {
               setUsage(msg.payload.usage);
             }
-          } else if (msg.payload.status === "idle") {
-            // Stopped/failed turns: drop any partial stream, release the UI.
-            promoteStreamingToMessage(undefined);
+          } else if (
+            st === "idle" ||
+            st === "stopped" ||
+            st === "failed" ||
+            st === "cancelled" ||
+            st === "canceled" ||
+            st === "paused"
+          ) {
+            // Stopped, failed, paused, cancelled or idle: promote any stream / final result and release the running state
+            promoteStreamingToMessage(
+              typeof msg.payload.result === "string" &&
+                msg.payload.result.length > 0
+                ? msg.payload.result
+                : undefined,
+            );
             setIsRunning(false);
+            if (msg.payload.usage) {
+              setUsage(msg.payload.usage);
+            }
           }
           break;
+        }
+        case "verification/state": {
+          if (isStaleEvent(msg.payload?.requestId)) break;
+          if (msg.payload && Array.isArray(msg.payload.checks)) {
+            setVerificationChecks((prev) =>
+              reduceVerificationState(
+                prev ?? [],
+                msg.payload as VerificationStateMsg,
+              ),
+            );
+          }
+          break;
+        }
         // NOTE: legacy "provider/list" (4 hard-coded providers) is retired —
         // the authoritative catalogue arrives via "provider/catalog".
         case "provider/catalog": {
@@ -2490,11 +2569,9 @@ export function App() {
           // BUG 1: authoritative result of an explicit Refresh/Test probe.
           const h = msg.payload as ProviderHealthLite;
           setProviderHealth(h);
-          if (
-            h?.providerId &&
-            h.providerId === settingsRef.current.provider
-          ) {
-            const derivedState = h.state === "invalid-config" ? "unverified" : h.state;
+          if (h?.providerId && h.providerId === settingsRef.current.provider) {
+            const derivedState =
+              h.state === "invalid-config" ? "unverified" : h.state;
             setProviderSelectedState({
               id: h.providerId,
               name: h.providerId,
@@ -2664,26 +2741,98 @@ export function App() {
             if (result.kind === "selection" && result.selection) {
               next = setSelectionInContext(next, result.selection);
             }
+            if (result.kind === "urlPicker" && result.url) {
+              next = addUrlToContext(next, result.url);
+            }
             return next;
           });
           break;
         }
-        case "error":
+        case "error": {
           if (isStaleEvent(msg.payload?.requestId)) break;
+          // The HOST classifies the outcome (privacy block vs auth vs network)
+          // and tags it structurally; the UI renders that decision instead of
+          // prefixing every failure with a flat "Error:". A Local Only block
+          // therefore reads as a policy refusal, never as a broken provider.
+          const outcome = describeErrorCard(msg.payload);
+          const lines = [outcome.title];
+          if (outcome.detail && outcome.detail !== outcome.title) {
+            lines.push(outcome.detail);
+          }
+          if (outcome.action) lines.push(outcome.action);
           setMessages((prev) => [
             ...prev,
             {
               id: createStableId("err"),
               role: "system",
-              content: `Error: ${msg.payload.message}`,
+              content: lines.join("\n"),
               timestamp: Date.now(),
             },
           ]);
+          if (outcome.privacyBlocked) {
+            // Surfaced in the header area too: a policy refusal is a mode
+            // problem the user should see without scrolling the transcript.
+            setStatusMessage(outcome.title);
+          }
           // Failed turns must never leave "Agent running…" stuck on screen.
           streamingTextRef.current = "";
           setStreamingText("");
           setIsRunning(false);
           break;
+        }
+        case "privacy/result": {
+          // Feedback ONLY. The host owns privacy mode; acknowledging or
+          // rejecting a change here changes nothing about network access.
+          const outcome = describePrivacyResult(msg.payload);
+          setStatusMessage(
+            outcome.detail
+              ? `${outcome.title} ${outcome.detail}`
+              : outcome.title,
+          );
+          if (typeof msg.payload?.mode === "string") {
+            setSettings((prev) => ({
+              ...prev,
+              privacyMode: msg.payload.mode as typeof prev.privacyMode,
+            }));
+          }
+          break;
+        }
+        case "provider/inference_result": {
+          // Provider-tagged verdict from the "Test model" button. Rendered
+          // through the shared classifier so `blocked` stays distinct from a
+          // provider failure, and so an unknown future verdict fails safe.
+          const outcome = describeProviderVerdict(msg.payload);
+          setStatusMessage(
+            outcome.detail
+              ? `${outcome.title} ${outcome.detail}`
+              : outcome.title,
+          );
+          const pid =
+            typeof msg.payload?.providerId === "string"
+              ? msg.payload.providerId
+              : "";
+          if (pid && pid === settingsRef.current.provider) {
+            // A non-success verdict must never leave a positive "connected"
+            // badge on screen. `blocked` is not "unavailable" — nothing was
+            // tested — but neither is it "connected".
+            const mapped = outcome.privacyBlocked
+              ? "unverified"
+              : outcome.kind === "success"
+                ? "connected"
+                : "unavailable";
+            setProviderSelectedState({
+              id: pid,
+              name: pid,
+              state: mapped,
+              connected: mapped === "connected",
+              detail: outcome.title,
+              ...(typeof msg.payload?.latencyMs === "number"
+                ? { latencyMs: msg.payload.latencyMs }
+                : {}),
+            });
+          }
+          break;
+        }
         case "settings/get":
           if (msg.payload) setSettings((prev) => ({ ...prev, ...msg.payload }));
           break;
@@ -2738,9 +2887,10 @@ export function App() {
           break;
         }
         case "session/renamed": {
-          const renamed = msg.payload as
-            | { sessionId?: unknown; title?: unknown }
-            | null;
+          const renamed = msg.payload as {
+            sessionId?: unknown;
+            title?: unknown;
+          } | null;
           if (
             renamed &&
             typeof renamed.sessionId === "string" &&
@@ -3294,7 +3444,9 @@ export function App() {
           const rules = Array.isArray(msg.payload?.rules)
             ? (msg.payload!.rules as unknown[]).length
             : 0;
-          setStatusMessage(`Rules reloaded — ${rules} rule${rules === 1 ? "" : "s"} active.`);
+          setStatusMessage(
+            `Rules reloaded — ${rules} rule${rules === 1 ? "" : "s"} active.`,
+          );
           break;
         }
         // M14 — teams (backend-authoritative, event-driven; malformed rows dropped).
@@ -3591,6 +3743,10 @@ export function App() {
     if (command === "clear") {
       setMessages([]);
       setToolEvents([]);
+      toolEventsRef.current = [];
+      setSessionToolEvents([]);
+      setVerificationChecks(null);
+      setAgentOutcome(null);
       setStreamingText("");
       setFileChanges([]);
       setPendingApproval(false);
@@ -3639,11 +3795,28 @@ export function App() {
       content: finalPrompt,
       timestamp: Date.now(),
     };
-    setMessages((prev) => [...prev, userMsg]);
-    setToolEvents([]);
+    if (toolEventsRef.current.length > 0) {
+      const leftover = [...toolEventsRef.current];
+      toolEventsRef.current = [];
+      setToolEvents([]);
+      setMessages((prev) => {
+        if (prev.length > 0) {
+          const last = prev[prev.length - 1]!;
+          const updatedLast: Message = {
+            ...last,
+            toolEvents: [...(last.toolEvents ?? []), ...leftover],
+          };
+          return [...prev.slice(0, -1), updatedLast, userMsg];
+        }
+        return [...prev, userMsg];
+      });
+    } else {
+      setMessages((prev) => [...prev, userMsg]);
+    }
     streamingTextRef.current = "";
     setStreamingText("");
     setIsRunning(true);
+    setAgentOutcome(null);
     // CHAT UX: honest lifecycle label from the moment the turn is handed to
     // the host. Real runtime states (Thinking…/tool/approval) overwrite this
     // as they arrive — never a fabricated progress percentage.
@@ -3695,9 +3868,7 @@ export function App() {
 
   // M7 — start a tracked terminal session (M4-gated host-side).
   const handleTerminalStart = useCallback(() => {
-    const command = window.prompt("Command to run in a tracked session:");
-    if (!command || !command.trim()) return;
-    sendMessage("terminal/start", { command: command.trim() });
+    sendMessage("terminal/start", {});
   }, []);
   const handleTerminalRefresh = useCallback(() => {
     // Status (snapshots) + history are separate reads; output itself is
@@ -3954,16 +4125,8 @@ export function App() {
     setMetricsSections((prev) => ({ ...prev, [section]: !prev[section] }));
   }, []);
 
-  // @ mention menu — opened by typing "@"; selecting an entry must never
-  // leave the literal "@" keyword in the submitted user text.
-  const closeMentionMenuAndStripKeyword = useCallback(() => {
-    setMentionMenuOpen(false);
-    setInput((prev) => prev.replace(/@\S*$/, "").replace(/\s+$/, ""));
-  }, []);
   const handleInputChanged = useCallback((value: string) => {
     setInput(value);
-    // Open the @ menu when "@" is the last thing typed.
-    setMentionMenuOpen(/@\S*$/.test(value.slice(-40)));
     // Open the / menu while typing a slash command (before the first space).
     const tail = value.slice(-40);
     const slashMatch = tail.match(/^\/(\w*)$/);
@@ -3971,52 +4134,83 @@ export function App() {
   }, []);
 
   const handleAttachFile = useCallback(() => {
-    setMentionMenuOpen(false);
     // REAL file picker flow: webview asks the extension host, host opens
     // vscode.window.showOpenDialog. Cancel must be a silent no-op.
     sendMessage("context/filePicker", {});
   }, []);
 
   const handleAttachFolder = useCallback(() => {
-    setMentionMenuOpen(false);
     // REAL folder picker flow via vscode.window.showOpenDialog (openFolder).
     sendMessage("context/folderPicker", {});
   }, []);
 
   const handleAttachUrl = useCallback(() => {
-    setMentionMenuOpen(false);
-    const url = window.prompt(
-      "Enter URL to attach as context:\nExample: https://docs.example.com/api",
-    );
-    if (url && url.trim()) {
-      // Stored as structured metadata + chip; never appended to composer text.
-      setComposerContext((prev) => addUrlToContext(prev, url.trim()));
-    }
+    // REAL url picker flow via vscode.window.showInputBox. Cancel is a silent no-op.
+    sendMessage("context/urlPicker", {});
   }, []);
 
   const handleAttachProblems = useCallback(() => {
-    setMentionMenuOpen(false);
     // REAL problems flow: ask the extension host for live diagnostics.
     // Result arrives as context/result and becomes a chip — never "@problem" text.
     setStatusMessage("Collecting VS Code Problems…");
     sendMessage("context/problems", { scope: "workspace" });
   }, []);
 
+  const handleRunVerification = useCallback(() => {
+    sendMessage("verification/get", {});
+  }, []);
+
+  const commandEvents = useMemo(
+    () => sessionToolEvents.filter((t) => isTerminalToolName(t.name)),
+    [sessionToolEvents],
+  );
+  const okCommands = useMemo(
+    () => commandEvents.filter((t) => t.status === "completed").length,
+    [commandEvents],
+  );
+  const failedCommands = useMemo(
+    () => commandEvents.filter((t) => t.status === "error").length,
+    [commandEvents],
+  );
+
+  const verificationState = useMemo(
+    () =>
+      deriveVerificationState({
+        outcome: agentOutcome,
+        problemsCount: composerContext.diagnostics?.items.length ?? null,
+        failedCommands,
+        okCommands,
+        healingActive: Boolean(healingState?.active),
+        healingSucceeded: healingState ? healingState.success : null,
+      }),
+    [
+      agentOutcome,
+      composerContext.diagnostics?.items.length,
+      failedCommands,
+      okCommands,
+      healingState?.active,
+      healingState?.success,
+    ],
+  );
+
+  useEffect(() => {
+    if (currentTab === "tools") {
+      sendMessage("verification/get", {});
+    }
+  }, [currentTab]);
+
   const handleAttachSelection = useCallback(() => {
-    setMentionMenuOpen(false);
     // Structured active-editor selection context from the host.
     sendMessage("context/selection", {});
   }, []);
 
   const handleAttachDiff = useCallback((scope: "working" | "staged") => {
-    setMentionMenuOpen(false);
     // Structured @diff chip — the host runs the bounded git diff at send
     // time; no diff text ever enters the composer input.
     setComposerContext((prev) => addDiffToContext(prev, scope));
   }, []);
 
   const handleAttachTerminal = useCallback(() => {
-    setMentionMenuOpen(false);
     // Structured @terminal chip — the host injects its bounded command
     // history (tails only) at send time.
     setComposerContext((prev) => addTerminalToContext(prev));
@@ -4024,7 +4218,6 @@ export function App() {
 
   const handleImagesSelected = useCallback(
     (images: Array<{ name?: string; mime?: string; dataUrl: string }>) => {
-      setMentionMenuOpen(false);
       // Stored as structured metadata + thumbnail chips; the host validates
       // magic bytes, size, and metadata before anything reaches the model.
       setComposerContext((prev) => addImagesToContext(prev, images));
@@ -4088,12 +4281,17 @@ export function App() {
   const handleProviderSave = useCallback(
     (input: {
       providerId: string;
+      modelId?: string;
       baseUrl?: string;
       fields?: Record<string, string>;
       apiKey?: string;
       clearApiKey?: boolean;
     }) => {
       sendMessage("provider/configure", input);
+      if (input.modelId) {
+        setSettings((s) => ({ ...s, model: input.modelId! }));
+      }
+      setProviderSelectedState(null);
       // BUG 1: configuration change → re-verify the affected provider. The
       // fresh verdict arrives via provider/test_result and only a positive
       // probe may flip the header to Connected.
@@ -4212,8 +4410,9 @@ export function App() {
   // ---------------------------------------------------------------------------
   // Navigation model with REAL, live badges (no fake counts)
   // ---------------------------------------------------------------------------
-  const navItems: NavItem[] = useMemo(
+  const navItems: NavEntry[] = useMemo(
     () => [
+      { kind: "section", label: "Core" },
       { id: "chat", label: "Chat", icon: (p) => <IconChat {...p} /> },
       {
         id: "tools",
@@ -4246,6 +4445,8 @@ export function App() {
               }
             : undefined,
       },
+
+      { kind: "section", label: "Agents" },
       {
         id: "plugins",
         label: "Plugins",
@@ -4276,6 +4477,8 @@ export function App() {
               }
             : undefined,
       },
+
+      { kind: "section", label: "Automation" },
       {
         id: "schedules",
         label: "Schedules",
@@ -4285,8 +4488,12 @@ export function App() {
             ? { count: schedules.filter((s) => s.enabled).length }
             : undefined,
       },
+
+      { kind: "section", label: "Workspace" },
       { id: "history", label: "History", icon: (p) => <IconHistory {...p} /> },
       { id: "metrics", label: "Metrics", icon: (p) => <IconMetrics {...p} /> },
+
+      { kind: "section", label: "Settings" },
       {
         id: "settings",
         label: "Settings",
@@ -4327,6 +4534,7 @@ export function App() {
     <div className="flex flex-col h-screen bg-vscode-bg overflow-hidden">
       <AppHeader
         connected={connection.connected}
+        connectionTone={connection.tone}
         connectionTitle={connection.label}
         model={settings.model}
         provider={settings.provider}
@@ -4373,7 +4581,6 @@ export function App() {
                   input={input}
                   onInputChange={handleInputChanged}
                   onSend={() => {
-                    setMentionMenuOpen(false);
                     setSlashMenuOpen(false);
                     handleSend();
                   }}
@@ -4406,10 +4613,8 @@ export function App() {
                       : undefined
                   }
                   isRunning={isRunning}
-                  mentionMenuOpen={mentionMenuOpen}
                   slashMenuOpen={slashMenuOpen}
                   onCloseMenus={() => {
-                    setMentionMenuOpen(false);
                     setSlashMenuOpen(false);
                   }}
                   onAttachFile={handleAttachFile}
@@ -4420,10 +4625,6 @@ export function App() {
                   onAttachDiff={handleAttachDiff}
                   onAttachTerminal={handleAttachTerminal}
                   onImagesSelected={handleImagesSelected}
-                  onPickMention={(attach) => {
-                    closeMentionMenuAndStripKeyword();
-                    attach();
-                  }}
                   onPickSlash={(command) => {
                     setSlashMenuOpen(false);
                     setInput(command);
@@ -4452,6 +4653,7 @@ export function App() {
                   }}
                   usage={usage}
                   autoApproval={autoApproval}
+                  connected={connection.connected}
                 />
               }
               executionStatus={
@@ -4491,6 +4693,18 @@ export function App() {
           {/* TAB: TOOLS */}
           {currentTab === "tools" && (
             <div className="p-3 overflow-y-auto h-full space-y-4">
+              <VerificationPanel
+                verification={verificationState}
+                problemsCount={
+                  composerContext.diagnostics?.items.length ?? null
+                }
+                okCommands={okCommands}
+                failedCommands={failedCommands}
+                onCheckProblems={handleAttachProblems}
+                engineChecks={verificationChecks}
+                onRunVerification={handleRunVerification}
+              />
+
               <div>
                 <SectionHeader
                   title="Registered tools"
@@ -4502,7 +4716,14 @@ export function App() {
                         className="text-[10px] text-vscode-desc mr-1 self-center"
                         title="Authoritative runtime state from the host"
                       >
-                        Runtime: {toolRegistryState === "available" ? "Ready" : toolRegistryState === "runtime-not-ready" ? "Not started" : toolRegistryState === "error" ? "Error" : "Checking…"}
+                        Runtime:{" "}
+                        {toolRegistryState === "available"
+                          ? "Ready"
+                          : toolRegistryState === "runtime-not-ready"
+                            ? "Not started"
+                            : toolRegistryState === "error"
+                              ? "Error"
+                              : "Checking…"}
                       </span>
                       <Button
                         size="xs"
@@ -4585,17 +4806,17 @@ export function App() {
               <div>
                 <SectionHeader
                   title="Session activity"
-                  count={toolEvents.length}
+                  count={sessionToolEvents.length}
                 />
                 <div className="mt-2">
-                  {toolEvents.length === 0 ? (
+                  {sessionToolEvents.length === 0 ? (
                     <EmptyState
                       title="No tool activity yet"
                       hint="Tool executions from chat turns appear here."
                     />
                   ) : (
                     <div className="space-y-1">
-                      {toolEvents.map((evt) => (
+                      {sessionToolEvents.map((evt) => (
                         <ToolCard key={evt.id} event={evt} />
                       ))}
                     </div>
@@ -5472,7 +5693,7 @@ export function App() {
                             }
                             className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${
                               s.enabled
-                                ? "bg-green-900 text-green-200 border-green-700"
+                                ? "bg-vscode-badge-bg text-vscode-badge-fg border-vscode-border"
                                 : "text-vscode-desc border-vscode-border"
                             }`}
                           >
@@ -6403,9 +6624,9 @@ export function App() {
           {/* TAB: SETTINGS */}
           {currentTab === "settings" && (
             <div className="p-3 space-y-4 overflow-y-auto h-full max-w-[860px]">
-              {/* MODEL */}
+              {/* MODEL / AI PROVIDER */}
               <section>
-                <SectionHeader title="Model" />
+                <SectionHeader title="AI Provider" />
                 <Card className="mt-1.5 px-3 py-2.5 space-y-2.5">
                   {catalogError && (
                     <p
@@ -6419,8 +6640,18 @@ export function App() {
                     providers={catalog}
                     statuses={catalogStatuses}
                     favorites={providerFavorites}
-                    selectedId={openProviderId}
+                    selectedId={openProviderId || settings.provider}
                     activeProviderId={settings.provider}
+                    models={models}
+                    modelsLoading={modelsLoading}
+                    selectedModelId={settings.model}
+                    onModelChange={(modelId) => {
+                      setSettings((s) => ({ ...s, model: modelId }));
+                      sendMessage("settings/set", {
+                        key: "model",
+                        value: modelId,
+                      });
+                    }}
                     health={providerHealth ?? undefined}
                     usage={providerUsage ?? undefined}
                     onOpen={(id) => {
@@ -6435,28 +6666,30 @@ export function App() {
                     onFetchUsage={handleProviderUsage}
                     onUseProvider={handleUseProvider}
                   />
-                  <Field label="Privacy mode" htmlFor="set-privacy">
-                    <Select
-                      id="set-privacy"
-                      value={settings.privacyMode}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          privacyMode: e.target.value,
-                        }))
-                      }
-                      className="w-full"
-                    >
-                      <option value="local">
-                        Local Only — no data leaves machine
-                      </option>
-                      <option value="hybrid">
-                        Hybrid — cloud only for selected tasks
-                      </option>
-                      <option value="cloud">Cloud — uses API providers</option>
-                    </Select>
-                  </Field>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-vscode-border/50">
+                    <Field label="Privacy mode" htmlFor="set-privacy">
+                      <Select
+                        id="set-privacy"
+                        value={settings.privacyMode}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            privacyMode: e.target.value,
+                          }))
+                        }
+                        className="w-full"
+                      >
+                        <option value="local">
+                          Local Only — no data leaves machine
+                        </option>
+                        <option value="hybrid">
+                          Hybrid — cloud only for selected tasks
+                        </option>
+                        <option value="cloud">
+                          Cloud — uses API providers
+                        </option>
+                      </Select>
+                    </Field>
                     <Field label="Temperature" htmlFor="set-temp">
                       <Input
                         id="set-temp"
@@ -6472,20 +6705,6 @@ export function App() {
                           }))
                         }
                         className="w-full"
-                      />
-                    </Field>
-                    <Field label="Base URL (Ollama)" htmlFor="set-baseurl">
-                      <Input
-                        id="set-baseurl"
-                        type="text"
-                        value={settings.baseUrl}
-                        onChange={(e) =>
-                          setSettings((s) => ({
-                            ...s,
-                            baseUrl: e.target.value,
-                          }))
-                        }
-                        className="w-full font-mono"
                       />
                     </Field>
                   </div>

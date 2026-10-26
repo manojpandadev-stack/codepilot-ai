@@ -7,15 +7,9 @@
  * and secret redaction in failure paths.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CodePilotRuntime,
-  NATIVE_AGENT_ID,
-} from "./runtime.js";
+import { CodePilotRuntime, NATIVE_AGENT_ID } from "./runtime.js";
 import type { AgentEvent } from "./types.js";
-import {
-  stubOllamaFetch,
-  type OllamaStub,
-} from "./ollama-fetch-stub.js";
+import { stubOllamaFetch, type OllamaStub } from "./ollama-fetch-stub.js";
 
 let stub: OllamaStub | null = null;
 
@@ -59,9 +53,7 @@ describe("run correlation", () => {
       // Pre-run status events (initialize) legitimately carry no run ids;
       // every run-scoped event carries the full correlation triple.
       for (const e of events) {
-        const c = (
-          e as { taskId?: string; runId?: string; agentId?: string }
-        );
+        const c = e as { taskId?: string; runId?: string; agentId?: string };
         if (c.taskId === undefined) continue;
         expect(c.runId).toBe(c.taskId);
         expect(c.agentId).toBe(NATIVE_AGENT_ID);
@@ -69,9 +61,7 @@ describe("run correlation", () => {
       const completed = events.filter((e) => e.type === "completed");
       expect(completed.length).toBeGreaterThan(0);
       for (const e of completed) {
-        const c = (
-          e as { taskId?: string; runId?: string; agentId?: string }
-        );
+        const c = e as { taskId?: string; runId?: string; agentId?: string };
         expect(c.taskId).toBeTruthy();
         expect(c.runId).toBe(c.taskId);
         expect(c.agentId).toBe(NATIVE_AGENT_ID);
@@ -128,8 +118,7 @@ describe("run metrics — success", () => {
       await runtime.initialize();
       await runtime.startSession("hi");
       const done = events.find((e) => e.type === "agent.completed") as
-        | { timeToFirstTokenMs?: number }
-        | undefined;
+        { timeToFirstTokenMs?: number } | undefined;
       expect(done).toBeDefined();
       expect(done?.timeToFirstTokenMs).toBeGreaterThanOrEqual(0);
     } finally {
@@ -150,7 +139,9 @@ describe("run metrics — success", () => {
     try {
       await runtime.initialize();
       await runtime.startSession("read the project file");
-      const completed = events.filter((e) => e.type === "tool_completed") as Array<{
+      const completed = events.filter(
+        (e) => e.type === "tool_completed",
+      ) as Array<{
         durationMs?: unknown;
         toolName?: string;
       }>;
@@ -208,7 +199,8 @@ describe("run metrics — failure and retry", () => {
           return new Response("not found", { status: 404 });
         }
         calls += 1;
-        if (calls === 1) throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
+        if (calls === 1)
+          throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
         return new Response("boom", { status: 500 });
       }) as unknown as typeof fetch,
     );
@@ -245,8 +237,7 @@ describe("run metrics — failure and retry", () => {
       await runtime.initialize();
       await expect(runtime.startSession("hi")).rejects.toThrow();
       const failed = events.find((e) => e.type === "agent.failed") as
-        | { error?: { message?: string; technicalDetail?: string } }
-        | undefined;
+        { error?: { message?: string; technicalDetail?: string } } | undefined;
       expect(failed).toBeDefined();
       const wire = JSON.stringify(failed?.error ?? {});
       expect(wire).not.toContain("sk-live-9999888877776666");
@@ -287,7 +278,7 @@ describe("run metrics — cancellation", () => {
       ) {
         await new Promise((r) => setTimeout(r, 50));
       }
-      expect((runtime.getState().status as string)).toBe("running");
+      expect(runtime.getState().status as string).toBe("running");
       await runtime.abort();
       await run.catch(() => undefined);
       expect(events.some((e) => e.type === "cancelled")).toBe(true);

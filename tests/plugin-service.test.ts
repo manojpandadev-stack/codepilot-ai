@@ -48,20 +48,40 @@ function writePlugin(id: string, content: Record<string, unknown> | string): voi
 }
 
 function allowPipeline(): M4PermissionPipeline {
-  return new M4PermissionPipeline({
+  // P0-1 fail-closed contract: plugin tool ids (`${pluginId}:${toolName}`)
+  // are UNKNOWN to TOOL_ID_ACTION_MAP, so they classify as write_file and
+  // require approval. The approval only resolves through the real
+  // ApprovalManager — presentApproval's return value is not what the
+  // pipeline awaits — so this fixture approves via the manager, which is
+  // what the host (VS Code) does in production.
+  let manager: M4PermissionPipeline["approvalManager"] | null = null;
+  const pipeline = new M4PermissionPipeline({
     workspaceRoot: dir,
-    presentApproval: async () => ({ decision: "allow", scope: "once" }),
+    presentApproval: async (request) => {
+      queueMicrotask(() => manager!.approve(request.approvalId));
+      return { decision: "allow", scope: "once" };
+    },
   });
+  manager = pipeline.approvalManager;
+  return pipeline;
 }
 
-function denyReadsPipeline(): M4PermissionPipeline {
+function denyAllPipeline(onPresented?: () => void): M4PermissionPipeline {
+  // MATCH-ALL deny: this test must verify that M4 denial blocks a plugin
+  // tool regardless of how the (unknown) tool id classifies. Scoping the
+  // deny to a single action would depend on the old fail-open default
+  // (unknown → read_file) and silently miss the current fail-closed
+  // classification (unknown → write_file → ASK).
   return new M4PermissionPipeline({
     workspaceRoot: dir,
-    presentApproval: async () => ({ decision: "allow", scope: "once" }),
+    presentApproval: async () => {
+      onPresented?.();
+      return { decision: "allow", scope: "once" };
+    },
     policies: [
       {
-        id: "deny-reads",
-        actions: ["read_file"],
+        id: "deny-all-actions",
+        actions: [],
         decision: "deny",
         scope: "single_execution",
         priority: 1000,
@@ -331,11 +351,20 @@ describe("PluginService M4 enforcement (no bypass)", () => {
 
   it("M4 deny blocks execution and the handler never runs", async () => {
     const { handlerCalls } = installExecutablePlugin();
-    service.setM4Pipeline(denyReadsPipeline());
-    // plugin tool maps to the read_file action → denied by policy.
+    let presented = false;
+    service.setM4Pipeline(
+      denyAllPipeline(() => {
+        presented = true;
+      }),
+    );
     const result = await service.invoke("exec-plugin", "echo", { a: 1 });
     expect(result.ok).toBe(false);
+    expect(result.error ?? "").toMatch(/denied/i);
     expect(handlerCalls).toHaveLength(0);
+    // Denied BY POLICY — the request never even reached the approval UI
+    // (a hang-then-timeout would fail the assertions above, this pins the
+    // denial as an immediate policy decision).
+    expect(presented).toBe(false);
   });
 
   it("M4 allow executes through the full chain", async () => {

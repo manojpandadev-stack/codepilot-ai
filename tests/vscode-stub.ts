@@ -114,8 +114,10 @@ export const window = {
   showQuickPick: async () => undefined,
   showInputBox: async () => undefined,
   showOpenDialog: async () => undefined,
-  createOutputChannel: () => ({
-    appendLine: () => {},
+  createOutputChannel: (name = "CodePilot") => ({
+    appendLine: (text: string) => {
+      outputChannelLines.push({ channel: name, text });
+    },
     show: () => {},
     dispose: () => {},
   }),
@@ -148,7 +150,16 @@ export const workspace = {
     // default when unset — mirrors getConfiguration(section).get(key, def).
     get: (k: string, d?: unknown) =>
       configOverrides.has(k) ? configOverrides.get(k) : d,
-    update: async () => {},
+    // Real VS Code PERSISTS a settings write; a no-op here silently made every
+    // `config.update(...)` in the extension a no-op under test, so any contract
+    // asserting that a user action was saved (privacy mode, provider switch)
+    // failed while the product code was correct. Writes land in the same
+    // configOverrides map the harness snapshots to simulate a restart, and
+    // `undefined` removes the setting (VS Code's documented behavior).
+    update: async (k: string, v: unknown) => {
+      if (v === undefined) configOverrides.delete(k);
+      else configOverrides.set(k, v);
+    },
   }),
   asRelativePath: (p: string | { fsPath: string }) =>
     typeof p === "string" ? p : p.fsPath,
@@ -200,6 +211,8 @@ export enum ExtensionMode {
   Test = 3,
 }
 
+export const outputChannelLines: Array<{ channel: string; text: string }> = [];
+
 export const env = {
   appName: "stub",
 };
@@ -223,4 +236,5 @@ export default {
   DiagnosticSeverity,
   ViewColumn,
   ExtensionMode,
+  outputChannelLines,
 };

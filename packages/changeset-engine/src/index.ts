@@ -187,9 +187,19 @@ export interface ChangeSetOptions {
    * Canonical mutation path (M5). When provided, accept/rollback writes are
    * dispatched through FileMutationService — path guard, optimistic
    * concurrency, atomic writes, tracked changes, events — instead of raw
-   * fs writes. Omitting it falls back to the legacy direct-write path.
+   * fs writes.
    */
   mutation?: FileMutationService;
+  /**
+   * Explicit opt-in to the legacy direct-write fallback for accept/rollback.
+   *
+   * DEFAULT false (fail-closed): without an M5 FileMutationService there is
+   * no path guard, no optimistic-concurrency check, no atomic write, no
+   * tracked change and no checkpoint — so an accepted change would land on
+   * disk through an untracked raw write. That is refused unless a host
+   * declares `allowDirectWrite: true` (test fixtures / sandboxes only).
+   */
+  allowDirectWrite?: boolean;
   /**
    * F-08: Simple path validator for staging-time path validation.
    * When provided, all proposed paths are validated before creating a ChangeSet.
@@ -405,6 +415,18 @@ export class ChangeSetManager {
     }
 
     // Apply — through the canonical M5 mutation path when configured.
+    // Fail closed without it (unless the host explicitly opted in): an
+    // untracked raw write is never an acceptable apply.
+    if (!this.mutation && !this.options.allowDirectWrite) {
+      const error =
+        "M5 FileMutationService is not configured — refusing an untracked direct write. " +
+        "Pass `mutation` (production) or `allowDirectWrite: true` (fixtures only).";
+      change.status = "failed";
+      change.updatedAt = Date.now();
+      this.updateChangeSetStatus(changeSet);
+      this.options.onStatusChange?.(change);
+      return Promise.resolve({ success: false, error });
+    }
     try {
       if (this.mutation) {
         const existed = existsSync(this.resolvePath(change.filePath));
@@ -442,7 +464,7 @@ export class ChangeSetManager {
           return { success: false, error: failure };
         }
       } else {
-        // Legacy direct-write path (no M5 configured — tests only).
+        // Legacy direct-write path — reachable ONLY with allowDirectWrite:true.
         const fullPath = this.resolvePath(change.filePath);
         const dir = dirname(fullPath);
         if (!existsSync(dir)) {
@@ -588,6 +610,17 @@ export class ChangeSetManager {
       this.options.onStatusChange?.(change);
       return { success: true };
     };
+
+    // Fail closed without M5 (unless the host explicitly opted in): a raw
+    // rollback write is untracked and unverified exactly like a raw apply.
+    if (!this.mutation && !this.options.allowDirectWrite) {
+      return Promise.resolve({
+        success: false,
+        error:
+          "M5 FileMutationService is not configured — refusing an untracked direct rollback write. " +
+          "Pass `mutation` (production) or `allowDirectWrite: true` (fixtures only).",
+      });
+    }
 
     // Restore original content — through the canonical M5 path when configured.
     if (this.mutation) {

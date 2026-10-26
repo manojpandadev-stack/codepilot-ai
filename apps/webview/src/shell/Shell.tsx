@@ -29,12 +29,23 @@ export interface NavBadge {
   text?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Navigation model — section dividers
+// ---------------------------------------------------------------------------
+
+export interface NavSection {
+  kind: "section";
+  label: string;
+}
+
 export interface NavItem {
   id: TabId;
   label: string;
   icon: (p: { size?: number }) => ReactNode;
   badge?: NavBadge;
 }
+
+export type NavEntry = NavSection | NavItem;
 
 // ---------------------------------------------------------------------------
 // Header
@@ -50,9 +61,11 @@ export function AppHeader({
   isRunning,
   onOpenSettings,
   settingsActive,
+  connectionTone,
 }: {
   connected: boolean;
   connectionTitle: string;
+  connectionTone?: Tone;
   model: string;
   provider: string;
   privacyMode: string;
@@ -65,11 +78,11 @@ export function AppHeader({
     privacyMode === "local"
       ? "success"
       : privacyMode === "cloud"
-        ? "warning"
+        ? "neutral"
         : "info";
   const privacyLabel =
     privacyMode === "local"
-      ? "Local"
+      ? "✓ Local"
       : privacyMode === "cloud"
         ? "Cloud"
         : "Hybrid";
@@ -91,7 +104,7 @@ export function AppHeader({
       {/* Model chip */}
       <span
         title={`Provider: ${provider} · Model: ${model || "not set"}`}
-        className="hidden md:inline-flex items-center gap-1.5 text-[11px] font-mono text-vscode-fg rounded border border-vscode-border px-2 py-0.5 max-w-[220px]"
+        className="inline-flex items-center gap-1.5 text-[11px] font-mono text-vscode-fg rounded border border-vscode-border px-2 py-0.5 max-w-[140px]"
       >
         <span className="text-vscode-desc">model</span>
         <span className="truncate">{model || "—"}</span>
@@ -99,16 +112,20 @@ export function AppHeader({
 
       {/* Privacy status */}
       <span title={privacyTitle}>
-        <Badge tone={privacyTone}>
-          {privacyMode === "local" ? "✓" : "⚠"} {privacyLabel}
-        </Badge>
+        <Badge tone={privacyTone}>{privacyLabel}</Badge>
       </span>
 
       {/* Connection status */}
       <span title={connectionTitle}>
         <StatusDot
-          tone={connected ? "success" : "danger"}
-          label={connected ? "Connected" : "Offline"}
+          tone={connectionTone ?? (connected ? "success" : "muted")}
+          label={
+            connected
+              ? "Connected"
+              : connectionTone === "danger"
+                ? "Error"
+                : "Offline"
+          }
           pulse={isRunning}
         />
       </span>
@@ -147,7 +164,7 @@ export function SideNav({
   collapsed,
   onToggleCollapsed,
 }: {
-  items: NavItem[];
+  items: NavEntry[];
   activeTab: TabId;
   onSelect: (tab: TabId) => void;
   collapsed: boolean;
@@ -161,7 +178,19 @@ export function SideNav({
       }`}
     >
       <ul className="flex-1 overflow-y-auto py-1.5 px-1 space-y-0.5">
-        {items.map((item) => {
+        {items.map((entry) => {
+          // Section divider — non-clickable label between groups.
+          if ("kind" in entry && entry.kind === "section") {
+            return (
+              <li key={entry.label}>
+                <div className="px-2 py-1.5 flex items-center gap-1 text-[9px] font-semibold text-vscode-desc uppercase tracking-wider">
+                  {entry.label}
+                </div>
+              </li>
+            );
+          }
+
+          const item = entry as NavItem;
           const active = activeTab === item.id;
           const badge = item.badge;
           return (

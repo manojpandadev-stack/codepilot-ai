@@ -181,8 +181,10 @@ export interface ModelInfoLite {
 export function toolCallingLabel(
   support: "true" | "false" | "unknown" | undefined,
 ): { symbol: string; text: string; tone: "success" | "muted" | "danger" } {
-  if (support === "true") return { symbol: "\u2713", text: "Supported", tone: "success" };
-  if (support === "false") return { symbol: "\u2715", text: "Not supported", tone: "danger" };
+  if (support === "true")
+    return { symbol: "\u2713", text: "Supported", tone: "success" };
+  if (support === "false")
+    return { symbol: "\u2715", text: "Not supported", tone: "danger" };
   return { symbol: "?", text: "Unknown", tone: "muted" };
 }
 
@@ -336,6 +338,7 @@ export interface CatalogProviderLite {
     | { kind: "provider-api"; billingPortalUrl?: string }
     | { kind: "local-tracking"; billingPortalUrl?: string }
     | { kind: "none" };
+  curated?: boolean;
 }
 
 /** Credential presence + non-secret config for one provider. */
@@ -384,19 +387,29 @@ export interface ProviderUsageLite {
 /** Normalize a catalog payload (bare array or { providers } wrapper). */
 export function normalizeCatalogProviders(
   payload: unknown,
+  opts?: { curatedOnly?: boolean },
 ): CatalogProviderLite[] {
   const raw = Array.isArray(payload)
     ? payload
     : (payload as { providers?: unknown } | null)?.providers;
   if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (p): p is CatalogProviderLite =>
-      !!p &&
-      typeof (p as CatalogProviderLite).id === "string" &&
-      typeof (p as CatalogProviderLite).displayName === "string" &&
-      Array.isArray((p as CatalogProviderLite).fields) &&
-      Array.isArray((p as CatalogProviderLite).models),
-  );
+  const providers = raw
+    .filter(
+      (p): p is CatalogProviderLite =>
+        !!p &&
+        typeof (p as CatalogProviderLite).id === "string" &&
+        typeof (p as CatalogProviderLite).displayName === "string" &&
+        Array.isArray((p as CatalogProviderLite).fields) &&
+        Array.isArray((p as CatalogProviderLite).models),
+    )
+    .map((p) => ({
+      ...p,
+      curated: p.curated !== undefined ? p.curated : true,
+    }));
+  if (opts?.curatedOnly) {
+    return providers.filter((p) => p.curated !== false);
+  }
+  return providers;
 }
 
 /** Normalize a provider status payload (single or list). */
@@ -468,6 +481,7 @@ export interface ConnectionSummaryInput {
 export function connectionSummary(input: ConnectionSummaryInput): {
   connected: boolean;
   label: string;
+  tone: "neutral" | "success" | "warning" | "danger" | "info" | "muted";
 } {
   const name = input.catalog?.displayName ?? (input.selectedProviderId || "—");
   const isLocal =
@@ -488,38 +502,58 @@ export function connectionSummary(input: ConnectionSummaryInput): {
     if (connected) {
       return {
         connected: true,
+        tone: "success",
         label: `${name} · Connected${
           live.latencyMs !== undefined ? ` (${live.latencyMs}ms)` : ""
         }`,
       };
     }
     if (st === "checking") {
-      return { connected: false, label: `${name} — checking…` };
-    }
-    if (st === "auth-invalid" || st === "auth-required") {
       return {
         connected: false,
-        label:
-          st === "auth-invalid"
-            ? `${name}: API key rejected`
-            : `${name}: API key required`,
+        tone: "warning",
+        label: `${name} — checking…`,
+      };
+    }
+    if (st === "auth-invalid") {
+      return {
+        connected: false,
+        tone: "danger",
+        label: `${name}: API key rejected`,
+      };
+    }
+    if (st === "auth-required") {
+      return {
+        connected: false,
+        tone: "muted",
+        label: `${name}: API key required`,
       };
     }
     if (st === "rate-limited") {
-      return { connected: false, label: `${name}: rate limited` };
+      return {
+        connected: false,
+        tone: "warning",
+        label: `${name}: rate limited`,
+      };
     }
     if (st === "no-endpoint") {
-      return { connected: false, label: `${name}: no endpoint configured` };
+      return {
+        connected: false,
+        tone: "muted",
+        label: `${name}: no endpoint configured`,
+      };
     }
     if (st === "configured" || st === "unverified") {
       return {
         connected: false,
+        tone: "muted",
         label: `${scope} · ${name} — configured, not verified`,
       };
     }
     // "unavailable" + any future state: honest failure direction.
     return {
       connected: false,
+      tone: "danger",
       label: isLocal
         ? `${name} unavailable — start ${name} and refresh`
         : `${name} unavailable`,
@@ -530,19 +564,39 @@ export function connectionSummary(input: ConnectionSummaryInput): {
   if (input.health?.state === "connected") {
     return {
       connected: true,
+      tone: "success",
       label: `${name} · Connected`,
     };
   }
   if (input.health?.state === "unavailable") {
     return {
       connected: false,
+      tone: "danger",
       label: isLocal
         ? `${name} unavailable — start ${name} and refresh`
         : `${name} unavailable`,
     };
   }
+  if (input.health?.state === "auth-invalid") {
+    return {
+      connected: false,
+      tone: "danger",
+      label: `${name}: API key rejected`,
+    };
+  }
+  if (input.health?.state === "rate-limited") {
+    return {
+      connected: false,
+      tone: "warning",
+      label: `${name}: rate limited`,
+    };
+  }
   if (input.health?.state === "no-endpoint") {
-    return { connected: false, label: `${name}: no endpoint configured` };
+    return {
+      connected: false,
+      tone: "muted",
+      label: `${name}: no endpoint configured`,
+    };
   }
 
   // 2. Credential gate — only when we actually know the answer.
@@ -550,18 +604,27 @@ export function connectionSummary(input: ConnectionSummaryInput): {
     input.credentialConfigured === false &&
     input.health?.state === "auth-required"
   ) {
-    return { connected: false, label: `${name}: API key required` };
+    return {
+      connected: false,
+      tone: "muted",
+      label: `${name}: API key required`,
+    };
   }
 
   // 3. Live endpoint succeeded but credential is missing → auth required.
   if (input.credentialConfigured === false && input.health) {
-    return { connected: false, label: `${name}: API key required` };
+    return {
+      connected: false,
+      tone: "muted",
+      label: `${name}: API key required`,
+    };
   }
 
   // 4. No probe data yet: neutral, honest state — never guess "connected".
   if (input.health === undefined) {
     return {
       connected: false,
+      tone: "muted",
       label: input.credentialConfigured
         ? `${scope} · ${name}`
         : `${scope} · ${name} — not verified`,
@@ -569,7 +632,11 @@ export function connectionSummary(input: ConnectionSummaryInput): {
   }
 
   // 5. Probed but not clearly up/down (auth-invalid, rate-limited, …).
-  return { connected: false, label: `${name} — check connection` };
+  return {
+    connected: false,
+    tone: "warning",
+    label: `${name} — check connection`,
+  };
 }
 
 /**
@@ -596,7 +663,9 @@ export function chatStatusLabel(
   }
   if (status === "completed") {
     const u = payload?.usage;
-    return u ? `Completed · ${u.inputTokens}→${u.outputTokens} tok` : "Completed";
+    return u
+      ? `Completed · ${u.inputTokens}→${u.outputTokens} tok`
+      : "Completed";
   }
   if (status === "idle" && payload?.message) {
     // Host-stopped turns carry a real message ("Agent stopped.").
@@ -937,7 +1006,10 @@ export function addTerminalToContext(ctx: ComposerCtx): ComposerCtx {
   if ((ctx.terminals ?? []).some((t) => t.scope === "recent")) return ctx;
   return {
     ...ctx,
-    terminals: [...(ctx.terminals ?? []), { id: nextChipId("terminal"), scope: "recent" }],
+    terminals: [
+      ...(ctx.terminals ?? []),
+      { id: nextChipId("terminal"), scope: "recent" },
+    ],
   };
 }
 
@@ -3662,9 +3734,10 @@ export function normalizeUsageSummary(
 }
 
 /** Format estimated cost for display — honest about coverage. */
-export function formatUsageCost(
-  s: UsageSummaryView,
-): { text: string; tone: "est" | "partial" | "none" } {
+export function formatUsageCost(s: UsageSummaryView): {
+  text: string;
+  tone: "est" | "partial" | "none";
+} {
   if (s.pricingCoverage === "none" || s.totalEstimatedCostUsd === null) {
     return { text: "cost unavailable (no pricing)", tone: "none" };
   }
@@ -4045,10 +4118,7 @@ export function appendToolEvent<T extends ToolEventLike>(
 
 /** Distinguishable registry states — "0 tools" only ever means empty+ready. */
 export type ToolRegistryState =
-  | "loading"
-  | "runtime-not-ready"
-  | "available"
-  | "error";
+  "loading" | "runtime-not-ready" | "available" | "error";
 
 /**
  * Classify a `tools/list_result` payload. The host signals a not-yet-created
@@ -4056,9 +4126,10 @@ export type ToolRegistryState =
  * zero tools is a DIFFERENT (legitimate) state; an `error` field is a
  * registry failure. Never map failure onto empty, or not-ready onto "0".
  */
-export function classifyToolRegistryState(
-  payload: unknown,
-): { state: ToolRegistryState; tools: ReturnType<typeof normalizeToolList> } {
+export function classifyToolRegistryState(payload: unknown): {
+  state: ToolRegistryState;
+  tools: ReturnType<typeof normalizeToolList>;
+} {
   const p = (payload ?? {}) as {
     tools?: unknown;
     runtimeReady?: unknown;
@@ -4220,6 +4291,521 @@ export function validateSkillAction(
   return { ok: true };
 }
 
+// ============================================================================
+// Task phase derivation (TaskStatus strip — pure view-model)
+// ----------------------------------------------------------------------------
+// Derives the operator-facing phase from REAL host state only: approval
+// backlog, healing activity, the settled outcome, the running tool, and
+// host status text. Priority mirrors what actually blocks a run: approvals
+// (the agent is literally waiting) beat healing, which beats the settled
+// outcome, which beats tool/message heuristics. Unknown tool names and
+// unrecognized messages fall back to generic working/idle — never invented.
+// ============================================================================
+
+/** Every phase the TaskStatus strip can render (keys of its PHASE_META). */
+export type TaskPhase =
+  | "idle"
+  | "working"
+  | "thinking"
+  | "generating"
+  | "reading"
+  | "editing"
+  | "command"
+  | "searching"
+  | "git"
+  | "web"
+  | "planning"
+  | "approval"
+  | "healing"
+  | "completed"
+  | "stopped"
+  | "paused"
+  | "failed";
+
+export interface TaskPhaseInput {
+  isRunning: boolean;
+  statusMessage: string;
+  runningToolName?: string;
+  pendingApprovals: number;
+  healingActive: boolean;
+  outcome: "completed" | "stopped" | "paused" | "failed" | null;
+}
+
+/** Host phrases that honestly indicate planning while a run is active. */
+const TASK_PLANNING_MARKERS = [
+  "plan",
+  "planning",
+  "analyzing",
+  "inspecting",
+  "exploring",
+  "reviewing",
+];
+
+/** Running tool name → phase. Unknown names fall through to message rules. */
+function taskPhaseForTool(toolName: string): TaskPhase | null {
+  const name = toolName.toLowerCase();
+  if (
+    name === "read_files" ||
+    name === "read_file" ||
+    name === "inspect_symbols" ||
+    name === "read_tool_output"
+  ) {
+    return "reading";
+  }
+  if (
+    name === "editor" ||
+    name === "apply_patch" ||
+    name === "write_file" ||
+    name === "apply_file_changes"
+  ) {
+    return "editing";
+  }
+  if (isTerminalToolName(toolName)) return "command";
+  if (
+    name === "search_codebase" ||
+    name === "search_files" ||
+    name === "search_text"
+  ) {
+    return "searching";
+  }
+  if (
+    name === "git_status" ||
+    name === "git_diff" ||
+    name === "git_log" ||
+    name === "git_show"
+  ) {
+    return "git";
+  }
+  if (
+    name === "web_fetch" ||
+    name === "fetch_web_content" ||
+    name === "web_search" ||
+    name.startsWith("browser_")
+  ) {
+    return "web";
+  }
+  if (
+    name === "skills" ||
+    name === "ask_question" ||
+    name === "plan" ||
+    name === "list_files" ||
+    name === "list_directory"
+  ) {
+    return "planning";
+  }
+  return null;
+}
+
+/**
+ * Derive the task phase. Total function: every input maps to exactly one
+ * phase; no branch invents runtime facts.
+ */
+export function deriveTaskPhase(input: TaskPhaseInput): TaskPhase {
+  if (input.pendingApprovals > 0) return "approval";
+  if (input.healingActive) return "healing";
+  if (!input.isRunning) {
+    switch (input.outcome) {
+      case "completed":
+        return "completed";
+      case "failed":
+        return "failed";
+      case "stopped":
+        return "stopped";
+      case "paused":
+        return "paused";
+      default:
+        return "idle";
+    }
+  }
+  if (input.runningToolName) {
+    const mapped = taskPhaseForTool(input.runningToolName);
+    if (mapped) return mapped;
+  }
+  const msg = input.statusMessage.toLowerCase();
+  if (msg.includes("think")) return "thinking";
+  if (msg.includes("generat")) return "generating";
+  if (TASK_PLANNING_MARKERS.some((m) => msg.includes(m))) return "planning";
+  // Unknown tool or bare run: generic working — never claim a specific
+  // activity we cannot observe.
+  return "working";
+}
+
+// ============================================================================
+// Recovery timeline (ActivityTimeline — pure view-model)
+// ----------------------------------------------------------------------------
+// The host streams `recovery/event` payloads {phase, attempt, ...}; the
+// webview validates + bounds them (appendRecoveryEvent) and maps each to an
+// honest timeline row (recoveryRowView). Malformed payloads are dropped —
+// recovery rows never fabricate attempts the backend did not report — and a
+// PARTIAL_SUCCESS or exhausted recovery is NEVER rendered as a success.
+// ============================================================================
+
+/** Max recovery rows retained (oldest drop; newest always survives). */
+export const MAX_RECOVERY_ROWS = 50;
+
+/** Recovery lifecycle phases the host reports. */
+export type RecoveryPhase =
+  | "FAILURE_DETECTED"
+  | "DIAGNOSIS_STARTED"
+  | "REPAIR_APPROVAL_REQUIRED"
+  | "REPAIR_APPLIED"
+  | "VERIFICATION_STARTED"
+  | "VERIFICATION_FAILED"
+  | "RECOVERY_COMPLETED"
+  | "RECOVERY_EXHAUSTED";
+
+/** Recovery settlement states (only meaningful on RECOVERY_COMPLETED). */
+export type RecoverySettlement =
+  "SUCCESS" | "PARTIAL_SUCCESS" | "FAILED" | "CANCELLED" | "TIMEOUT";
+
+const RECOVERY_KNOWN_PHASES: readonly string[] = [
+  "FAILURE_DETECTED",
+  "DIAGNOSIS_STARTED",
+  "REPAIR_APPROVAL_REQUIRED",
+  "REPAIR_APPLIED",
+  "VERIFICATION_STARTED",
+  "VERIFICATION_FAILED",
+  "RECOVERY_COMPLETED",
+  "RECOVERY_EXHAUSTED",
+];
+
+const RECOVERY_MAX_SUMMARY = 400;
+const RECOVERY_MAX_FILES = 20;
+const RECOVERY_MAX_CATEGORY = 64;
+
+/** Normalized view of one host `recovery/event`. */
+export interface RecoveryEventMsg {
+  phase: RecoveryPhase;
+  attempt: number;
+  maxAttempts: number;
+  timestamp: number;
+  category?: string;
+  summary?: string;
+  files?: string[];
+  /** Settlement of a RECOVERY_COMPLETED event. */
+  status?: RecoverySettlement;
+  /** True when verification uncovered a different failure than the original. */
+  newFailure?: boolean;
+}
+
+/** Validate one `recovery/event` payload; null when malformed. */
+export function normalizeRecoveryEvent(
+  payload: unknown,
+): RecoveryEventMsg | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.phase !== "string" || !RECOVERY_KNOWN_PHASES.includes(p.phase)) {
+    return null;
+  }
+  if (
+    typeof p.attempt !== "number" ||
+    !Number.isInteger(p.attempt) ||
+    p.attempt < 0
+  ) {
+    return null;
+  }
+  if (
+    typeof p.maxAttempts !== "number" ||
+    !Number.isInteger(p.maxAttempts) ||
+    p.maxAttempts < 1
+  ) {
+    return null;
+  }
+  if (typeof p.timestamp !== "number" || !Number.isFinite(p.timestamp)) {
+    return null;
+  }
+  const out: RecoveryEventMsg = {
+    phase: p.phase as RecoveryPhase,
+    attempt: p.attempt,
+    maxAttempts: p.maxAttempts,
+    timestamp: p.timestamp,
+  };
+  if (typeof p.category === "string" && p.category.length > 0) {
+    out.category = p.category.slice(0, RECOVERY_MAX_CATEGORY);
+  }
+  if (typeof p.summary === "string" && p.summary.length > 0) {
+    out.summary = p.summary.slice(0, RECOVERY_MAX_SUMMARY);
+  }
+  if (Array.isArray(p.files)) {
+    const files = p.files
+      .filter((f): f is string => typeof f === "string")
+      .map((f) => f.slice(0, 300))
+      .slice(0, RECOVERY_MAX_FILES);
+    if (files.length > 0) out.files = files;
+  }
+  if (
+    typeof p.status === "string" &&
+    ["SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED", "TIMEOUT"].includes(
+      p.status,
+    )
+  ) {
+    out.status = p.status as RecoverySettlement;
+  }
+  if (p.newFailure === true) out.newFailure = true;
+  return out;
+}
+
+/**
+ * Append one validated recovery event, bounding the list at
+ * MAX_RECOVERY_ROWS (oldest drop; newest survives). Malformed payloads
+ * leave the list unchanged.
+ */
+export function appendRecoveryEvent(
+  rows: RecoveryEventMsg[],
+  payload: unknown,
+): RecoveryEventMsg[] {
+  const event = normalizeRecoveryEvent(payload);
+  if (!event) return rows;
+  const next = [...rows, event];
+  return next.length > MAX_RECOVERY_ROWS
+    ? next.slice(next.length - MAX_RECOVERY_ROWS)
+    : next;
+}
+
+/** Timeline-row shape (structurally matches ActivityRowView; no import cycle). */
+export interface RecoveryRowView {
+  id: string;
+  kind:
+    "tool" | "approval" | "failure" | "retry" | "verification" | "completion";
+  label: string;
+  detail?: string;
+  state: "running" | "ok" | "error" | "done";
+}
+
+/** Map one normalized recovery event to its honest timeline row. */
+export function recoveryRowView(event: RecoveryEventMsg): RecoveryRowView {
+  const id = `recovery-${event.phase.toLowerCase()}-${event.attempt}`;
+  const detail =
+    event.summary ??
+    (event.category
+      ? `${event.category} (attempt ${event.attempt})`
+      : undefined);
+  switch (event.phase) {
+    case "FAILURE_DETECTED":
+      return {
+        id,
+        kind: "failure",
+        label: "Failure detected",
+        detail,
+        state: "error",
+      };
+    case "DIAGNOSIS_STARTED":
+      return {
+        id,
+        kind: "retry",
+        label: "Diagnosing failure",
+        detail,
+        state: "running",
+      };
+    case "REPAIR_APPROVAL_REQUIRED":
+      return {
+        id,
+        kind: "approval",
+        label: "Repair awaiting approval",
+        detail,
+        state: "running",
+      };
+    case "REPAIR_APPLIED":
+      return {
+        id,
+        kind: "retry",
+        label: "Repair applied",
+        detail,
+        state: "running",
+      };
+    case "VERIFICATION_STARTED":
+      return {
+        id,
+        kind: "verification",
+        label: "Verifying repair",
+        detail,
+        state: "running",
+      };
+    case "VERIFICATION_FAILED":
+      if (event.newFailure) {
+        return {
+          id,
+          kind: "failure",
+          label: "NEW failure detected",
+          detail,
+          state: "error",
+        };
+      }
+      return {
+        id,
+        kind: "failure",
+        label: "Verification failed",
+        detail,
+        state: "error",
+      };
+    case "RECOVERY_EXHAUSTED":
+      return {
+        id,
+        kind: "completion",
+        label: "Recovery exhausted",
+        detail,
+        state: "error",
+      };
+    case "RECOVERY_COMPLETED":
+      if (event.status === "SUCCESS") {
+        return {
+          id,
+          kind: "completion",
+          label: "Recovery succeeded",
+          detail,
+          state: "done",
+        };
+      }
+      return {
+        id,
+        kind: "completion",
+        label: event.status
+          ? `Recovery ${event.status.toLowerCase().replace(/_/g, " ")}`
+          : "Recovery completed",
+        detail,
+        state: "error",
+      };
+  }
+}
+
+// ============================================================================
+// Verification engine checks (VerificationPanel — pure view-model)
+// ----------------------------------------------------------------------------
+// Mirrors the host VerificationCheck contract
+// (tool-engine verification-engine: type/status/summary/error/exitCode).
+// `normalizeVerificationCheck` validates future host payloads; malformed
+// input returns null so the panel keeps its honest "Not available" rows.
+// ============================================================================
+
+/** Check types the Verification Engine models (subset of the full engine). */
+export type VerificationCheckType =
+  "tests" | "build" | "typecheck" | "security";
+
+/** Check states the Verification Engine reports. */
+export type VerificationCheckStatus =
+  | "not_started"
+  | "running"
+  | "passed"
+  | "failed"
+  | "cancelled"
+  | "timeout"
+  | "not_available";
+
+/** Normalized view of one Verification Engine check result. */
+export interface VerificationCheckMsg {
+  type: VerificationCheckType;
+  status: VerificationCheckStatus;
+  summary: string;
+  error?: string;
+  exitCode?: number;
+  durationMs?: number;
+}
+
+const VERIFICATION_CHECK_TYPES: readonly string[] = [
+  "tests",
+  "build",
+  "typecheck",
+  "security",
+];
+const VERIFICATION_CHECK_STATUSES: readonly string[] = [
+  "not_started",
+  "running",
+  "passed",
+  "failed",
+  "cancelled",
+  "timeout",
+  "not_available",
+];
+
+/** Host `verification/state` payload: one run's check snapshots. */
+export interface VerificationStateMsg {
+  runId: string;
+  status: "running" | "completed" | "cancelled";
+  verdict?: "passed" | "failed" | "not_available";
+  checks: VerificationCheckMsg[];
+}
+
+const VERIFICATION_DISPLAY_ORDER: readonly VerificationCheckType[] = [
+  "tests",
+  "build",
+  "typecheck",
+  "security",
+];
+
+function isSettledStatus(status: VerificationCheckStatus): boolean {
+  return status !== "running" && status !== "not_started";
+}
+
+/**
+ * Merge a `verification/state` payload into the rendered check list.
+ * Stable display order; a late `running` event never downgrades a settled
+ * status; checks the engine never modeled stay absent (honest placeholder);
+ * failure details (exit code, error, duration) survive verbatim (bounded).
+ */
+export function reduceVerificationState(
+  prev: VerificationCheckMsg[],
+  payload: VerificationStateMsg,
+): VerificationCheckMsg[] {
+  const merged = new Map<VerificationCheckType, VerificationCheckMsg>();
+  for (const check of prev) merged.set(check.type, check);
+  for (const raw of payload.checks) {
+    const check = normalizeVerificationCheck(raw) ?? null;
+    if (!check) continue;
+    const existing = merged.get(check.type);
+    if (
+      existing &&
+      isSettledStatus(existing.status) &&
+      !isSettledStatus(check.status)
+    ) {
+      continue;
+    }
+    merged.set(check.type, check);
+  }
+  return VERIFICATION_DISPLAY_ORDER.filter((t) => merged.has(t)).map((t) =>
+    merged.get(t)!,
+  );
+}
+
+/** Validate a Verification Engine check payload; null when malformed. */
+export function normalizeVerificationCheck(
+  payload: unknown,
+): VerificationCheckMsg | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  if (
+    typeof p.type !== "string" ||
+    !VERIFICATION_CHECK_TYPES.includes(p.type)
+  ) {
+    return null;
+  }
+  if (
+    typeof p.status !== "string" ||
+    !VERIFICATION_CHECK_STATUSES.includes(p.status)
+  ) {
+    return null;
+  }
+  if (typeof p.summary !== "string" || p.summary.length === 0) return null;
+  const out: VerificationCheckMsg = {
+    type: p.type as VerificationCheckType,
+    status: p.status as VerificationCheckStatus,
+    summary: p.summary.slice(0, 200),
+  };
+  if (typeof p.error === "string" && p.error.length > 0) {
+    out.error = p.error.slice(0, 300);
+  }
+  if (typeof p.exitCode === "number" && Number.isInteger(p.exitCode)) {
+    out.exitCode = p.exitCode;
+  }
+  if (
+    typeof p.durationMs === "number" &&
+    Number.isFinite(p.durationMs) &&
+    p.durationMs >= 0
+  ) {
+    out.durationMs = p.durationMs;
+  }
+  return out;
+}
+
 /** Validate a `skills/result` / `skills/error` payload; null when malformed. */
 export function validateSkillResult(payload: unknown): {
   success: boolean;
@@ -4243,4 +4829,84 @@ export function validateSkillResult(payload: unknown): {
     if (v) out.skill = v;
   }
   return out;
+}
+
+// ======
+// Re-export the outcome view-models so the message contract module is the
+// single import surface for message rendering.
+// ======
+
+export {
+  describeErrorCard,
+  describePrivacyResult,
+  describeProviderVerdict,
+} from "./outcomes.js";
+export type {
+  OutcomeKind,
+  OutcomeView,
+  PrivacyOutcomeView,
+} from "./outcomes.js";
+
+// ======
+// Provider connection view models
+// ======
+
+export interface ConnectionTestViewInput {
+  requiresApiKey?: boolean;
+  credentialConfigured?: boolean;
+  testing?: boolean;
+  health?: {
+    state?: string;
+    message?: string;
+  };
+}
+
+export interface ConnectionTestViewResult {
+  state:
+    | "not-configured"
+    | "testing"
+    | "connected"
+    | "auth-failed"
+    | "invalid-endpoint"
+    | "rate-limited"
+    | "network-error"
+    | "model-unavailable";
+  label: string;
+}
+
+export function connectionTestView(
+  input: ConnectionTestViewInput,
+): ConnectionTestViewResult {
+  if (input.testing) {
+    return { state: "testing", label: "Testing…" };
+  }
+  if (!input.health) {
+    return { state: "not-configured", label: "Not verified" };
+  }
+  const { state, message = "" } = input.health;
+  if (state === "connected") {
+    return { state: "connected", label: "Connected" };
+  }
+  if (state === "auth-invalid") {
+    return { state: "auth-failed", label: "Authentication failed" };
+  }
+  if (state === "invalid-config") {
+    return { state: "invalid-endpoint", label: "Invalid endpoint" };
+  }
+  if (state === "rate-limited") {
+    return { state: "rate-limited", label: "Rate limited" };
+  }
+  if (state === "no-endpoint") {
+    return { state: "model-unavailable", label: "Cannot verify automatically" };
+  }
+  if (state === "unavailable") {
+    if (/network error/i.test(message)) {
+      return { state: "network-error", label: "Network error" };
+    }
+    return { state: "invalid-endpoint", label: "Unavailable" };
+  }
+  if (state === "auth-required") {
+    return { state: "not-configured", label: "API key required" };
+  }
+  return { state: "not-configured", label: "Not verified" };
 }

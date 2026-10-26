@@ -192,6 +192,21 @@ export interface TeamAgentConfigDeps {
   temperature?: number;
   /** M4 live bridge. Null/absent → deny-closed (fail safe). */
   bridge?: TeamApprovalBridge | null;
+  /**
+   * The SAME ChangeSet staging bridge the single-agent runtime uses. Inherited
+   * by every role agent so a child agent's edit becomes a pending ChangeSet
+   * instead of a direct disk write. Absent → role agents are built without any
+   * write tool at all (fail closed).
+   */
+  onWriteProposal?: (
+    toolName: string,
+    proposals: Array<{
+      filePath: string;
+      relativePath: string;
+      proposedContent: string;
+      delete?: boolean;
+    }>,
+  ) => Promise<{ changeSetId: string }>;
   getSessionId?: () => string | undefined;
 }
 
@@ -200,6 +215,8 @@ export interface TeamAgentConfigDeps {
  * Uses the SAME M4 enforcement as single-agent turns: beforeTool consults
  * the live bridge; without a bridge every tool is denied. No bypass exists
  * for terminal/file-delete/MCP/plugin/browser tools — all flow through here.
+ * File edits additionally stage through the host ChangeSet bridge
+ * (deps.onWriteProposal); without it the role agents get no write tool.
  */
 export function buildTeamAgentConfig(
   deps: TeamAgentConfigDeps,
@@ -216,6 +233,10 @@ export function buildTeamAgentConfig(
     agentMode: "act",
     maxIterations: deps.maxIterations ?? 50,
     temperature: deps.temperature,
+    // Same M4/M5 boundary as the single-agent path — inherited, never blanked.
+    ...(deps.onWriteProposal !== undefined
+      ? { onWriteProposal: deps.onWriteProposal }
+      : {}),
     requestApproval: async ({ toolCallId, toolName, input }) => {
       if (!bridge) {
         return {

@@ -343,6 +343,7 @@ export interface GuardFetchOptions {
     ip: string | undefined,
     host: string,
     timeoutMs: number,
+    signal?: AbortSignal,
   ) => Promise<{
     status: number;
     headers: Record<string, string>;
@@ -351,6 +352,12 @@ export interface GuardFetchOptions {
   allowedDomains?: string[];
   deniedDomains?: string[];
   pinIp?: boolean;
+  /**
+   * Cancellation. Checked before every hop and wired into the real socket so
+   * an aborted run stops the in-flight request instead of waiting for the
+   * timeout. Aborting yields `{ ok: false, error: "aborted" }`.
+   */
+  signal?: AbortSignal;
 }
 
 export interface GuardFetchResult {
@@ -396,6 +403,7 @@ function rawRequest(
   pinIp: string | undefined,
   sniHost: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
   return new Promise((resolve, reject) => {
     const start = (mod: {
@@ -426,6 +434,16 @@ function rawRequest(
               cb(null, dial, net.isIP(dial));
             }
           : undefined;
+      // Cancellation must stop the real socket, not merely be noticed later.
+      if (signal?.aborted === true) {
+        reject(
+          new DOMException(
+            "web fetch aborted before the request",
+            "AbortError",
+          ),
+        );
+        return;
+      }
       const req = mod.request(
         target,
         {
@@ -458,6 +476,12 @@ function rawRequest(
       );
       req.setTimeout(timeoutMs, () => req.destroy(new Error("timeout")));
       req.on("error", reject);
+      if (signal) {
+        const onAbort = () =>
+          req.destroy(new DOMException("web fetch aborted", "AbortError"));
+        signal.addEventListener("abort", onAbort, { once: true });
+        req.on("close", () => signal.removeEventListener("abort", onAbort));
+      }
       req.end();
     };
     if (target.protocol === "https:") {
@@ -479,6 +503,9 @@ export async function ssrfSafeFetch(
   let current = url;
   let hops = 0;
   for (;;) {
+    if (opts.signal?.aborted === true) {
+      return { ok: false, finalUrl: current, error: "aborted", hops };
+    }
     let parsed: URL;
     try {
       parsed = new URL(current);
@@ -518,6 +545,7 @@ export async function ssrfSafeFetch(
         pinIp,
         stripIpDecorations(parsed.hostname),
         timeoutMs,
+        opts.signal,
       );
       if (out.status >= 300 && out.status < 400) {
         const loc = out.headers["location"] ?? "";

@@ -108,7 +108,9 @@ describe("node-http transport — default wiring (global fetch is the default)",
   });
 
   it("transport 'node-http' opts in; explicit fetchImpl wins", () => {
-    const make = (options: ConstructorParameters<typeof OllamaLlmProvider>[0]) =>
+    const make = (
+      options: ConstructorParameters<typeof OllamaLlmProvider>[0],
+    ) =>
       new OllamaLlmProvider(options) as unknown as {
         usesNodeHttpTransport: boolean;
       };
@@ -308,7 +310,9 @@ describe("CodePilotRuntime — ollamaUseNodeHttpTransport wiring (both paths)", 
     }) as unknown as typeof fetch;
   }
 
-  function makeRuntime(options: Partial<ConstructorParameters<typeof CodePilotRuntime>[0]>): CodePilotRuntime {
+  function makeRuntime(
+    options: Partial<ConstructorParameters<typeof CodePilotRuntime>[0]>,
+  ): CodePilotRuntime {
     return new CodePilotRuntime({
       workspaceRoot: process.cwd(),
       providerId: "ollama",
@@ -364,4 +368,3 @@ describe("CodePilotRuntime — ollamaUseNodeHttpTransport wiring (both paths)", 
     expect(chatHits.n).toBe(0);
   });
 });
-

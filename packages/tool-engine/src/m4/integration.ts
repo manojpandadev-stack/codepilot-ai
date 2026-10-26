@@ -19,6 +19,7 @@ import {
   PermissionPolicyEngine,
   operationFingerprintOf,
 } from "./policy-engine.js";
+import { CommandValidator } from "@codepilot/shared";
 import { ApprovalManager } from "./approval-manager.js";
 import { RiskEngine } from "./risk-engine.js";
 import { SecurityValidator } from "./security-validator.js";
@@ -58,6 +59,16 @@ export interface M4PipelineConfig {
    * the pending UI card even when the user never clicked a button.
    */
   onApprovalResolved?: (result: ApprovalResult) => void;
+  /**
+   * Command policy validator for execute-shaped inputs. Defaults to the
+   * CANONICAL CommandValidator from @codepilot/shared — the same single
+   * implementation the runtime policy gate uses (one rule set, no copies).
+   * Hosts and tests may inject a stub; a validator that throws results in
+   * a deny-closed decision (command validation must never fail open).
+   */
+  commandValidator?: {
+    validate(command: string): { allowed: boolean; reason?: string };
+  };
 }
 
 /** Sanitized approval request presented to the user (no secrets). */
@@ -92,6 +103,10 @@ const TOOL_ID_ACTION_MAP: Record<string, PermissionAction> = {
   // Network / external capability tools. Without explicit entries these
   // fell through to read_file (auto-approved) — a permission bypass.
   use_web: "web_fetch",
+  // The canonical web fetch tool id must map to its own network action —
+  // without this it fell through to read_file (auto-approved), letting an
+  // outbound request run with no permission decision.
+  web_fetch: "web_fetch",
   mcp_tool: "mcp_tool",
   mcp_resource: "mcp_resource",
   // --- Browser automation tools (@codepilot/browser-engine) --------------
@@ -151,8 +166,112 @@ const TOOL_ID_ACTION_MAP: Record<string, PermissionAction> = {
   get_diff: "read_file",
 };
 
+/**
+ * SECURITY (P0-1): action used for tool ids with no explicit mapping.
+ *
+ * Unknown/unmapped tool ids previously fell through to `read_file`, which
+ * the policy engine AUTO-APPROVES — any tool id absent from the map (a
+ * typo, a newly registered tool, an attacker-supplied id) executed with no
+ * permission decision at all. Fail closed instead: `write_file` has no
+ * auto-approve entry, so the policy engine's ASK fallback requires explicit
+ * user approval before the tool can run — the same deny-biased fallback the
+ * LiveToolPermissionBridge already applies to unmapped live tool names
+ * (UNMAPPED_TOOL_ID → apply_file_changes → write_file).
+ */
+const UNKNOWN_TOOL_ACTION: PermissionAction = "write_file";
+
 export function toolIdToAction(toolId: string): PermissionAction {
-  return TOOL_ID_ACTION_MAP[toolId] ?? "read_file";
+  // Own-property check only: a plain object lookup would return inherited
+  // members (`"constructor"`, `"toString"`, `"__proto__"`) as if they were
+  // declared mappings, bypassing the fail-closed default below.
+  if (Object.prototype.hasOwnProperty.call(TOOL_ID_ACTION_MAP, toolId)) {
+    return TOOL_ID_ACTION_MAP[toolId] as PermissionAction;
+  }
+  return UNKNOWN_TOOL_ACTION;
+}
+
+// ============================================================================
+// Execute-shaped classification — shared command policy (hard deny boundary)
+// ============================================================================
+
+/** Same execute-prefix heuristic the runtime gate applies to unlisted tools. */
+const EXECUTE_PREFIX_PATTERN = /^(exec|run|execute|call|invoke)/i;
+
+/**
+ * File-mutation actions. Their inputs NEVER legitimately carry a
+ * `command`/`cmd` field, so a command field present on one of these is
+ * execute-shaped, not data (this also covers live tools the
+ * LiveToolPermissionBridge normalized to `apply_file_changes` while
+ * preserving the original input payload).
+ */
+const WRITE_ACTIONS: ReadonlySet<PermissionAction> = new Set<PermissionAction>([
+  "write_file",
+  "edit_file",
+  "delete_file",
+  "move_file",
+  "create_directory",
+]);
+
+export type ExecuteShape =
+  /** NOT execute-shaped: the command policy must not gate this tool call. */
+  | { executeShaped: false }
+  /** Execute-shaped with no command payload — nothing to validate. */
+  | { executeShaped: true; command: { kind: "absent" } }
+  /** Execute-shaped with a non-string payload — deny-closed. */
+  | { executeShaped: true; command: { kind: "malformed" } }
+  /** Execute-shaped with a real command string for the validator. */
+  | { executeShaped: true; command: { kind: "string"; value: string } };
+
+/**
+ * Clearly defined execute-shaped classification for the shared command
+ * policy. A tool call is execute-shaped when it carries a `command`/`cmd`
+ * input field AND at least one of:
+ *
+ *   1. its action IS command execution (bash / run_commands / run_command /
+ *      terminal / terminal_session_exec / execute_command — the recognized
+ *      shell tools, including bridge-normalized live tools);
+ *   2. its tool id has NO explicit mapping (unknown ids fail closed);
+ *   3. its tool id matches the runtime's execute-prefix heuristic
+ *      (`^(exec|run|execute|call|invoke)` — the canonical inference the
+ *      runtime gate applies to unlisted tools);
+ *   4. its action is a file mutation (writes never carry commands).
+ *
+ * Unrelated tools (reads, network, git, MCP, ask, …) are NEVER captured
+ * merely for having a field named `command`, and the command STRING still
+ * has to match a blocked pattern before anything is denied — safe commands
+ * on captured tools proceed through the normal permission modes unchanged.
+ */
+export function classifyExecuteShape(
+  toolId: string,
+  action: PermissionAction,
+  input: unknown,
+): ExecuteShape {
+  if (input === null || typeof input !== "object") {
+    return { executeShaped: false };
+  }
+  const rec = input as Record<string, unknown>;
+  if (!("command" in rec) && !("cmd" in rec)) {
+    return { executeShaped: false };
+  }
+  const known = Object.prototype.hasOwnProperty.call(
+    TOOL_ID_ACTION_MAP,
+    toolId,
+  );
+  const executeShaped =
+    action === "execute_command" ||
+    !known ||
+    EXECUTE_PREFIX_PATTERN.test(toolId) ||
+    WRITE_ACTIONS.has(action);
+  if (!executeShaped) return { executeShaped: false };
+  // Mirror the runtime gate's payload selection: `command ?? cmd`.
+  const raw = rec.command ?? rec.cmd;
+  if (raw === undefined) {
+    return { executeShaped: true, command: { kind: "absent" } };
+  }
+  if (typeof raw !== "string") {
+    return { executeShaped: true, command: { kind: "malformed" } };
+  }
+  return { executeShaped: true, command: { kind: "string", value: raw } };
 }
 
 // ============================================================================
@@ -178,10 +297,15 @@ export class M4PermissionPipeline {
   private readonly security: SecurityValidator;
   private readonly presentApproval: M4PipelineConfig["presentApproval"];
   private readonly approvalTimeoutMs: number;
+  /** Canonical command policy — see M4PipelineConfig.commandValidator. */
+  private readonly commandValidator: {
+    validate(command: string): { allowed: boolean; reason?: string };
+  };
 
   constructor(config: M4PipelineConfig) {
     this.presentApproval = config.presentApproval;
     this.approvalTimeoutMs = config.approvalTimeoutMs ?? 60_000;
+    this.commandValidator = config.commandValidator ?? new CommandValidator();
 
     this.risk = new RiskEngine();
     this.policy = new PermissionPolicyEngine({ riskEngine: this.risk });
@@ -261,6 +385,30 @@ export class M4PermissionPipeline {
     cwd?: string;
   }): Promise<PipelineDecision> {
     const action = toolIdToAction(params.toolId);
+
+    // ---- HARD COMMAND POLICY (shared canonical CommandValidator) --------
+    // Runs BEFORE the policy engine and BEFORE any approval card: a
+    // blocked or malformed execute-shaped command is a hard deny that no
+    // policy, auto-approve setting, session grant, or approval callback can
+    // override — the ASK path is never reached, so no approval card is ever
+    // presented. Same rule set as the runtime gate (one implementation in
+    // @codepilot/shared) — closes the M4-only/custom-host gap.
+    const shape = classifyExecuteShape(params.toolId, action, params.input);
+    if (shape.executeShaped && shape.command.kind !== "absent") {
+      const commandCheck = this.checkCommandPolicy(shape.command);
+      if (!commandCheck.allowed) {
+        return {
+          approved: false,
+          decision: "deny",
+          reason: commandCheck.reason,
+          risk: this.risk.assess(
+            action,
+            this.buildMetadata(params.input, params.cwd),
+          ),
+        };
+      }
+    }
+
     const context: PermissionContext = {
       action,
       toolId: params.toolId,
@@ -324,6 +472,45 @@ export class M4PermissionPipeline {
       }
     }
     return approvalResult;
+  }
+
+  /**
+   * Run the canonical command policy over an execute-shaped payload.
+   * DENY-CLOSED: a malformed payload or a validator that throws both
+   * deny — command validation being unavailable must never fail open.
+   */
+  private checkCommandPolicy(
+    command:
+      | {
+          kind: "malformed";
+        }
+      | {
+          kind: "string";
+          value: string;
+        },
+  ): { allowed: boolean; reason: string } {
+    if (command.kind === "malformed") {
+      return {
+        allowed: false,
+        reason:
+          "Command blocked by security policy: malformed command input (deny-closed)",
+      };
+    }
+    try {
+      const result = this.commandValidator.validate(command.value);
+      if (result.allowed) return { allowed: true, reason: "" };
+      return {
+        allowed: false,
+        reason: `Command blocked by security policy: ${result.reason ?? "blocked pattern"}`,
+      };
+    } catch (err) {
+      return {
+        allowed: false,
+        reason: `Command validation unavailable — denied (deny-closed): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
   }
 
   /** Build metadata for policy evaluation from the raw tool input. */

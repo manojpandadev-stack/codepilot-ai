@@ -777,11 +777,7 @@ export class TerminalSessionManager {
         ok: false;
         error: string;
         code:
-          | "NOT_FOUND"
-          | "FORBIDDEN"
-          | "INVALID"
-          | "NO_SHELL"
-          | "SHELL_CLOSED";
+          "NOT_FOUND" | "FORBIDDEN" | "INVALID" | "NO_SHELL" | "SHELL_CLOSED";
       } {
     const owned = this.ownedSession(options.sessionId, options.taskId);
     if (!owned.ok) {

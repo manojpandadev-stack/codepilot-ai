@@ -33,15 +33,14 @@ afterEach(() => {
 describe("classifyCommandFailure", () => {
   it("classifies transient infrastructure failures", () => {
     expect(
-      classifyCommandFailure("Command timed out after 30000ms")
-        .classification,
+      classifyCommandFailure("Command timed out after 30000ms").classification,
     ).toBe("transient");
     expect(
       classifyCommandFailure("fetch failed: ECONNRESET").classification,
     ).toBe("transient");
-    expect(
-      classifyCommandFailure("HTTP 429 rate limit").classification,
-    ).toBe("transient");
+    expect(classifyCommandFailure("HTTP 429 rate limit").classification).toBe(
+      "transient",
+    );
   });
 
   it("classifies DNS/network failures separately", () => {
@@ -84,11 +83,9 @@ describe("classifyCommandFailure", () => {
 });
 
 describe("planCommandRepair", () => {
-  it("retries the same command for transient/network failures", () => {
-    expect(planCommandRepair("npm test", "transient")).toBe("npm test");
-    expect(planCommandRepair("curl https://x", "network")).toBe(
-      "curl https://x",
-    );
+  it("never plans an automatic replay for transient/network failures", () => {
+    expect(planCommandRepair("npm test", "transient")).toBeNull();
+    expect(planCommandRepair("curl https://x", "network")).toBeNull();
   });
 
   it("prepends npm install for a missing module (once)", () => {
@@ -121,7 +118,7 @@ describe("CommandRepairLoop", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("retries transient failures with the same command until recovery", async () => {
+  it("records outcome-unknown and never replays after a transient failure", async () => {
     const calls: string[] = [];
     const runner = vi.fn(async (cmd: string) => {
       calls.push(cmd);
@@ -130,10 +127,10 @@ describe("CommandRepairLoop", () => {
     });
     const loop = new CommandRepairLoop();
     const outcome = await loop.run("npm test", runner);
-    expect(outcome.status).toBe("recovered");
-    expect(outcome.output).toBe("ok");
-    expect(calls).toEqual(["npm test", "npm test"]);
-    expect(outcome.attempts).toHaveLength(2);
+    expect(outcome.status).toBe("outcome_unknown");
+    expect(outcome.output).toBeUndefined();
+    expect(calls).toEqual(["npm test"]);
+    expect(outcome.attempts).toHaveLength(1);
     expect(outcome.attempts[0]?.failureClass).toBe("transient");
   });
 
@@ -165,7 +162,7 @@ describe("CommandRepairLoop", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("stops after MAX_AUTO_REPAIR_ATTEMPTS reruns (exhausted)", async () => {
+  it("stops after the first ambiguous timeout without replay", async () => {
     const runner = vi.fn(async () => {
       throw new Error("Command timed out after 30000ms");
     });
@@ -176,12 +173,11 @@ describe("CommandRepairLoop", () => {
       maxSameSignatureRepeats: MAX_AUTO_REPAIR_ATTEMPTS + 1,
     });
     const outcome = await loop.run("npm test", runner);
-    expect(outcome.status).toBe("exhausted");
-    // maxAttempts TOTAL attempts (1 original + maxAttempts-1 reruns).
-    expect(runner).toHaveBeenCalledTimes(MAX_AUTO_REPAIR_ATTEMPTS);
+    expect(outcome.status).toBe("outcome_unknown");
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("records transformed-command rerun failures and stays bounded", async () => {
+  it("does not replay a transformed command after an ambiguous timeout", async () => {
     const calls: string[] = [];
     const runner = vi.fn(async (cmd: string) => {
       calls.push(cmd);
@@ -194,26 +190,24 @@ describe("CommandRepairLoop", () => {
     });
     const loop = new CommandRepairLoop();
     const outcome = await loop.run("node build.js", runner);
-    expect(outcome.status).toBe("exhausted");
+    expect(outcome.status).toBe("outcome_unknown");
     expect(calls).toEqual([
       "node build.js",
       "npm install left-pad && node build.js",
-      "npm install left-pad && node build.js",
     ]);
-    expect(outcome.attempts).toHaveLength(3);
+    expect(outcome.attempts).toHaveLength(2);
     expect(outcome.attempts[0]?.failureClass).toBe("missing_module");
     expect(outcome.attempts[1]?.failureClass).toBe("transient");
   });
 
-  it("loop guard stops repeated identical signatures early", async () => {
+  it("records a network failure as outcome-unknown without retrying", async () => {
     const runner = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND api.example.com");
     });
     const loop = new CommandRepairLoop({ maxSameSignatureRepeats: 2 });
     const outcome = await loop.run("curl https://api.example.com", runner);
-    expect(outcome.status).toBe("exhausted");
-    // Signature repeated twice → guard stops before the attempt cap.
-    expect(runner.mock.calls.length).toBeLessThan(1 + MAX_AUTO_REPAIR_ATTEMPTS);
+    expect(outcome.status).toBe("outcome_unknown");
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
   it("persists history across loop instances and reloads it", async () => {
@@ -239,14 +233,12 @@ describe("CommandRepairLoop", () => {
     fs.writeFileSync(persistPath, "{not-json", "utf8");
     const loop = new CommandRepairLoop({ persistPath });
     expect(loop.listRecords()).toEqual([]);
-    expect(
-      fs.readdirSync(dir).some((n) => n.includes(".corrupt-")),
-    ).toBe(true);
+    expect(fs.readdirSync(dir).some((n) => n.includes(".corrupt-"))).toBe(true);
   });
 });
 
 describe("runTerminalToolRepair", () => {
-  it("repairs terminal tool failures through the injected runner", async () => {
+  it("returns outcome-unknown for terminal failures that may have side effects", async () => {
     const calls: string[] = [];
     const decision = await runTerminalToolRepair(
       {
@@ -254,7 +246,7 @@ describe("runTerminalToolRepair", () => {
         isTerminalTool: (name) => name === "run_commands",
         extractCommand: (input) =>
           typeof (input as { command?: unknown }).command === "string"
-            ? ((input as { command: string }).command)
+            ? (input as { command: string }).command
             : null,
         executeRepair: async (cmd) => {
           calls.push(cmd);
@@ -273,9 +265,9 @@ describe("runTerminalToolRepair", () => {
     );
     expect(decision.action).toBe("repair");
     if (decision.action === "repair") {
-      expect(decision.outcome.status).toBe("recovered");
+      expect(decision.outcome.status).toBe("outcome_unknown");
     }
-    expect(calls).toEqual(["npm test", "npm test"]);
+    expect(calls).toEqual(["npm test"]);
   });
 
   it("declines non-terminal tools and unknown commands", async () => {

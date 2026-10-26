@@ -111,21 +111,13 @@ async function cmdProviders(): Promise<number> {
   console.log("Built-in providers (first-class runtime configuration):");
   console.log("Provider\tName\t\tDefault Model");
   console.log("--------\t----\t\t-------------");
-  let matched = 0;
   for (const [id, def] of Object.entries(BUILTIN_PROVIDER_DEFAULTS)) {
     const entry = catalogEntryFor(id);
-    if (entry) matched += 1;
     const name = displayNameOf(id, def.name);
     const model =
       def.defaultModelId || entry?.defaultModelId || "(runtime discovery)";
     console.log(`${id}\t${name}\t\t${model}`);
   }
-  const total = getProviderCatalog().length;
-  console.log(
-    `\n+ ${total - matched} additional providers from the SDK catalogue ` +
-      `(any id routable by the runtime; see the VS Code provider selector) ` +
-      `and any OpenAI-compatible endpoint via 'openai-compatible'.`,
-  );
   console.log("\nUse 'codepilot run' to execute with the configured provider.");
   return 0;
 }
@@ -150,8 +142,7 @@ async function cmdModels(): Promise<number> {
   }
   console.log(
     "\nFull per-provider model lists: see the VS Code provider selector,\n" +
-      "or query the provider's /models endpoint (live discovery for\n" +
-      "OpenAI-compatible and local providers).",
+      "or query Ollama locally for available models.",
   );
   return 0;
 }

@@ -42,8 +42,13 @@ interface OpenAIModelListResponse {
 interface OpenAIModelObject {
   id: string;
   object: string;
+  name?: string;
+  description?: string;
   created?: number;
   owned_by?: string;
+  pricing?: { prompt?: string | number; completion?: string | number };
+  supported_parameters?: string[];
+  context_length?: number;
 }
 
 // ============================================================================
@@ -137,6 +142,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const response = await fetch(`${base}/models`, {
         signal: effectiveSignal,
         headers,
+        redirect: this.config.redirect,
       });
 
       if (!response.ok) {
@@ -191,6 +197,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const response = await fetch(`${base}/models`, {
         signal: effectiveSignal,
         headers,
+        redirect: this.config.redirect,
       });
       const latencyMs = Date.now() - start;
 
@@ -309,9 +316,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   private toDiscoveredModel(m: OpenAIModelObject): DiscoveredModel {
     const caps = this.getCapabilities(m.id);
-    return {
+    if (m.context_length) {
+      caps.contextWindow = m.context_length;
+    }
+    const model: DiscoveredModel = {
       id: m.id,
-      displayName: m.id,
+      displayName: m.name ?? m.id,
       providerId: this.id,
       capabilities: caps,
       locallyAvailable: false,
@@ -321,6 +331,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ? new Date(m.created * 1000).toISOString()
           : null,
     };
+    if (m.description) {
+      model.description = m.description;
+    }
+    if (m.pricing) {
+      if (m.pricing.prompt !== undefined) {
+        model.inputPerMtok = Number(m.pricing.prompt) * 1_000_000;
+      }
+      if (m.pricing.completion !== undefined) {
+        model.outputPerMtok = Number(m.pricing.completion) * 1_000_000;
+      }
+    }
+    if (Array.isArray(m.supported_parameters)) {
+      model.toolsProvenance = "metadata";
+      model.toolCalling = m.supported_parameters.includes("tools")
+        ? "true"
+        : "false";
+    }
+    return model;
   }
 
   /** Return statically-known models for this provider (used as fallback). */

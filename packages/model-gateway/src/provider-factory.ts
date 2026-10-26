@@ -14,16 +14,7 @@ import type { ProviderConfig, ModelProvider } from "./provider.js";
 import { BUILTIN_PROVIDER_DEFAULTS, resolveProviderConfig } from "./config.js";
 import { OllamaProvider } from "./providers/ollama.js";
 import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
-import { AnthropicProvider } from "./providers/anthropic.js";
 import { GoogleGeminiProvider } from "./providers/google-gemini.js";
-import { BedrockProvider } from "./providers/bedrock.js";
-import {
-  OpenRouterProvider,
-  LMStudioProvider,
-  DeepSeekProvider,
-  MistralProvider,
-  XAIProvider,
-} from "./providers/openai-cloud-providers.js";
 
 /** Result of building one provider: instance plus the id it was built for. */
 export interface BuiltProvider {
@@ -33,7 +24,7 @@ export interface BuiltProvider {
 
 /**
  * Build the correct provider instance for a config.
- * Falls back to OpenAICompatibleProvider for custom/openai-compatible types.
+ * Supports only ollama, gemini, and openai-native.
  */
 export function createProviderFromConfig(
   config: ProviderConfig,
@@ -41,28 +32,17 @@ export function createProviderFromConfig(
   switch (config.type) {
     case "ollama":
       return new OllamaProvider(resolveProviderConfig(config));
-    case "anthropic":
-      return new AnthropicProvider(resolveProviderConfig(config));
     case "gemini":
       return new GoogleGeminiProvider(resolveProviderConfig(config));
-    case "bedrock":
-      return new BedrockProvider(resolveProviderConfig(config));
+    case "openai-native":
     case "openai":
-    case "openai-compatible":
-    case "custom":
-    default:
       return new OpenAICompatibleProvider(resolveProviderConfig(config));
+    default:
+      throw new Error(
+        `Unsupported provider type "${config.type}". CodePilot supports only OpenAI, Gemini, and Ollama.`,
+      );
   }
 }
-
-/** Provider ids built from the openai-compatible descriptor factory. */
-const OPENAI_COMPATIBLE_BUILTINS = [
-  "openrouter",
-  "lmstudio",
-  "deepseek",
-  "mistral",
-  "xai",
-] as const;
 
 /**
  * Build every built-in provider from BUILTIN_PROVIDER_DEFAULTS.
@@ -89,49 +69,19 @@ export function createBuiltinProviders(opts?: {
       enabled: override?.enabled ?? defaults.enabled,
     } as ProviderConfig;
 
-    // Custom providers (user-defined openai-compatible endpoints) are
-    // created explicitly by callers, not from the builtin defaults.
-    if (id === "openai") {
-      built.push({ id, instance: new OpenAICompatibleProvider(base) });
-      continue;
-    }
-    if (id === "anthropic") {
-      built.push({ id, instance: new AnthropicProvider(base) });
-      continue;
-    }
-    if (id === "google") {
-      built.push({ id, instance: new GoogleGeminiProvider(base) });
-      continue;
-    }
-    if (id === "bedrock") {
-      built.push({ id, instance: new BedrockProvider(base) });
-      continue;
-    }
-    if (id === "openrouter") {
-      built.push({ id, instance: new OpenRouterProvider(base) });
-      continue;
-    }
-    if (id === "lmstudio") {
-      built.push({ id, instance: new LMStudioProvider(base) });
-      continue;
-    }
-    if ((OPENAI_COMPATIBLE_BUILTINS as readonly string[]).includes(id)) {
-      if (id === "deepseek") {
-        built.push({ id, instance: new DeepSeekProvider(base) });
-      } else if (id === "mistral") {
-        built.push({ id, instance: new MistralProvider(base) });
-      } else if (id === "xai") {
-        built.push({ id, instance: new XAIProvider(base) });
-      } else {
-        built.push({ id, instance: new OpenAICompatibleProvider(base) });
-      }
-      continue;
-    }
     if (id === "ollama") {
       built.push({ id, instance: new OllamaProvider(base) });
       continue;
     }
-    built.push({ id, instance: new OpenAICompatibleProvider(base) });
+    if (id === "gemini") {
+      built.push({ id, instance: new GoogleGeminiProvider(base) });
+      continue;
+    }
+    if (id === "openai-native") {
+      built.push({ id, instance: new OpenAICompatibleProvider(base) });
+      continue;
+    }
+    built.push({ id, instance: createProviderFromConfig(base) });
   }
 
   return built;

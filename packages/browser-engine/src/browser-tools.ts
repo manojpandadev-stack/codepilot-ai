@@ -684,7 +684,11 @@ export function createBrowserTools(
           ctx.signal,
         );
         if (!result.ok) {
-          throw err("INTERNAL", result.error ?? "select failed", ctx.executionId);
+          throw err(
+            "INTERNAL",
+            result.error ?? "select failed",
+            ctx.executionId,
+          );
         }
         return { ok: true };
       } catch (e) {
@@ -774,7 +778,9 @@ export function createBrowserTools(
           method: e.method,
           url: e.url,
           ...(e.status !== undefined ? { status: e.status } : {}),
-          ...(e.contentType !== undefined ? { contentType: e.contentType } : {}),
+          ...(e.contentType !== undefined
+            ? { contentType: e.contentType }
+            : {}),
           durationMs: e.durationMs,
           timestamp: e.timestamp,
         })),

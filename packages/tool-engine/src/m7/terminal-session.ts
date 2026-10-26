@@ -217,6 +217,10 @@ export class TerminalSession {
       which: "stdout" | "stderr",
     ): void => {
       stream?.on("data", (chunk: Buffer | string) => {
+        // Once cancellation/timeout is requested, buffered OS output is no
+        // longer part of the live command result and must not escape as late
+        // terminal output after the terminal status is already terminal.
+        if (this.cancelled || this.timedOut) return;
         // UTF-8-safe incremental decoding: a multi-byte character split
         // across chunks is buffered, not corrupted into U+FFFD (same as M3).
         const text = this.decoders[which].decode(chunk);
@@ -475,12 +479,27 @@ export class TerminalSession {
 
   private terminate(signal: "SIGTERM" | "SIGKILL"): void {
     const child = this.child;
-    if (!child || child.exitCode !== null) return;
+    if (!child || child.exitCode !== null || child.killed) return;
     if (process.platform === "win32") {
-      // taskkill /T kills the whole process tree on Windows.
-      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        windowsHide: true,
+      // Prefer the Windows tree kill, but keep a direct-child fallback. Some
+      // constrained desktops deny taskkill access even to a child process we
+      // spawned; without the fallback, wait()/cancel() can hang forever.
+      const killer = spawn(
+        "taskkill",
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          windowsHide: true,
+          stdio: "ignore",
+        },
+      );
+      killer.on("error", () => {
+        // The direct child is still ours to terminate below.
       });
+      try {
+        child.kill(signal);
+      } catch {
+        // taskkill may still have succeeded for the process tree.
+      }
     } else {
       try {
         child.kill(signal);

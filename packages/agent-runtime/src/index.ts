@@ -53,6 +53,43 @@ export type {
   TaskStatus,
   TaskNode,
   OrchestratorEvent,
+  OrchestrationOutcome,
+  OrchestrationSummary,
+  AgentResultKind,
+  ReviewFindingSeverity,
+  AgentResult,
+  AgentTask,
+  AgentUndoSet,
+  RolePermissionProfile,
+} from "./orchestrator.js";
+
+export {
+  ROLE_PERMISSION_PROFILES,
+  resolveRoleProfile,
+  ConflictDetector,
+  isDeadlock,
+  TESTER_CATEGORIES,
+  TestCategory,
+  TesterFailureClass,
+  classifyTesterFailure,
+  ReviewerFinding,
+  ReviewerResult,
+  buildReviewerResult,
+  isAutoFixableSeverity,
+  Fixer,
+  FixerResult,
+  TaskCancellationCoordinator,
+  TaskPersistence,
+  RoleScopedToolExecutor,
+  RebalanceScheduler,
+  CorrelationContext,
+  useCorrelationId,
+  ObservableMultiAgentOrchestrator,
+  deriveOrchestrationOutcome,
+  ROLE_TOOL_ALLOWLIST,
+  childAgentToolNames,
+  buildChildAgentTools,
+  buildChildAgentConfig,
 } from "./orchestrator.js";
 
 // ---- Self-healing ----
@@ -69,7 +106,6 @@ export type {
   HealingEventListener,
   HealingResult,
   RepairAttempt,
-  ValidationResult,
   SelfHealingConfig,
   ValidationRunner,
   RepairDiagnoser,
@@ -101,7 +137,8 @@ export type {
   PersistedToolCall,
   PersistedConversationMessage,
 } from "./m12-task-store.js";
-// ---- Command-failure repair (Phase 12, row 14) ----
+
+// ---- Command-failure repair (Phase 12) ----
 export {
   MAX_AUTO_REPAIR_ATTEMPTS,
   MAX_SAME_SIGNATURE_REPEATS,
@@ -121,6 +158,7 @@ export type {
   TerminalToolRepairDeps,
   TerminalToolRepairDecision,
 } from "./m13-command-repair.js";
+
 // ---- Structured task plan (Phase 2) ----
 export {
   createTaskPlan,
@@ -135,9 +173,11 @@ export type {
   TaskPlanStepStatus,
   TaskPlanProgress,
 } from "./task-plan.js";
+
 // ---- Per-task persistence serialization (M12 v4) ----
 export { TaskPersistenceQueue } from "./task-persistence-queue.js";
 export type { TaskPersistenceOutcome } from "./task-persistence-queue.js";
+
 // ---- Run conversation capture (M12 v4, pure) ----
 export {
   createRunCapture,
@@ -293,3 +333,61 @@ export type {
   RuntimeErrorCategory,
   RunMetrics,
 } from "./types.js";
+
+// ---- Token budget & billing failures ----
+export {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  TOKEN_BUDGET_SAFETY_MARGIN_TOKENS,
+  estimateAgentMessageTokens,
+  isBillingFailure,
+  parseAffordableTokens,
+  formatBillingFailureMessage,
+} from "./token-budget.js";
+
+// ---- Recovery controller & autonomous debugging (Phase 12) ----
+export {
+  runRecovery,
+  DEFAULT_MAX_REPAIR_ATTEMPTS,
+  MAX_REPAIR_ATTEMPTS_CEILING,
+  DEFAULT_ATTEMPT_TIMEOUT_MS,
+} from "./recovery-controller.js";
+export type {
+  DiagnosisInput,
+  RecoveryEvent,
+  RepairProposal,
+  VerificationOutcome,
+  RecoveryOptions,
+  RecoveryResult,
+  ApprovalRequest,
+  ApprovalDecision,
+} from "./recovery-controller.js";
+
+export {
+  classifyFailure,
+  failureRegressionSignature,
+} from "./failure-classifier.js";
+export type {
+  FailureCategory,
+  FailureClassification,
+  FailureSignal,
+} from "./failure-classifier.js";
+
+export {
+  buildDiagnosticContext,
+  formatDiagnosticContext,
+  DEFAULT_MAX_STDOUT_CHARS,
+  DEFAULT_MAX_STDERR_CHARS,
+  MAX_AFFECTED_FILES,
+  MAX_CONTEXT_CHARS,
+} from "./diagnostic-context.js";
+export type {
+  DiagnosticContext,
+  ChangeSetReference,
+} from "./diagnostic-context.js";
+
+export {
+  GoogleLlmProvider,
+  toGeminiContents,
+  toGeminiSchema,
+  toGeminiFunctionDeclarationSchema,
+} from "./native/llm/google.js";

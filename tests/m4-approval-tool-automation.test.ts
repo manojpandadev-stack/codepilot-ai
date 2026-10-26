@@ -227,10 +227,15 @@ describe("Phase 10 — runtime gate in ACT mode (real dispatch, real shell)", ()
       const names = tools.map((t) => t.function.name);
       if (!names.includes("run_commands")) return finalTurn();
       if (names.includes("tool_result")) return finalTurn();
-      const last = (body.messages as Array<{ role: string; content: unknown }>).at(-1);
-      const alreadyRan = Array.isArray(last?.content)
-        ? (last!.content as Array<{ type: string }>).some((b) => b.type === "tool_result")
-        : false;
+      const msgs = (body.messages ?? []) as Array<{ role: string; content: unknown }>;
+      const alreadyRan = msgs.some(
+        (m) =>
+          m.role === "tool" ||
+          (Array.isArray(m.content) &&
+            (m.content as Array<{ type: string }>).some(
+              (b) => b.type === "tool_result",
+            )),
+      );
       return alreadyRan ? finalTurn() : toolCallTurn("run_commands", { command: "echo CODEPILOT_GATE_PROBE" });
     });
   });

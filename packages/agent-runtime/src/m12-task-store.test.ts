@@ -182,8 +182,8 @@ describe("M12 staged image attachments", () => {
   });
 
   const tinyPng = new Uint8Array([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-    0, 0, 0, 0, 73, 69, 78, 68, 0, 0, 0, 0,
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 73, 69, 78, 68,
+    0, 0, 0, 0,
   ]);
 
   it("stages bytes under the task dir and reads them back", async () => {
@@ -289,12 +289,9 @@ describe("M12 staged image attachments", () => {
     if ("error" in staged) throw new Error("stage failed");
     await store.delete(task.id);
     expect(store.readStagedImage(task.id, staged.fileRef)).toBeNull();
-    expect(
-      fs.existsSync(path.join(dir, task.id, "images")),
-    ).toBe(false);
+    expect(fs.existsSync(path.join(dir, task.id, "images"))).toBe(false);
   });
 });
-
 
 // ---------------------------------------------------------------- plan + paused
 describe("M12 TaskStore — structured plan persistence", () => {

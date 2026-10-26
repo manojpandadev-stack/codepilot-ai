@@ -25,13 +25,28 @@ import {
   type LlmStreamEvent,
   type LlmToolCall,
 } from "./types.js";
+import { extractProviderError, formatProviderError } from "./provider-error.js";
 
 export interface OpenAiCompatibleOptions {
   baseUrl: string;
   apiKey?: string;
   /** Extra headers (e.g. OpenRouter attribution). Never logged. */
   headers?: Record<string, string>;
+  /**
+   * `fetch` redirect mode. `"manual"` surfaces a 3xx instead of following it,
+   * which Local Only requires: the privacy policy can only validate the
+   * CONFIGURED endpoint, so following `302 Location: https://...` would send
+   * the prompt and the stored credential to a destination it never inspected.
+   * Omitted => fetch's default (follow).
+   */
+  redirect?: "follow" | "manual";
   fetchImpl?: typeof fetch;
+  /**
+   * Provider-bound abort context (e.g. a cancelled orchestration turn).
+   * Combined with the per-request signal: either aborting aborts the
+   * stream, and a pre-aborted context reports `aborted`, never success.
+   */
+  signal?: AbortSignal;
   /** Steady-stream INACTIVITY window (ms): aborts when no bytes arrive for
    *  this long after the first chunk. Silence is the failure signal, not
    *  duration — a wall-clock cap kills healthy slow generations. */
@@ -167,6 +182,9 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   private readonly apiKey?: string;
   private readonly headers?: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
+  /** fetch redirect mode ("manual" under Local Only). Undefined => default. */
+  private readonly redirect?: "follow" | "manual";
+  private readonly signal?: AbortSignal;
   private readonly timeoutMs: number;
   private readonly firstTokenTimeoutMs: number;
 
@@ -176,12 +194,22 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     this.apiKey = options.apiKey;
     this.headers = options.headers;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    // Local Only passes "manual": never follow an HTTP redirect off the machine.
+    this.redirect = options.redirect;
+    this.signal = options.signal;
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 900_000;
   }
 
   async *stream(request: LlmRequest): AsyncIterable<LlmStreamEvent> {
     const tools = request.tools ?? [];
+    const offeredToolNames = new Set<string>();
+    for (const tool of tools) {
+      if (offeredToolNames.has(tool.name)) {
+        throw new Error(`duplicate tool name: ${tool.name}`);
+      }
+      offeredToolNames.add(tool.name);
+    }
     const body: Record<string, unknown> = {
       model: request.modelId,
       messages: [
@@ -213,8 +241,11 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
+    const boundSignal = this.signal;
     request.signal?.addEventListener("abort", onAbort, { once: true });
-    if (request.signal?.aborted) controller.abort();
+    boundSignal?.addEventListener("abort", onAbort, { once: true });
+    if (request.signal?.aborted === true || this.signal?.aborted === true)
+      controller.abort();
     // Two-phase inactivity timer (see OllamaLlmProvider): a generous window
     // for the silent model-load/prefill phase before the first byte, then the
     // steady-stream window re-armed on every received chunk. Never a
@@ -231,6 +262,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        ...(this.redirect ? { redirect: this.redirect } : {}),
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -242,7 +274,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       });
     } catch (err) {
       cleanup();
-      if (request.signal?.aborted) {
+      if (request.signal?.aborted === true || this.signal?.aborted === true) {
         yield { type: "finish", reason: "aborted" };
         return;
       }
@@ -261,11 +293,12 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     if (!response.ok || !response.body) {
       cleanup();
       const detail = await response.text().catch(() => "");
-      throw new LlmError(
-        this.id,
-        `chat failed ${response.status}: ${detail.slice(0, 300)}`,
-        { status: response.status },
+      const formatted = formatProviderError(
+        extractProviderError(response.status, detail),
       );
+      throw new LlmError(this.id, `chat failed (${formatted})`, {
+        status: response.status,
+      });
     }
 
     // Incremental tool-call assembly (OpenAI fragments by index).
@@ -276,9 +309,15 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     let finished = false;
     let abortRequested = false;
 
+    // Terminal-evidence tracking: a provider stream is only "complete" when
+    // it emits an explicit finish_reason. An EOF or [DONE]-only end is
+    // "incomplete" - never inferred as success.
+    let providerFinishedCleanly = false;
+    let pendingToolCallsOnEOF = 0;
     function cleanup(): void {
       clearTimeout(timeout);
       request.signal?.removeEventListener("abort", onAbort);
+      boundSignal?.removeEventListener("abort", onAbort);
     }
 
     try {
@@ -301,6 +340,13 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
           if (rawLine.length === 0 || !rawLine.startsWith("data:")) continue;
           const payload = rawLine.slice(5).trim();
           if (payload === "[DONE]") {
+            pendingToolCallsOnEOF = pendingCalls.size;
+            // Protocol terminator. Treat it as EOF, not as a successful
+            // completion: without a provider `finish_reason` on a choices
+            // block we have no terminal evidence (the model may have cut off
+            // mid-stream, the connection may have dropped, or the body may
+            // be truncated). Yield nothing here so the loop can distinguish
+            // a clean provider finish from an incomplete/unknown end.
             finished = true;
             break;
           }
@@ -311,11 +357,13 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
             continue;
           }
           if (chunk.error) {
-            const message =
-              typeof chunk.error === "string"
-                ? chunk.error
-                : (chunk.error.message ?? "provider error");
-            throw new LlmError(this.id, message);
+            const formatted = formatProviderError(
+              extractProviderError(200, JSON.stringify(chunk)),
+            );
+            throw new LlmError(
+              this.id,
+              `chat failed mid-stream (${formatted})`,
+            );
           }
           const choice = chunk.choices?.[0];
           const delta = choice?.delta;
@@ -340,14 +388,39 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
                 pendingCalls.set(idx, pending);
               }
               if (fragment.id) pending.id = fragment.id;
-              if (fragment.function?.name)
-                pending.name += fragment.function.name;
+              // Providers may repeat a full name or stream it in fragments.
+              // Join fragments only while they remain a prefix of a tool
+              // offered in this request; repeated/cumulative names are
+              // idempotent and conflicting names cannot corrupt the call.
+              const nameFragment = fragment.function?.name;
+              if (nameFragment) {
+                if (!pending.name) {
+                  pending.name = nameFragment;
+                } else if (
+                  nameFragment.startsWith(pending.name) &&
+                  [...offeredToolNames].some((name) =>
+                    name.startsWith(nameFragment),
+                  )
+                ) {
+                  pending.name = nameFragment;
+                } else if (!pending.name.startsWith(nameFragment)) {
+                  const joined = pending.name + nameFragment;
+                  if (
+                    [...offeredToolNames].some((name) =>
+                      name.startsWith(joined),
+                    )
+                  ) {
+                    pending.name = joined;
+                  }
+                }
+              }
               if (fragment.function?.arguments)
                 pending.args += fragment.function.arguments;
             }
           }
           if (chunk.usage) usage = chunk.usage;
           if (choice?.finish_reason) {
+            providerFinishedCleanly = true;
             // Flush completed tool calls in index order.
             const ordered = [...pendingCalls.entries()].sort(
               (a, b) => a[0] - b[0],
@@ -363,7 +436,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
             pendingCalls.clear();
           }
         }
-        if (request.signal?.aborted) {
+        if (request.signal?.aborted === true || this.signal?.aborted === true) {
           abortRequested = true;
           break;
         }
@@ -379,12 +452,49 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
           },
         };
       }
+      // Decide the terminal reason from actual provider evidence, not from
+      // the fact that the SSE loop exited. A clean stop is only "complete"
+      // when the provider emitted a finish_reason; an EOF/[DONE]-only end is
+      // "incomplete" (the model may have cut off, the connection may have
+      // dropped, or the body may be truncated). Cancellation is preserved as
+      // "aborted" and never rewritten to "complete" or "error".
+      //
+      // A provider that ends while still holding unflushed tool-call
+      // fragments (pendingToolCallsOnEOF > 0) did not finish describing a
+      // tool call - that is also incomplete, never success.
+      // Unfinished fragments are surfaced (never silently discarded),
+      // but without a finish_reason the turn is still incomplete.
+      if (!providerFinishedCleanly && pendingCalls.size > 0) {
+        const ordered = [...pendingCalls.entries()].sort((a, b) => a[0] - b[0]);
+        for (const [, call] of ordered) {
+          yield {
+            type: "tool-call",
+            call: {
+              toolCallId: call.id,
+              toolName: call.name,
+              argumentsText: call.args,
+            },
+          };
+        }
+        pendingCalls.clear();
+      }
+      let finishReason: "complete" | "aborted" | "incomplete";
+      if (abortRequested) {
+        finishReason = "aborted";
+      } else if (providerFinishedCleanly) {
+        finishReason = "complete";
+      } else if (pendingToolCallsOnEOF > 0) {
+        // The stream ended mid-tool-call (fragmented or cut-off).
+        finishReason = "incomplete";
+      } else {
+        finishReason = "incomplete";
+      }
       yield {
         type: "finish",
-        reason: abortRequested ? "aborted" : "complete",
+        reason: finishReason,
       };
     } catch (err) {
-      if (request.signal?.aborted) {
+      if (request.signal?.aborted === true || this.signal?.aborted === true) {
         yield { type: "finish", reason: "aborted" };
         return;
       }

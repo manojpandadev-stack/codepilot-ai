@@ -390,7 +390,12 @@ export function formatStagedResult(
   proposals: WriteProposal[],
 ): string {
   const lines = proposals.map((p) => {
-    const label = p.delete === true ? "deleted" : p.proposedContent.length === 0 ? "emptied" : "updated";
+    const label =
+      p.delete === true
+        ? "deleted"
+        : p.proposedContent.length === 0
+          ? "emptied"
+          : "updated";
     return `  ${p.relativePath} (${label}, ${p.proposedContent.length} chars)`;
   });
   return [

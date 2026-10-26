@@ -100,12 +100,38 @@ const baseUrlField = (placeholder: string): LlmCatalogField => ({
   description: "Base endpoint used for provider requests.",
 });
 
+export const CURATED_PROVIDER_LIMIT = 12;
+
+export const SUPPORTED_PROVIDER_IDS = [
+  "openai-native",
+  "gemini",
+  "ollama",
+] as const;
+
+export type SupportedProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number];
+
+export function isSupportedProviderId(id: string): id is SupportedProviderId {
+  const norm = id?.trim().toLowerCase();
+  return norm === "openai-native" || norm === "gemini" || norm === "ollama";
+}
+
+export const CURATED_PROVIDER_IDS = [
+  "openai-native",
+  "gemini",
+  "ollama",
+] as const;
+
+export type CuratedProviderId = (typeof CURATED_PROVIDER_IDS)[number];
+
+const LEGACY_PROVIDER_IDS = new Set(["openai", "google", "custom", "zhipuai"]);
+
+export function isLegacyProviderId(id: string): boolean {
+  return LEGACY_PROVIDER_IDS.has(id);
+}
+
 /**
- * The curated provider set. Every id referenced by CodePilot configuration,
- * switching, privacy classification, or catalogue UI is present:
- * ollama, lmstudio, openai-native, openai (legacy id), openai-compatible,
- * custom, anthropic, gemini (+ legacy alias google), openrouter, zai,
- * zhipuai.
+ * The curated provider set. Strictly reduced to supported providers:
+ * ollama, openai-native, gemini.
  */
 export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
   {
@@ -126,10 +152,6 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
         name: "Qwen 3 8B",
         contextWindow: 32768,
         capabilities: ["tools", "streaming", "reasoning"],
-        // Verified live on this machine (qwen3:8b, Ollama /api/chat): the
-        // model emits structured `message.tool_calls` entries with parsed
-        // JSON arguments — same protocol class the catalogue already credits
-        // (Ollama tool calling, Qwen3 family). Recorded 2026-09.
         toolCallingSupport: "true",
       },
       "qwen2.5-coder:3b": {
@@ -137,31 +159,9 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
         name: "Qwen 2.5 Coder 3B",
         contextWindow: 32768,
         capabilities: ["tools", "streaming"],
-        // Deliberately "unknown", NOT "true": the Ollama model page
-        // advertises tool templates for this tag, but the only live
-        // observation available (2026-09, CPU, full 17-tool schema) is that
-        // the model SOMETIMES answers an explicit terminal request in prose
-        // instead of emitting a structured tool call. That is not enough
-        // evidence for "true", and nothing authoritative supports "false".
-        // Per policy, "unknown" keeps the native tool pipeline fully enabled
-        // — the Act-mode no-tool-call diagnostic records actual behavior.
         toolCallingSupport: "unknown",
       },
     },
-  },
-  {
-    id: "lmstudio",
-    name: "LM Studio",
-    description: "Local models served by LM Studio on this machine.",
-    baseUrl: "http://localhost:1234/v1",
-    defaultModelId: "",
-    capabilities: ["tools", "streaming"],
-    env: [],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [baseUrlField("http://localhost:1234/v1")],
-    },
-    models: {},
   },
   {
     id: "openai-native",
@@ -199,109 +199,6 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
     },
   },
   {
-    id: "openai",
-    name: "OpenAI-Compatible",
-    description: "OpenAI-Compatible endpoints (custom base URL + model).",
-    baseUrl: undefined,
-    defaultModelId: "gpt-4o",
-    capabilities: ["tools", "streaming"],
-    env: [],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [
-        apiKeyField("API key"),
-        baseUrlField("https://your-endpoint/v1"),
-      ],
-    },
-    models: {},
-  },
-  {
-    id: "openai-compatible",
-    name: "OpenAI-Compatible (custom)",
-    description:
-      "Any OpenAI-compatible API — bring your own base URL, key and model.",
-    baseUrl: undefined,
-    defaultModelId: "gpt-4o",
-    capabilities: ["tools", "streaming"],
-    env: [],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [
-        apiKeyField("API key"),
-        baseUrlField("https://your-endpoint/v1"),
-      ],
-    },
-    models: {},
-  },
-  {
-    id: "custom",
-    name: "Custom endpoint",
-    description: "User-configured OpenAI-compatible endpoint.",
-    baseUrl: undefined,
-    defaultModelId: "",
-    capabilities: ["tools", "streaming"],
-    env: [],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [
-        apiKeyField("API key"),
-        baseUrlField("https://your-endpoint/v1"),
-      ],
-    },
-    models: {},
-  },
-  {
-    id: "anthropic",
-    name: "Anthropic",
-    description: "Claude models via the official Anthropic API.",
-    protocol: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    defaultModelId: "claude-sonnet-4-20250514",
-    capabilities: ["tools", "streaming", "reasoning"],
-    env: ["ANTHROPIC_API_KEY"],
-    client: "anthropic",
-    metadata: {
-      configFields: [
-        apiKeyField("Anthropic API key"),
-        baseUrlField("https://api.anthropic.com"),
-      ],
-    },
-    models: {
-      "claude-sonnet-4-20250514": {
-        id: "claude-sonnet-4-20250514",
-        name: "Claude Sonnet 4",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        capabilities: ["tools", "streaming", "reasoning", "images"],
-        pricing: { input: 3, output: 15 },
-      },
-      "claude-opus-4-20250514": {
-        id: "claude-opus-4-20250514",
-        name: "Claude Opus 4",
-        contextWindow: 200000,
-        maxTokens: 32000,
-        capabilities: ["tools", "streaming", "reasoning", "images"],
-        pricing: { input: 15, output: 75 },
-      },
-      "claude-3-7-sonnet-20250219": {
-        id: "claude-3-7-sonnet-20250219",
-        name: "Claude Sonnet 3.7",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        capabilities: ["tools", "streaming", "reasoning", "images"],
-        pricing: { input: 3, output: 15 },
-      },
-      "claude-3-5-haiku-20241022": {
-        id: "claude-3-5-haiku-20241022",
-        name: "Claude Haiku 3.5",
-        contextWindow: 200000,
-        maxTokens: 8192,
-        capabilities: ["tools", "streaming", "images"],
-        pricing: { input: 0.8, output: 4 },
-      },
-    },
-  },
-  {
     id: "gemini",
     name: "Google Gemini",
     description: "Google Gemini models via the Gemini API.",
@@ -312,125 +209,50 @@ export const CODEPILOT_PROVIDER_CATALOG: LlmCatalogProvider[] = [
     env: ["GEMINI_API_KEY"],
     client: "gemini",
     metadata: {
-      configFields: [
-        apiKeyField("Gemini API key"),
-        baseUrlField("https://generativelanguage.googleapis.com"),
-      ],
+      configFields: [apiKeyField("Gemini API key")],
     },
     models: {
+      "gemini-3.8-flash": {
+        id: "gemini-3.8-flash",
+        name: "Gemini 3.8 Flash",
+        contextWindow: 1048576,
+        capabilities: ["tools", "streaming", "reasoning", "images"],
+        toolCallingSupport: "true",
+      },
+      "gemini-3.5-flash": {
+        id: "gemini-3.5-flash",
+        name: "Gemini 3.5 Flash",
+        contextWindow: 1048576,
+        capabilities: ["tools", "streaming", "reasoning", "images"],
+        toolCallingSupport: "true",
+      },
+      "gemini-3-flash-preview": {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        contextWindow: 1048576,
+        capabilities: ["tools", "streaming", "reasoning", "images"],
+        toolCallingSupport: "true",
+      },
       "gemini-2.5-flash": {
         id: "gemini-2.5-flash",
         name: "Gemini 2.5 Flash",
         contextWindow: 1048576,
         capabilities: ["tools", "streaming", "reasoning", "images"],
+        toolCallingSupport: "true",
       },
       "gemini-2.5-pro": {
         id: "gemini-2.5-pro",
         name: "Gemini 2.5 Pro",
         contextWindow: 1048576,
         capabilities: ["tools", "streaming", "reasoning", "images"],
+        toolCallingSupport: "true",
       },
-    },
-  },
-  {
-    id: "google",
-    name: "Google Gemini",
-    description: "Google Gemini models via the Gemini API (legacy alias).",
-    protocol: "gemini",
-    baseUrl: "https://generativelanguage.googleapis.com",
-    defaultModelId: "gemini-2.5-flash",
-    capabilities: ["tools", "streaming", "reasoning"],
-    env: ["GEMINI_API_KEY"],
-    client: "gemini",
-    metadata: {
-      configFields: [
-        apiKeyField("Gemini API key"),
-        baseUrlField("https://generativelanguage.googleapis.com"),
-      ],
-    },
-    models: {
-      "gemini-2.5-flash": {
-        id: "gemini-2.5-flash",
-        name: "Gemini 2.5 Flash",
+      "gemini-2.0-flash": {
+        id: "gemini-2.0-flash",
+        name: "Gemini 2.0 Flash",
         contextWindow: 1048576,
         capabilities: ["tools", "streaming", "reasoning", "images"],
-      },
-      "gemini-2.5-pro": {
-        id: "gemini-2.5-pro",
-        name: "Gemini 2.5 Pro",
-        contextWindow: 1048576,
-        capabilities: ["tools", "streaming", "reasoning", "images"],
-      },
-    },
-  },
-  {
-    id: "openrouter",
-    name: "OpenRouter",
-    description:
-      "One API for many models from many providers, with a live credits API.",
-    baseUrl: "https://openrouter.ai/api/v1",
-    defaultModelId: "",
-    capabilities: ["tools", "streaming", "reasoning"],
-    env: ["OPENROUTER_API_KEY"],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [
-        apiKeyField("OpenRouter API key"),
-        baseUrlField("https://openrouter.ai/api/v1"),
-      ],
-    },
-    models: {},
-  },
-  {
-    id: "zai",
-    name: "Z.AI",
-    description: "Z.AI GLM models (Zhipu international).",
-    baseUrl: "https://api.z.ai/api/paas/v4",
-    defaultModelId: "glm-4-flash",
-    capabilities: ["tools", "streaming", "reasoning"],
-    env: ["ZHIPU_API_KEY"],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [
-        apiKeyField("Z.AI API key"),
-        baseUrlField("https://api.z.ai/api/paas/v4"),
-      ],
-    },
-    models: {
-      "glm-4-flash": {
-        id: "glm-4-flash",
-        name: "GLM-4-Flash",
-        contextWindow: 128000,
-        capabilities: ["tools", "streaming"],
-      },
-      "glm-4.6": {
-        id: "glm-4.6",
-        name: "GLM-4.6",
-        capabilities: ["tools", "streaming", "reasoning"],
-      },
-    },
-  },
-  {
-    id: "zhipuai",
-    name: "Zhipu AI",
-    description: "Zhipu GLM models (China platform).",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    defaultModelId: "glm-4-flash",
-    capabilities: ["tools", "streaming", "reasoning"],
-    env: ["ZHIPU_API_KEY"],
-    client: "openai-compatible",
-    metadata: {
-      configFields: [
-        apiKeyField("Zhipu API key"),
-        baseUrlField("https://open.bigmodel.cn/api/paas/v4"),
-      ],
-    },
-    models: {
-      "glm-4-flash": {
-        id: "glm-4-flash",
-        name: "GLM-4-Flash",
-        contextWindow: 128000,
-        capabilities: ["tools", "streaming"],
+        toolCallingSupport: "true",
       },
     },
   },
@@ -449,39 +271,19 @@ function capabilitiesIncludeVision(
 /**
  * Whether a provider/model pair is known to accept image input, per the
  * curated catalogue.
- *
- * - A model explicitly listed in the catalogue decides by its own
- *   capabilities (vision keys: "images" or "vision").
- * - Local runtimes (Ollama, LM Studio) serve whatever the user installed:
- *   unlisted models are unknowable statically → `undefined` (live discovery
- *   and the server own the truth).
- * - Generic bring-your-own endpoints (`openai-compatible`, `custom`,
- *   legacy `openai`) accept any model by construction → `undefined`.
- * - Any other catalogued provider falls back to its provider-level
- *   capabilities (`false` when vision is absent).
- * - Unknown provider ids → `undefined`.
- *
- * Callers treat `false` as fail-closed (clear capability error) and
- * `undefined` as unknowable (allowed; server errors surface naturally).
  */
 export function modelSupportsVision(
   providerId: string,
   modelId: string,
 ): boolean | undefined {
-  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === providerId);
+  const canonicalId = providerId === "google" ? "gemini" : providerId;
+  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === canonicalId);
   if (!provider) return undefined;
   const model = provider.models?.[modelId];
   if (model?.capabilities !== undefined) {
     return capabilitiesIncludeVision(model.capabilities);
   }
-  if (providerId === "ollama" || providerId === "lmstudio") return undefined;
-  if (
-    providerId === "openai-compatible" ||
-    providerId === "custom" ||
-    providerId === "openai"
-  ) {
-    return undefined;
-  }
+  if (providerId === "ollama") return undefined;
   if (provider.capabilities !== undefined) {
     return capabilitiesIncludeVision(provider.capabilities);
   }
@@ -513,20 +315,14 @@ export function modelToolCallingSupport(
   providerId: string,
   modelId: string,
 ): LlmToolCallingSupport {
-  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === providerId);
+  const canonicalId = providerId === "google" ? "gemini" : providerId;
+  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === canonicalId);
   if (!provider) return "unknown";
   const model = provider.models?.[modelId];
   if (model !== undefined) {
     return model.toolCallingSupport ?? "unknown";
   }
-  if (providerId === "ollama" || providerId === "lmstudio") return "unknown";
-  if (
-    providerId === "openai-compatible" ||
-    providerId === "custom" ||
-    providerId === "openai"
-  ) {
-    return "unknown";
-  }
+  if (providerId === "ollama") return "unknown";
   if (provider.capabilities?.includes("tools")) return "true";
   return "unknown";
 }

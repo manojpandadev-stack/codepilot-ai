@@ -421,14 +421,14 @@ export class ProviderRegistry {
 // ============================================================================
 
 /**
- * Create a ProviderRegistry pre-loaded with Ollama and OpenAI-compatible
- * providers. Both are disabled by default — callers must enable and configure
- * them at startup.
+ * Create a ProviderRegistry. With includeBuiltins, every built-in provider
+ * is pre-registered but disabled by default — callers must enable and
+ * configure them at startup.
  *
  * @param options.includeBuiltins  Also register every built-in provider
- *   (Anthropic, Google Gemini, OpenRouter, LM Studio, DeepSeek, Mistral,
- *   xAI, Bedrock) from BUILTIN_PROVIDER_DEFAULTS. They are disabled by
- *   default; callers enable them via updateConfig/enableProvider.
+ *   (Ollama, OpenAI-native, Google Gemini) from BUILTIN_PROVIDER_DEFAULTS.
+ *   They are disabled by default; callers enable them via
+ *   updateConfig/enableProvider.
  * @param options.apiKeys  Optional provider id → API key map used when
  *   includeBuiltins is true. Never logged.
  */

@@ -222,6 +222,8 @@ export type WebviewMessageType =
   | "provider/status"
   | "provider/test"
   | "provider/test_result"
+  | "provider/inference-test"
+  | "provider/inference_result"
   | "provider/health"
   | "provider/models"
   | "provider/usage"
@@ -233,6 +235,8 @@ export type WebviewMessageType =
   | "settings/get"
   | "settings/set"
   | "settings/error"
+  | "privacy/confirm"
+  | "privacy/result"
   | "session/list"
   | "session/list_result"
   | "session/open"
@@ -358,6 +362,7 @@ export type WebviewMessageType =
   | "state/update"
   | "context/filePicker"
   | "context/folderPicker"
+  | "context/urlPicker"
   | "context/problems"
   | "context/selection"
   | "context/result"
@@ -373,7 +378,20 @@ export type WebviewMessageType =
   | "skills/deactivate"
   | "skills/state"
   | "skills/result"
-  | "skills/error";
+  | "skills/error"
+  | "verification/get"
+  | "verification/state";
+
+/**
+ * State sent in `verification/state` payloads.
+ */
+export interface VerificationStatePayload {
+  runId?: string;
+  status?: string;
+  verdict: "verified" | "failed" | "not_verified" | "not_available" | "passed";
+  summary: string;
+  checks?: unknown[];
+}
 
 /**
  * A message between the extension host and the webview.
@@ -632,6 +650,80 @@ export const BLOCKED_COMMANDS = [
   "format",
   ":(){:|:&};:",
 ];
+
+/**
+ * CANONICAL command policy validator — THE single implementation of the
+ * blocked-command rule set, living next to BLOCKED_COMMANDS (its pattern
+ * source). Every enforcement boundary uses this class:
+ *   - @codepilot/policy-engine re-exports it (runtime policy gate /
+ *     CodePilotRuntime.buildGate) — public API unchanged;
+ *   - @codepilot/tool-engine's M4 permission pipeline imports it directly
+ *     (tool-engine already depends on @codepilot/shared — no new dependency
+ *     and no import cycle, since shared depends on nothing).
+ * Do NOT copy the pattern list into a second implementation: one rule set,
+ * one behavior, one place to harden.
+ */
+export class CommandValidator {
+  private blockedPatterns: RegExp[] = BLOCKED_COMMANDS.map(
+    (cmd) => new RegExp(cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+  );
+
+  private additionalBlockedPatterns: RegExp[] = [
+    /\brm\s+-rf\s+[\/~]/i, // rm -rf from root or home
+    /\bmkfs\b/i,
+    /\bdd\b.*\bof=\/dev\//i,
+    /\bformat\b.*\b[Cc]:/i,
+    />\s*\/dev\/[sh]da/i,
+    /\bchmod\s+777\b/i,
+    /\bchown\s+.*\/\b/i,
+    /curl.*\|\s*bash/i, // pipe to bash
+    /wget.*\|\s*sh/i, // pipe to shell
+    /\bsudo\b/i, // block sudo by default
+    /\b(kill|killall)\s+-9\s+(?!self|current)/i,
+    /\bnc\s+-l/i, // netcat listener
+    /\bpython\s*-c\s*.*import\s+os.*system/i, // suspicious python
+  ];
+
+  /**
+   * Validate a command before execution.
+   */
+  validate(command: string): { allowed: boolean; reason?: string } {
+    const trimmed = command.trim();
+
+    if (!trimmed) {
+      return { allowed: false, reason: "Empty command" };
+    }
+
+    // Check explicitly blocked commands
+    for (const pattern of this.blockedPatterns) {
+      if (pattern.test(trimmed)) {
+        return {
+          allowed: false,
+          reason: `Command matches blocked pattern: ${pattern.source}`,
+        };
+      }
+    }
+
+    // Check additional blocked patterns
+    for (const pattern of this.additionalBlockedPatterns) {
+      if (pattern.test(trimmed)) {
+        return {
+          allowed: false,
+          reason: `Command matches security policy: ${pattern.source}`,
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Add a custom blocked pattern.
+   */
+  addBlockedPattern(pattern: RegExp): void {
+    this.additionalBlockedPatterns.push(pattern);
+  }
+}
 
 export const IGNORED_INDEX_PATHS = [
   ".git",
@@ -961,23 +1053,13 @@ export interface ImageContext {
 }
 
 /** Payload returned by the host for any context/* request. */
-/** Payload returned by the host for any context/* request. */
 export interface ContextResultPayload {
-  kind: "filePicker" | "folderPicker" | "problems" | "selection";
+  kind: "filePicker" | "folderPicker" | "problems" | "selection" | "urlPicker";
   files?: FileContext[];
   folders?: FolderContext[];
   diagnostics?: DiagnosticsContextPayload | null;
   selection?: SelectionContextPayload | null;
-  error?: string;
-}
-
-/** chat/send payload: visible text + separate structured context. */
-export interface ContextResultPayload {
-  kind: "filePicker" | "folderPicker" | "problems" | "selection";
-  files?: FileContext[];
-  folders?: FolderContext[];
-  diagnostics?: DiagnosticsContextPayload | null;
-  selection?: SelectionContextPayload | null;
+  url?: string;
   error?: string;
 }
 /** chat/send payload: visible text + separate structured context. */
@@ -991,6 +1073,7 @@ export interface ChatSendPayload {
 export type ContextWebviewMessageType =
   | "context/filePicker"
   | "context/folderPicker"
+  | "context/urlPicker"
   | "context/problems"
   | "context/selection"
   | "context/result";
@@ -1315,3 +1398,9 @@ export interface ToolApprovalResult {
 }
 
 export * from "./images.js";
+
+/** Check if a model identifier indicates an embedding-only model */
+export function isEmbeddingModelId(id: string): boolean {
+  const lower = id.toLowerCase();
+  return /embed|bge-|bge_|e5-|e5_|gte-|gte_/.test(lower);
+}

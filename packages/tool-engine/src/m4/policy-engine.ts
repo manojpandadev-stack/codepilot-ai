@@ -54,15 +54,18 @@ export const GRANT_TTL_MS = 60 * 60 * 1000;
  * Deterministic OPERATION FINGERPRINT for scoped grants.
  *
  * Binds a grant to the security-relevant execution scope of THE operation
- * that was approved — action + normalized command + target paths + cwd —
- * so approving `node --version` can never silently authorize a materially
- * different `execute_command` later. Whitespace is normalized (a repeated
+ * that was approved — tool identity + action + normalized command + target
+ * paths + cwd — so approving `node --version` from `run_commands` can never
+ * silently authorize a materially different command, and approving ONE
+ * metadata-less tool can never authorize a DIFFERENT metadata-less tool
+ * (they differ only by toolId). Whitespace is normalized (a repeated
  * `node   --version` is the same operation); unstable values (session ids,
  * timestamps) are deliberately excluded. Unknown/empty metadata yields a
  * fingerprint that can never collide with a command-bearing operation.
  */
 export function operationFingerprintOf(context: {
   action: PermissionAction;
+  toolId?: string;
   metadata?: Record<string, unknown>;
 }): string {
   const meta = context.metadata ?? {};
@@ -70,6 +73,7 @@ export function operationFingerprintOf(context: {
     typeof v === "string" ? v.trim().replace(/\s+/g, " ") : "";
   const cwd = norm(meta.cwd).replace(/[\\/]+$/, "");
   return JSON.stringify([
+    norm(context.toolId),
     context.action,
     norm(meta.command),
     norm(meta.path),
@@ -77,6 +81,23 @@ export function operationFingerprintOf(context: {
     norm(meta.newPath),
     cwd,
   ]);
+}
+
+/**
+ * True when the operation carries at least one security-relevant SCOPE
+ * value (command or target path) that can distinguish it from a different
+ * operation of the same action. Metadata-less operations (no command, no
+ * path, no rename endpoints) are scope-unknowable: they must never reuse a
+ * scoped grant — not even for the same tool id — because the engine cannot
+ * prove WHICH operation the user approved.
+ */
+export function hasSecurityRelevantScope(context: {
+  metadata?: Record<string, unknown>;
+}): boolean {
+  const meta = context.metadata ?? {};
+  return [meta.command, meta.path, meta.oldPath, meta.newPath].some(
+    (v) => typeof v === "string" && v.trim() !== "",
+  );
 }
 
 export class PermissionPolicyEngine {
@@ -326,15 +347,25 @@ export class PermissionPolicyEngine {
 
   /**
    * SECURITY: a scoped grant matches ONLY when the operation fingerprint
-   * matches exactly (action + command/paths/cwd) in addition to the scope
-   * binding. Session binding is FAIL-CLOSED: a grant minted WITH a session
-   * id never matches an evaluation without one (and vice versa) — an
-   * unbindable grant is never reused. Grants expire after one hour.
+   * matches exactly (tool id + action + command/paths/cwd) in addition to
+   * the scope binding. Session binding is FAIL-CLOSED: a grant minted WITH a
+   * session id never matches an evaluation without one (and vice versa) — an
+   * unbindable grant is never reused. Metadata-less operations (no command
+   * or path scope) never reuse a grant at all: approving one such operation
+   * cannot authorize another — not even from the same tool id. Grants
+   * expire after one hour.
    */
   private findActiveScopedPermission(
     context: PermissionContext,
   ): (typeof this.scopedPermissions)[number] | undefined {
     const now = Date.now();
+    // Fail closed BEFORE matching: without a tool id there is no identity to
+    // bind to, and without security-relevant metadata there is no scope to
+    // prove — either way the grant cannot be safely reused.
+    if (typeof context.toolId !== "string" || context.toolId.trim() === "") {
+      return undefined;
+    }
+    if (!hasSecurityRelevantScope(context)) return undefined;
     const fingerprint = operationFingerprintOf(context);
     return this.scopedPermissions.find((p) => {
       if (p.action !== context.action) return false;

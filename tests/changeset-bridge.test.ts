@@ -66,7 +66,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("ChangeSet staging bridge", () => {
   it("holds a new-file proposal pending; reject writes nothing; approve writes on disk", async () => {
-    const mgr = new ChangeSetManager({ workspaceRoot: ws });
+    const mgr = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: ws });
     const cs = stage(mgr, "codepilot-test.txt", "CodePilot AI test");
     expect(cs.status).toBe("pending");
     expect(existsSync(join(ws, "codepilot-test.txt"))).toBe(false);
@@ -85,7 +85,7 @@ describe("ChangeSet staging bridge", () => {
   });
 
   it("reject never touches the filesystem", () => {
-    const mgr = new ChangeSetManager({ workspaceRoot: ws });
+    const mgr = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: ws });
     const cs = stage(mgr, "reject-me.txt", "should not appear");
     expect(mgr.rejectChange(cs.id, cs.changes[0]!.id)).toBe(true);
     expect(existsSync(join(ws, "reject-me.txt"))).toBe(false);
@@ -96,7 +96,7 @@ describe("ChangeSet staging bridge", () => {
     const target = join(ws, "notes.txt");
     writeFileSync(target, "original line\n", "utf8");
 
-    const mgr = new ChangeSetManager({ workspaceRoot: ws });
+    const mgr = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: ws });
     const cs = stage(mgr, "notes.txt", "edited line\n");
 
     const apply = await mgr.acceptChange(cs.id, cs.changes[0]!.id);
@@ -112,7 +112,7 @@ describe("ChangeSet staging bridge", () => {
     const target = join(ws, "shared.txt");
     writeFileSync(target, "v1\n", "utf8");
 
-    const mgr = new ChangeSetManager({ workspaceRoot: ws });
+    const mgr = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: ws });
     const cs = stage(mgr, "shared.txt", "v2\n");
 
     // External modification between staging and approval.

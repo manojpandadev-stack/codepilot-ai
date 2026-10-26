@@ -15,7 +15,10 @@ describe("ChangeSetManager", () => {
       join(testDir, "src/App.java"),
       'package com.demo;\npublic class App {\n    public String greet() { return "Hello"; }\n}',
     );
-    manager = new ChangeSetManager({ workspaceRoot: testDir });
+    manager = new ChangeSetManager({
+      allowDirectWrite: true,
+      workspaceRoot: testDir,
+    });
   });
 
   afterEach(() => {

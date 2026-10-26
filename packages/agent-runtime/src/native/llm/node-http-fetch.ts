@@ -74,9 +74,9 @@ function normalizeHeaders(
   return out;
 }
 
-function toPayload(
-  body: BodyInit | null | undefined,
-): { payload?: Uint8Array } {
+function toPayload(body: BodyInit | null | undefined): {
+  payload?: Uint8Array;
+} {
   if (body === undefined || body === null) return {};
   if (typeof body === "string") {
     return { payload: Buffer.from(body, "utf8") };
@@ -225,4 +225,3 @@ function normalizeError(err: unknown, url: URL): Error {
   if (code) (e as Error & { code?: string }).code = code;
   return e;
 }
-

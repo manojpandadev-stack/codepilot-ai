@@ -385,7 +385,6 @@ describe("browser tools — execution + M4", () => {
   });
 });
 
-
 // ================================================================
 // Phase 13-16: browser_select / browser_console / browser_network /
 // screenshot → image pipeline
@@ -441,11 +440,7 @@ describe("browser tools — select/console/network/screenshot (rows 18-21)", () 
 
   it("browser_console returns captured messages with secrets redacted", async () => {
     const { exec } = setup();
-    const r = await exec.execute(
-      "browser_console",
-      {},
-      { taskId: "t1" },
-    );
+    const r = await exec.execute("browser_console", {}, { taskId: "t1" });
     expect(r.status).toBe("completed");
     const payload = r.output as unknown as {
       messages: Array<{ type: string; text: string }>;
@@ -459,11 +454,7 @@ describe("browser tools — select/console/network/screenshot (rows 18-21)", () 
 
   it("browser_network returns entries with credential-scrubbed URLs", async () => {
     const { exec } = setup();
-    const r = await exec.execute(
-      "browser_network",
-      {},
-      { taskId: "t1" },
-    );
+    const r = await exec.execute("browser_network", {}, { taskId: "t1" });
     expect(r.status).toBe("completed");
     const payload = r.output as unknown as {
       entries: Array<{ method: string; url: string; status?: number }>;
@@ -495,11 +486,7 @@ describe("browser tools — select/console/network/screenshot (rows 18-21)", () 
       { defaultTimeoutMs: 60_000 },
       makeM4(),
     );
-    const r = await exec.execute(
-      "browser_screenshot",
-      {},
-      { taskId: "t1" },
-    );
+    const r = await exec.execute("browser_screenshot", {}, { taskId: "t1" });
     expect(r.status).toBe("completed");
     expect(captured).toHaveLength(1);
     expect(captured[0]?.taskId).toBe("t1");
@@ -509,11 +496,7 @@ describe("browser tools — select/console/network/screenshot (rows 18-21)", () 
 
   it("browser_screenshot works without the host hook (no staging)", async () => {
     const { exec } = setup();
-    const r = await exec.execute(
-      "browser_screenshot",
-      {},
-      { taskId: "t1" },
-    );
+    const r = await exec.execute("browser_screenshot", {}, { taskId: "t1" });
     expect(r.status).toBe("completed");
   });
 });

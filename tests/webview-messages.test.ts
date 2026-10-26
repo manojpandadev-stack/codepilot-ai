@@ -18,6 +18,13 @@ import {
   normalizeTaskDetails,
   historyStatusMeta,
   validateMetricsAction,
+  deriveTaskPhase,
+  normalizeRecoveryEvent,
+  appendRecoveryEvent,
+  recoveryRowView,
+  normalizeVerificationCheck,
+  reduceVerificationState,
+  MAX_RECOVERY_ROWS,
   type FileChange,
   type ToolEventLike,
 } from "../apps/webview/src/lib/messages.js";
@@ -743,5 +750,157 @@ describe("normalizeTaskDetails carries the structured plan", () => {
     });
     expect(out).not.toBeNull();
     expect(out!.plan).toBeUndefined();
+  });
+});
+
+describe("task phase derivation (F-04)", () => {
+  it("blocking states win: approval over healing over outcome", () => {
+    expect(
+      deriveTaskPhase({
+        isRunning: true,
+        statusMessage: "",
+        pendingApprovals: 2,
+        healingActive: true,
+        outcome: "failed",
+      }),
+    ).toBe("approval");
+    expect(
+      deriveTaskPhase({
+        isRunning: true,
+        statusMessage: "",
+        pendingApprovals: 0,
+        healingActive: true,
+        outcome: null,
+      }),
+    ).toBe("healing");
+  });
+
+  it("settled outcomes map when idle", () => {
+    const base = {
+      isRunning: false,
+      statusMessage: "",
+      pendingApprovals: 0,
+      healingActive: false,
+    };
+    expect(deriveTaskPhase({ ...base, outcome: "completed" })).toBe("completed");
+    expect(deriveTaskPhase({ ...base, outcome: "failed" })).toBe("failed");
+    expect(deriveTaskPhase({ ...base, outcome: "stopped" })).toBe("stopped");
+    expect(deriveTaskPhase({ ...base, outcome: "paused" })).toBe("paused");
+    expect(deriveTaskPhase({ ...base, outcome: null })).toBe("idle");
+  });
+
+  it("running tools map to their category; unknown names fall back honestly", () => {
+    const running = {
+      isRunning: true,
+      statusMessage: "",
+      pendingApprovals: 0,
+      healingActive: false,
+      outcome: null,
+    } as const;
+    expect(deriveTaskPhase({ ...running, runningToolName: "read_files" })).toBe("reading");
+    expect(deriveTaskPhase({ ...running, runningToolName: "editor" })).toBe("editing");
+    expect(deriveTaskPhase({ ...running, runningToolName: "bash" })).toBe("command");
+    expect(deriveTaskPhase({ ...running, runningToolName: "search_codebase" })).toBe("searching");
+    expect(deriveTaskPhase({ ...running, runningToolName: "git_diff" })).toBe("git");
+    expect(deriveTaskPhase({ ...running, runningToolName: "web_fetch" })).toBe("web");
+    expect(deriveTaskPhase({ ...running, runningToolName: "plan" })).toBe("planning");
+    expect(deriveTaskPhase({ ...running, runningToolName: "mystery_tool" })).toBe("working");
+    expect(
+      deriveTaskPhase({ ...running, statusMessage: "Thinking through the plan" }),
+    ).toBe("thinking");
+  });
+});
+
+describe("recovery timeline contract (F-04)", () => {
+  const VALID = {
+    phase: "FAILURE_DETECTED",
+    attempt: 1,
+    maxAttempts: 3,
+    timestamp: 1_700_000_000_000,
+    category: "TEST_FAILURE",
+    summary: "vitest run failed",
+  };
+
+  it("normalizes a host recovery/event payload", () => {
+    expect(normalizeRecoveryEvent(VALID)).toEqual(VALID);
+  });
+
+  it("drops malformed payloads instead of fabricating rows", () => {
+    expect(normalizeRecoveryEvent(null)).toBeNull();
+    expect(normalizeRecoveryEvent({ phase: "NOPE", attempt: 1, maxAttempts: 3, timestamp: 1 })).toBeNull();
+    expect(normalizeRecoveryEvent({ ...VALID, phase: "" })).toBeNull();
+    expect(normalizeRecoveryEvent({ ...VALID, attempt: -1 })).toBeNull();
+  });
+
+  it("appends bounded rows, oldest drop first", () => {
+    let rows = appendRecoveryEvent([], VALID);
+    expect(rows).toHaveLength(1);
+    expect(appendRecoveryEvent(rows, null)).toHaveLength(1);
+    for (let i = 0; i < MAX_RECOVERY_ROWS + 5; i += 1) {
+      rows = appendRecoveryEvent(rows, { ...VALID, attempt: i });
+    }
+    expect(rows).toHaveLength(MAX_RECOVERY_ROWS);
+  });
+
+  it("maps phases to honest rows (partial success is never done)", () => {
+    expect(
+      recoveryRowView(normalizeRecoveryEvent(VALID)!),
+    ).toMatchObject({ kind: "failure", state: "error" });
+    expect(
+      recoveryRowView(
+        normalizeRecoveryEvent({ ...VALID, phase: "RECOVERY_COMPLETED", status: "SUCCESS" })!,
+      ),
+    ).toMatchObject({ kind: "completion", state: "done", label: "Recovery succeeded" });
+    const partial = recoveryRowView(
+      normalizeRecoveryEvent({ ...VALID, phase: "RECOVERY_COMPLETED", status: "PARTIAL_SUCCESS" })!,
+    );
+    expect(partial.state).toBe("error");
+    expect(partial.label).not.toBe("Recovery succeeded");
+  });
+});
+
+describe("verification state reducer (F-04)", () => {
+  const check = (type: "tests" | "build" | "typecheck" | "security", status: "passed" | "running" | "failed") => ({
+    type,
+    status,
+    summary: `${type}:${status}`,
+  });
+
+  it("merges in stable order and never downgrades settled checks", () => {
+    const settled = reduceVerificationState(
+      [],
+      { runId: "r1", status: "completed", checks: [check("tests", "passed")] },
+    );
+    expect(
+      reduceVerificationState(settled, {
+        runId: "r1",
+        status: "running",
+        checks: [check("tests", "running")],
+      })[0]!.status,
+    ).toBe("passed");
+    const ordered = reduceVerificationState(
+      [],
+      {
+        runId: "r1",
+        status: "completed",
+        checks: [check("security", "passed"), check("tests", "passed")],
+      },
+    );
+    expect(ordered.map((c) => c.type)).toEqual(["tests", "security"]);
+  });
+});
+
+describe("verification check contract (F-04)", () => {
+  it("normalizes engine check results", () => {
+    expect(
+      normalizeVerificationCheck({ type: "tests", status: "failed", summary: "3 failed", exitCode: 1 }),
+    ).toEqual({ type: "tests", status: "failed", summary: "3 failed", exitCode: 1 });
+  });
+
+  it("rejects unknown types, statuses, and empty summaries", () => {
+    expect(normalizeVerificationCheck({ type: "lint", status: "passed", summary: "ok" })).toBeNull();
+    expect(normalizeVerificationCheck({ type: "tests", status: "weird", summary: "ok" })).toBeNull();
+    expect(normalizeVerificationCheck({ type: "tests", status: "passed", summary: "" })).toBeNull();
+    expect(normalizeVerificationCheck(null)).toBeNull();
   });
 });

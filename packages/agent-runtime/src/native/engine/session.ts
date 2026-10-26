@@ -16,6 +16,31 @@
  */
 
 import type { AgentMessage, AgentTool } from "../types.js";
+import { createHash } from "node:crypto";
+
+/**
+ * H5 — cache identity for a cached provider instance.
+ *
+ * A cached provider is bound to the credential it was built with, so the
+ * identity MUST include it: without the key, rotating or revoking a
+ * credential could reuse a provider still carrying the old one.
+ *
+ * The key material is never part of the identity: it is hashed (SHA-256) and
+ * truncated, so raw secrets cannot leak through cache keys, logs, or errors.
+ * An absent credential is a distinct identity from any present one.
+ */
+export function providerCacheIdentity(
+  providerId: string,
+  baseUrl: string | undefined | null,
+  apiKey: string | undefined | null,
+): string {
+  const url = baseUrl ?? "";
+  const secret =
+    apiKey === undefined || apiKey === null || apiKey === ""
+      ? "no-credential"
+      : createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
+  return `${providerId}|${url}|${secret}`;
+}
 import type { LlmProvider } from "../llm/types.js";
 import { createLlmProvider, type LlmProviderConfig } from "../llm/registry.js";
 import { runAgentLoop, type AgentLoopEvent } from "./agent-loop.js";
@@ -32,6 +57,17 @@ export interface NativeSessionConfig {
   maxIterations: number;
   temperature?: number;
   maxResultChars?: number;
+  /**
+   * H2 credential boundary: scrub secret spans from tool_results persisted
+   * into the next provider request. Production callers set this from the
+   * canonical provider classification (isRemoteProvider); unset preserves
+   * the local verbatim behavior.
+   */
+  redactToolResults?: boolean;
+  /** Selected model's context window (tokens) — bounds the output budget. */
+  modelContextWindow?: number;
+  /** Selected model's declared per-request output-token limit. */
+  maxOutputTokens?: number;
   /** Prior conversation to seed (verbatim resume). */
   initialMessages?: AgentMessage[];
 }
@@ -103,7 +139,11 @@ export class NativeSessionManager {
   }
 
   private providerFor(config: NativeSessionConfig): LlmProvider {
-    const cacheKey = `${config.providerId}|${config.baseUrl ?? ""}`;
+    const cacheKey = providerCacheIdentity(
+      config.providerId,
+      config.baseUrl,
+      config.apiKey,
+    );
     let provider = this.providers.get(cacheKey);
     if (!provider) {
       provider = createLlmProvider(
@@ -145,7 +185,7 @@ export class NativeSessionManager {
     onEvent: (event: NativeSessionEvent) => void,
     signal?: AbortSignal,
   ): Promise<{
-    reason: "complete" | "aborted" | "error" | "max_iterations";
+    reason: "complete" | "aborted" | "error" | "max_iterations" | "incomplete";
     error?: string;
     text: string;
   }> {
@@ -175,6 +215,17 @@ export class NativeSessionManager {
           maxIterations: config.maxIterations,
           temperature: config.temperature,
           maxResultChars: config.maxResultChars,
+          // H2 / Phase 7 wiring — forwarded verbatim; classification and
+          // catalogue lookup happen in the host callers (runtime/agent).
+          ...(config.redactToolResults !== undefined
+            ? { redactToolResults: config.redactToolResults }
+            : {}),
+          ...(config.modelContextWindow !== undefined
+            ? { modelContextWindow: config.modelContextWindow }
+            : {}),
+          ...(config.maxOutputTokens !== undefined
+            ? { maxOutputTokens: config.maxOutputTokens }
+            : {}),
           onEvent: (loopEvent) =>
             onEvent({ type: "loop", loop: loopEvent, sessionId }),
         },

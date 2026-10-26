@@ -25,23 +25,28 @@ describe("provider catalogue", () => {
   const catalog = getProviderCatalog();
 
   it("covers every provider id CodePilot can route or configure", () => {
-    // Curated set: adapters exist for each (or the generic compatible path
-    // with an explicit base URL). Anything missing here is a routing gap.
+    // Curated set: Ollama, OpenAI-native, and Gemini are the only supported providers.
     for (const id of [
       "ollama",
-      "lmstudio",
       "openai-native",
       "openai",
+      "gemini",
+      "google",
+    ]) {
+      expect(getCatalogProvider(id), id).toBeDefined();
+    }
+
+    // Removed providers must fail closed and return undefined
+    for (const id of [
+      "lmstudio",
       "openai-compatible",
       "custom",
       "anthropic",
-      "gemini",
-      "google",
       "openrouter",
       "zai",
       "zhipuai",
     ]) {
-      expect(getCatalogProvider(id), id).toBeDefined();
+      expect(getCatalogProvider(id), id).toBeUndefined();
     }
   });
 
@@ -76,27 +81,17 @@ describe("provider catalogue", () => {
   });
 
   it("existing working providers are preserved first-class", () => {
-    for (const id of [
-      "ollama",
-      "openai-native",
-      "anthropic",
-      "gemini",
-      "openai-compatible",
-      "openrouter",
-      "lmstudio",
-      "zai",
-    ]) {
+    for (const id of ["ollama", "openai-native", "gemini"]) {
       expect(getCatalogProvider(id), id).toBeDefined();
     }
   });
 
   it("marks local runtimes LOCAL and local-category", () => {
-    for (const id of ["ollama", "lmstudio"]) {
-      const p = getCatalogProvider(id)!;
-      expect(p.status).toBe("LOCAL");
-      expect(p.category).toBe("local");
-      expect(p.requiresApiKey).toBe(false);
-    }
+    const p = getCatalogProvider("ollama")!;
+    expect(p.status).toBe("LOCAL");
+    expect(p.category).toBe("local");
+    expect(p.requiresApiKey).toBe(false);
+    expect(getCatalogProvider("lmstudio")).toBeUndefined();
   });
 
   it("pins per-provider health probe paths (Ollama uses /api/tags — never / or /models)", () => {
@@ -105,10 +100,8 @@ describe("provider catalogue", () => {
     const ollama = getCatalogProvider("ollama")!;
     expect(ollama.health.supportsTestConnection).toBe(true);
     expect(ollama.health.probePath).toBe("/api/tags");
-    // LM Studio keeps the OpenAI-compatible /models listing.
-    const lmstudio = getCatalogProvider("lmstudio")!;
-    expect(lmstudio.health.supportsTestConnection).toBe(true);
-    expect(lmstudio.health.probePath).toBe("/models");
+    // Removed provider LM Studio is absent
+    expect(getCatalogProvider("lmstudio")).toBeUndefined();
     // Invariant for every testable provider: an absolute path, never "/".
     for (const p of catalog) {
       if (!p.health.supportsTestConnection) continue;
@@ -134,17 +127,14 @@ describe("provider catalogue", () => {
     expect(gpt!.inputPerMtok).toBe(2.5);
     expect(gpt!.outputPerMtok).toBe(10);
     expect(gpt!.contextWindow).toBeGreaterThan(0);
-    const anthropic = getCatalogProvider("anthropic")!;
-    const sonnet = anthropic.models.find(
-      (m) => m.id === "claude-sonnet-4-20250514",
-    );
-    expect(sonnet!.inputPerMtok).toBe(3);
-    expect(sonnet!.outputPerMtok).toBe(15);
+    const gemini = getCatalogProvider("gemini")!;
+    expect(gemini).toBeDefined();
+    expect(gemini.models.length).toBeGreaterThan(0);
   });
 
-  it("openrouter is flagged as having a real usage API", () => {
-    const or = getCatalogProvider("openrouter")!;
-    expect(or.usage.kind).toBe("provider-api");
+  it("removed providers are absent from catalog and usage API", () => {
+    expect(getCatalogProvider("openrouter")).toBeUndefined();
+    expect(getCatalogProvider("anthropic")).toBeUndefined();
   });
 
   it("lists no unroutable placeholder providers", () => {
@@ -168,16 +158,20 @@ describe("catalog search and sort", () => {
   const catalog = getProviderCatalog();
 
   it("search matches id, name, and description", () => {
-    const byId = searchCatalog(catalog, "openrouter");
-    expect(byId.map((p) => p.id)).toContain("openrouter");
-    const byName = searchCatalog(catalog, "Anthropic");
-    expect(byName.map((p) => p.id)).toContain("anthropic");
+    const byId = searchCatalog(catalog, "openai-native");
+    expect(byId.map((p) => p.id)).toContain("openai-native");
+    const byName = searchCatalog(catalog, "Gemini");
+    expect(byName.map((p) => p.id)).toContain("gemini");
     const byDesc = searchCatalog(catalog, "locally");
     expect(byDesc.map((p) => p.id)).toContain("ollama");
+
+    // Removed providers return no matches
+    expect(searchCatalog(catalog, "openrouter")).toEqual([]);
+    expect(searchCatalog(catalog, "Anthropic")).toEqual([]);
   });
 
   it("search is case-insensitive and trims", () => {
-    expect(searchCatalog(catalog, "  ANTHROPIC  ").length).toBeGreaterThan(0);
+    expect(searchCatalog(catalog, "  GEMINI  ").length).toBeGreaterThan(0);
   });
 
   it("category filter is exact", () => {
@@ -187,10 +181,10 @@ describe("catalog search and sort", () => {
   });
 
   it("sort puts favorites first and is stable otherwise", () => {
-    const sorted = sortCatalog(catalog, ["zai"], ["openrouter"]);
-    expect(sorted[0]!.id).toBe("zai");
+    const sorted = sortCatalog(catalog, ["gemini"], ["openai-native"]);
+    expect(sorted[0]!.id).toBe("gemini");
     const idx = (id: string) => sorted.findIndex((p) => p.id === id);
-    expect(idx("openrouter")).toBeLessThan(idx("anthropic"));
+    expect(idx("gemini")).toBeLessThan(idx("openai-native"));
     // no favorites/recent: alphabetical within status class
     const plain = sortCatalog(catalog);
     const supported = plain.filter((p) => p.status === "SUPPORTED");

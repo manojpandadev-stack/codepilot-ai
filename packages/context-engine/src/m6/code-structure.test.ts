@@ -46,8 +46,16 @@ describe("inspectCodeStructure — real TS parsing with extents", () => {
       endLine: 3,
     });
     // "}"" on line 7 and "// }" on line 8 must NOT close the class early.
-    expect(byName.Widget).toMatchObject({ kind: "class", line: 5, endLine: 10 });
-    expect(byName.render).toMatchObject({ kind: "method", line: 6, endLine: 9 });
+    expect(byName.Widget).toMatchObject({
+      kind: "class",
+      line: 5,
+      endLine: 10,
+    });
+    expect(byName.render).toMatchObject({
+      kind: "method",
+      line: 6,
+      endLine: 9,
+    });
     expect(byName.makeWidget).toMatchObject({
       kind: "constant",
       line: 12,
@@ -148,7 +156,9 @@ describe("CodeStructureProvider seam", () => {
     const custom: CodeStructureProvider = {
       id: "custom-test-provider",
       supports: (language) => language === "typescript",
-      structure: () => [{ name: "Injected", kind: "class", line: 1, endLine: 4 }],
+      structure: () => [
+        { name: "Injected", kind: "class", line: 1, endLine: 4 },
+      ],
     };
     setCodeStructureProvider(custom);
     try {

@@ -9,6 +9,24 @@ import type { AgentLoopEvent } from "./native/engine/agent-loop.js";
 import type { ToolGate } from "./native/engine/tool-dispatch.js";
 import type { LlmProvider } from "./native/llm/types.js";
 import { createLlmProvider } from "./native/llm/registry.js";
+import { isRemoteProvider, resolveModelLimits } from "./runtime.js";
+
+/**
+ * Terminal outcome of a CodePilotAgent run. `complete` is the ONLY successful
+ * outcome — cancellation (`aborted`), a truncated provider turn
+ * (`incomplete`), transport failure (`error`) and iteration exhaustion
+ * (`max_iterations`) never surface as completion.
+ */
+export type AgentRunReason =
+  "complete" | "aborted" | "error" | "max_iterations" | "incomplete";
+
+export interface AgentRunResult {
+  text: string;
+  usage: AgentUsage;
+  /** Terminal loop outcome — callers must not treat non-complete as success. */
+  reason: AgentRunReason;
+  error?: string;
+}
 
 /**
  * CodePilotAgent — the lightweight agent facade over the native engine.
@@ -30,40 +48,72 @@ export class CodePilotAgent {
   private provider: LlmProvider | null = null;
   private controller: AbortController | null = null;
   private running = false;
+  /** Set when initialize() fails (notably privacy rejection): run() must fail closed. */
+  private initFailed: Error | null = null;
 
   constructor(private readonly config: CodePilotAgentConfig) {}
 
   async initialize(): Promise<void> {
-    // Resolve the native provider for this session's config. The registry
+    // F-01 FAIL-CLOSED: authorize privacy BEFORE constructing/storing any
+    // provider. The canonical policy is isRemoteProvider() (runtime.ts):
+    // Local Only + remote provider must never become usable.
+    if (
+      this.config.privacyMode === "local" &&
+      isRemoteProvider(this.config.providerId, this.config.baseUrl)
+    ) {
+      const err = new Error(
+        `Privacy violation blocked: provider "${this.config.providerId}" is remote but privacy mode is "local".`,
+      );
+      this.provider = null;
+      this.initFailed = err;
+      throw err;
+    }
+    // Resolve the native provider for this session config. The registry
     // throws for remote providers without credentials — a permanent,
     // user-actionable failure.
-    this.provider = createLlmProvider(
-      { providerId: this.config.providerId, modelId: this.config.modelId },
-      {
-        configs: [
-          {
-            providerId: this.config.providerId,
-            ...(this.config.apiKey ? { apiKey: this.config.apiKey } : {}),
-            ...(this.config.baseUrl ? { baseUrl: this.config.baseUrl } : {}),
-          },
-        ],
-      },
-    );
+    try {
+      this.provider = createLlmProvider(
+        { providerId: this.config.providerId, modelId: this.config.modelId },
+        {
+          configs: [
+            {
+              providerId: this.config.providerId,
+              ...(this.config.apiKey ? { apiKey: this.config.apiKey } : {}),
+              ...(this.config.baseUrl ? { baseUrl: this.config.baseUrl } : {}),
+            },
+          ],
+        },
+      );
+    } catch (err) {
+      this.provider = null;
+      this.initFailed = err instanceof Error ? err : new Error(String(err));
+      throw err;
+    }
+    this.initFailed = null;
   }
 
-  async run(message: string): Promise<{ text: string; usage: AgentUsage }> {
+  async run(message: string): Promise<AgentRunResult> {
     return this.execute(message);
   }
 
-  async continue(
-    message?: string,
-  ): Promise<{ text: string; usage: AgentUsage }> {
+  async continue(message?: string): Promise<AgentRunResult> {
     return this.execute(message ?? "Continue.");
   }
 
-  private async execute(
-    message: string,
-  ): Promise<{ text: string; usage: AgentUsage }> {
+  private async execute(message: string): Promise<AgentRunResult> {
+    // F-01 FAIL-CLOSED: run() must independently reject when effective
+    // privacy mode is Local Only with a remote provider, even if the caller
+    // caught an initialize() error and calls run() anyway. Do not rely on
+    // callers handling initialize() errors.
+    if (
+      this.config.privacyMode === "local" &&
+      isRemoteProvider(this.config.providerId, this.config.baseUrl)
+    ) {
+      throw new Error(
+        `Privacy violation blocked: provider "${this.config.providerId}" is remote but privacy mode is "local".`,
+      );
+    }
+    if (this.initFailed) throw this.initFailed;
     if (!this.provider) throw new Error("Agent not initialized.");
     if (this.running) throw new Error("Agent is already running.");
     this.running = true;
@@ -93,6 +143,13 @@ export class CodePilotAgent {
       }
     };
 
+    // Phase 7 (wiring): effective output-budget limits for the selected
+    // model — explicit host config wins, then the curated catalogue.
+    const modelLimits = resolveModelLimits(
+      this.config.providerId,
+      this.config.modelId,
+      this.config,
+    );
     try {
       const result = await runAgentLoop(
         this.messages,
@@ -107,6 +164,21 @@ export class CodePilotAgent {
           maxIterations: this.config.maxIterations ?? 50,
           ...(this.config.temperature !== undefined
             ? { temperature: this.config.temperature }
+            : {}),
+          // H2: remote providers never receive unredacted tool output.
+          // Canonical classification (unknown provider → remote → redacted);
+          // an explicit host/test override wins.
+          redactToolResults:
+            this.config.redactToolResults ??
+            isRemoteProvider(this.config.providerId, this.config.baseUrl),
+          // Phase 7: real model limits bound the output budget — explicit
+          // config wins, then the curated catalogue; absent metadata keeps
+          // the loop's documented default cap (limits are never invented).
+          ...(modelLimits.contextWindow !== undefined
+            ? { modelContextWindow: modelLimits.contextWindow }
+            : {}),
+          ...(modelLimits.maxOutputTokens !== undefined
+            ? { maxOutputTokens: modelLimits.maxOutputTokens }
             : {}),
           onEvent: (event: AgentLoopEvent) => this.handleLoopEvent(event),
         },
@@ -123,7 +195,14 @@ export class CodePilotAgent {
       if (result.reason === "aborted") {
         this.emit({ type: "cancelled" });
       }
-      return { text: result.text, usage: result.usage };
+      // F-02/F-03: propagate the terminal outcome verbatim so orchestration
+      // can never read a cancelled or truncated run as a completion.
+      return {
+        text: result.text,
+        usage: result.usage,
+        reason: result.reason,
+        ...(result.error !== undefined ? { error: result.error } : {}),
+      };
     } finally {
       this.running = false;
       this.controller = null;

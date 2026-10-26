@@ -278,12 +278,28 @@ export class CommandExecutionService {
     });
 
     const killProcess = (): void => {
-      if (child.pid === undefined || child.exitCode !== null) return;
+      if (child.pid === undefined || child.exitCode !== null || child.killed)
+        return;
       if (process.platform === "win32") {
-        // taskkill /T kills the whole child tree on Windows.
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-          windowsHide: true,
+        // Prefer the Windows tree kill, but also terminate our direct child.
+        // Restricted desktops can deny taskkill access, which otherwise
+        // leaves timeout/cancellation waiting forever on a live process.
+        const killer = spawn(
+          "taskkill",
+          ["/PID", String(child.pid), "/T", "/F"],
+          {
+            windowsHide: true,
+            stdio: "ignore",
+          },
+        );
+        killer.on("error", () => {
+          // Fall through to the direct-child kill below.
         });
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // taskkill may still have succeeded for the process tree.
+        }
       } else {
         child.kill("SIGTERM");
       }
@@ -328,6 +344,9 @@ export class CommandExecutionService {
       which: "stdout" | "stderr",
     ): void => {
       stream?.on("data", (chunk: Buffer | string) => {
+        // Ignore data that was already buffered by the OS when cancellation
+        // or timeout became terminal; do not emit late output afterward.
+        if (externallyCancelled || timedOut) return;
         // Multi-byte characters split across chunks are buffered by the
         // stream decoder instead of being corrupted per chunk.
         const text = decoders[which].decode(chunk);

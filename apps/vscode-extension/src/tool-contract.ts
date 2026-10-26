@@ -124,7 +124,13 @@ export const BUILTIN_TOOL_DISPLAY_CONTRACT: readonly ToolDisplayEntry[] = [
   {
     name: "web_fetch",
     category: "network",
-    description: "Fetch content from a URL",
+    description: "Fetch content from a URL (SSRF-guarded)",
+    callableName: "web_fetch",
+  },
+  {
+    name: "fetch_web_content",
+    category: "network",
+    description: "Fetch content from a URL (legacy alias)",
     callableName: "fetch_web_content",
   },
   {

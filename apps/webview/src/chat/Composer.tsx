@@ -7,16 +7,21 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
+  useEffect,
   useRef,
+  useState,
 } from "react";
 import {
   IconBolt,
   IconFile,
   IconFolder,
   IconLink,
+  IconPlus,
+  IconRefresh,
   IconSend,
   IconShield,
   IconStop,
+  IconTerminal,
   IconWarning,
   IconX,
 } from "../lib/icons";
@@ -114,7 +119,6 @@ export interface ComposerProps {
   onRetry: (() => void) | null;
   isRunning: boolean;
   // menus
-  mentionMenuOpen: boolean;
   slashMenuOpen: boolean;
   onCloseMenus: () => void;
   onAttachFile: () => void;
@@ -128,8 +132,6 @@ export interface ComposerProps {
   onImagesSelected: (
     images: Array<{ name?: string; mime?: string; dataUrl: string }>,
   ) => void;
-  /** Menu selections strip the "@" keyword, then run the attach handler. */
-  onPickMention: (attach: () => void) => void;
   onPickSlash: (command: string) => void;
   // context
   composerContext: ComposerContext;
@@ -155,11 +157,14 @@ export interface ComposerProps {
   } | null;
   autoApproval: AutoApproval;
   onHeal?: () => void;
+  connected?: boolean;
 }
 
 export function Composer(props: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const chips = contextToChips(props.composerContext);
   const slashPrefix = (props.input.match(/\/(\w*)$/) ?? [])[1] ?? "";
   const slashItems: SlashCommandDef[] = props.slashMenuOpen
@@ -171,9 +176,33 @@ export function Composer(props: ComposerProps) {
       : 0;
   const contextPct = Math.min(Math.round((tokenCount / 128000) * 100), 100);
 
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!addMenuRef.current?.contains(event.target as Node)) {
+        setAddMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setAddMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [addMenuOpen]);
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape" && addMenuOpen) {
+      e.preventDefault();
+      setAddMenuOpen(false);
+      return;
+    }
     if (shouldSendOnKeydown(e.key, e.shiftKey)) {
       e.preventDefault();
+      if (props.isRunning) return;
       props.onCloseMenus();
       props.onSend();
     }
@@ -272,72 +301,6 @@ export function Composer(props: ComposerProps) {
         </div>
       )}
 
-      {/* Mention (@) menu */}
-      {props.mentionMenuOpen && (
-        <div
-          className="mx-3 mt-2 rounded-md border border-vscode-border bg-vscode-elevated overflow-hidden shadow-sm"
-          data-testid="mention-menu"
-          role="listbox"
-          aria-label="Attach context"
-        >
-          <div className="px-3 py-1 text-[9px] uppercase tracking-wide text-vscode-desc">
-            Attach context
-          </div>
-          {(
-            [
-              ["Files…", props.onAttachFile, <IconFile size={11} key="f" />],
-              [
-                "Folder…",
-                props.onAttachFolder,
-                <IconFolder size={11} key="d" />,
-              ],
-              ["URL", props.onAttachUrl, <IconLink size={11} key="u" />],
-              [
-                "Diff: working tree",
-                () => props.onAttachDiff("working"),
-                <IconFile size={11} key="dw" />,
-              ],
-              [
-                "Diff: staged",
-                () => props.onAttachDiff("staged"),
-                <IconFile size={11} key="ds" />,
-              ],
-              [
-                "Terminal output",
-                props.onAttachTerminal,
-                <IconFile size={11} key="t" />,
-              ],
-              [
-                "Problems",
-                props.onAttachProblems,
-                <IconWarning size={11} key="p" />,
-              ],
-              [
-                "Selection",
-                props.onAttachSelection,
-                <IconFile size={11} key="s" />,
-              ],
-              [
-                "Images…",
-                () => imageInputRef.current?.click(),
-                <IconFile size={11} key="i" />,
-              ],
-            ] as Array<[string, () => void, ReactNode]>
-          ).map(([label, handler, icon]) => (
-            <button
-              key={label}
-              role="option"
-              aria-selected={false}
-              className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-vscode-list-hover flex items-center gap-2"
-              onClick={() => props.onPickMention(handler)}
-            >
-              <span className="text-vscode-text-link">{icon}</span>
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* Input row */}
       <div className="px-3 py-2">
         <div className="rounded-lg border border-vscode-input-border bg-vscode-input-bg focus-within:border-vscode-focus-border transition-colors">
@@ -349,10 +312,17 @@ export function Composer(props: ComposerProps) {
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             onDrop={handleDrop}
-            placeholder="Describe what you want to do…  (/ for commands, @ for context)"
+            disabled={props.isRunning}
+            placeholder={
+              props.isRunning
+                ? "CodePilot is working… (Stop to cancel)"
+                : "Ask CodePilot anything…"
+            }
             aria-label="Chat message"
             rows={2}
-            className="w-full text-[13px] px-3 py-2 bg-transparent text-vscode-input-fg placeholder:text-vscode-input-placeholder resize-none focus:outline-none"
+            className={`w-full text-[13px] px-3 py-2 bg-transparent text-vscode-input-fg placeholder:text-vscode-input-placeholder resize-none focus:outline-none ${
+              props.isRunning ? "opacity-60 cursor-not-allowed" : ""
+            }`}
           />
           <input
             ref={imageInputRef}
@@ -368,82 +338,166 @@ export function Composer(props: ComposerProps) {
               e.target.value = "";
             }}
           />
-          <div className="flex items-center gap-1.5 px-2 pb-1.5">
-            {/* Attach */}
-            <div
-              className="flex gap-0.5"
-              role="group"
-              aria-label="Attach context"
-            >
+          <div className="flex items-center gap-1.5 px-2 pb-1.5 min-w-0">
+            <div className="relative flex-shrink-0" ref={addMenuRef}>
               <button
-                onClick={props.onAttachFile}
-                aria-label="Attach file(s)"
-                title="Attach file(s) from workspace"
-                className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
+                type="button"
+                aria-label="Add files and context"
+                aria-expanded={addMenuOpen}
+                aria-haspopup="menu"
+                aria-controls="composer-add-menu"
+                title="Add files, images, and context"
+                onClick={() => setAddMenuOpen((open) => !open)}
+                className={`inline-flex h-7 w-7 items-center justify-center rounded border border-vscode-input-border transition-colors ${
+                  addMenuOpen
+                    ? "bg-vscode-list-hover text-vscode-fg"
+                    : "text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
+                }`}
               >
-                <IconFile size={13} />
+                <IconPlus size={14} />
               </button>
-              <button
-                onClick={props.onAttachFolder}
-                aria-label="Attach folder"
-                title="Attach folder"
-                className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
-              >
-                <IconFolder size={13} />
-              </button>
-              <button
-                onClick={props.onAttachUrl}
-                aria-label="Attach URL"
-                title="Attach URL"
-                className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
-              >
-                <IconLink size={13} />
-              </button>
-              <button
-                onClick={props.onAttachProblems}
-                aria-label="Attach problems"
-                title="Attach VS Code Problems"
-                className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
-              >
-                <IconWarning size={13} />
-              </button>
-              <button
-                onClick={() => imageInputRef.current?.click()}
-                aria-label="Attach image(s)"
-                title="Attach image(s) (png, jpeg, webp, gif)"
-                className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
-              >
-                <IconFile size={13} />
-              </button>
-            </div>
-
-            <span className="w-px h-4 bg-vscode-border" />
-
-            {/* Mode selector */}
-            <div
-              role="radiogroup"
-              aria-label="Agent mode"
-              className="flex rounded border border-vscode-input-border overflow-hidden"
-            >
-              {MODE_OPTIONS.map((m) => (
-                <button
-                  key={m.value}
-                  role="radio"
-                  aria-checked={props.settings.agentMode === m.value}
-                  title={m.title}
-                  onClick={() => props.onModeChange(m.value)}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                    props.settings.agentMode === m.value
-                      ? "bg-vscode-btn text-vscode-btn-fg"
-                      : "text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover"
-                  }`}
+              {addMenuOpen && (
+                <div
+                  id="composer-add-menu"
+                  role="menu"
+                  aria-label="Add to message"
+                  className="absolute bottom-full left-0 z-50 mb-2 max-h-80 w-64 overflow-y-auto rounded-md border border-vscode-border bg-vscode-elevated p-1 shadow-lg"
                 >
-                  {m.label}
-                </button>
-              ))}
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-vscode-desc">
+                    Add to message
+                  </div>
+                  {(
+                    [
+                      [
+                        "Files…",
+                        <IconFile size={13} key="files" />,
+                        props.onAttachFile,
+                      ],
+                      [
+                        "Folder…",
+                        <IconFolder size={13} key="folder" />,
+                        props.onAttachFolder,
+                      ],
+                      [
+                        "Image…",
+                        <IconFile size={13} key="image" />,
+                        () => imageInputRef.current?.click(),
+                      ],
+                      [
+                        "Web link…",
+                        <IconLink size={13} key="url" />,
+                        props.onAttachUrl,
+                      ],
+                      [
+                        "VS Code Problems",
+                        <IconWarning size={13} key="problems" />,
+                        props.onAttachProblems,
+                      ],
+                      [
+                        "Editor selection",
+                        <IconFile size={13} key="selection" />,
+                        props.onAttachSelection,
+                      ],
+                      [
+                        "Working tree diff",
+                        <IconFile size={13} key="working-diff" />,
+                        () => props.onAttachDiff("working"),
+                      ],
+                      [
+                        "Staged diff",
+                        <IconFile size={13} key="staged-diff" />,
+                        () => props.onAttachDiff("staged"),
+                      ],
+                      [
+                        "Terminal output",
+                        <IconTerminal size={13} key="terminal" />,
+                        props.onAttachTerminal,
+                      ],
+                    ] as Array<[string, ReactNode, () => void]>
+                  ).map(([label, icon, action]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        action();
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] text-vscode-fg hover:bg-vscode-list-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-vscode-focus-border"
+                    >
+                      <span className="text-vscode-text-link">{icon}</span>
+                      {label}
+                    </button>
+                  ))}
+                  <div className="my-1 border-t border-vscode-border" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAddMenuOpen(false);
+                      props.onRefreshModels();
+                    }}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] text-vscode-fg hover:bg-vscode-list-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-vscode-focus-border"
+                  >
+                    <IconRefresh size={13} /> Refresh models
+                  </button>
+                  {props.onRetry && !props.isRunning && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        props.onRetry?.();
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] text-vscode-fg hover:bg-vscode-list-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-vscode-focus-border"
+                    >
+                      <IconRefresh size={13} /> Retry last response
+                    </button>
+                  )}
+                  {props.onHeal && !props.isRunning && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        props.onHeal?.();
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] text-vscode-warning-fg hover:bg-vscode-list-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-vscode-focus-border"
+                    >
+                      <IconShield size={13} /> Recover from last failure
+                    </button>
+                  )}
+                  {props.usage && (
+                    <div className="px-2 py-1.5 text-[10px] text-vscode-desc">
+                      Session: {tokenCount.toLocaleString()} tokens
+                      {props.usage.totalCost
+                        ? ` · $${props.usage.totalCost.toFixed(4)}`
+                        : ""}{" "}
+                      ({contextPct}% context)
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Model selector */}
+            <Select
+              aria-label="Agent mode"
+              title={
+                MODE_OPTIONS.find(
+                  (mode) => mode.value === props.settings.agentMode,
+                )?.title
+              }
+              value={props.settings.agentMode}
+              onChange={(e) => props.onModeChange(e.target.value)}
+              className="max-w-[92px] flex-shrink-0"
+            >
+              {MODE_OPTIONS.map((mode) => (
+                <option key={mode.value} value={mode.value} title={mode.title}>
+                  {mode.label}
+                </option>
+              ))}
+            </Select>
+
             <Select
               aria-label="Model"
               title={
@@ -454,13 +508,14 @@ export function Composer(props: ComposerProps) {
                     : "No models detected"
               }
               value={
-                props.models.some((m) => m.id === props.settings.model) ||
-                props.settings.model
+                props.models.some(
+                  (model) => model.id === props.settings.model,
+                ) || props.settings.model
                   ? props.settings.model
                   : ""
               }
               onChange={(e) => props.onModelChange(e.target.value)}
-              className="min-w-0 max-w-[160px] flex-shrink"
+              className="min-w-0 max-w-[180px] flex-1"
             >
               {props.models.length === 0 ? (
                 <>
@@ -470,57 +525,37 @@ export function Composer(props: ComposerProps) {
                   <option value="qwen3:8b">qwen3:8b</option>
                 </>
               ) : (
-                props.models.map((m) => {
-                  // PART 3/13: per-model tool-calling truth in the picker —
-                  // "unknown" must never read as supported.
-                  const cap =
-                    m.toolCalling === "true"
-                      ? " \u2713 tools"
-                      : m.toolCalling === "false"
-                        ? " \u2715 tools"
-                        : " ? tools";
-                  return (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                      {m.contextWindow
-                        ? ` · ${Math.round(m.contextWindow / 1024)}k`
-                        : ""}
-                      {cap}
-                    </option>
-                  );
-                })
+                props.models.map((model) => (
+                  <option
+                    key={model.id}
+                    value={model.id}
+                    title={
+                      model.toolCalling === "true"
+                        ? "Tool calling supported"
+                        : model.toolCalling === "false"
+                          ? "Tool calling not supported"
+                          : "Tool calling support unknown"
+                    }
+                  >
+                    {model.name}
+                  </option>
+                ))
               )}
             </Select>
-            <button
-              onClick={props.onRefreshModels}
-              aria-label="Refresh model list"
-              title="Re-scan installed models"
-              className="rounded p-1 text-vscode-desc hover:text-vscode-fg hover:bg-vscode-list-hover flex-shrink-0"
-            >
-              ⟳
-            </button>
 
-            <span className="flex-1" />
-
-            {/* Token indicator (real usage only) */}
-            {props.usage && (
+            {props.settings.provider === "gemini" && props.connected && (
               <span
-                title={`${tokenCount.toLocaleString()} tokens this session${props.usage.totalCost ? ` · $${props.usage.totalCost.toFixed(4)}` : ""}`}
-                className="hidden sm:flex items-center gap-1.5 flex-shrink-0"
+                data-testid="gemini-connection-indicator"
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-vscode-testing-run bg-vscode-badge-bg/10 border border-vscode-testing-run/30 rounded px-1.5 py-0.5 whitespace-nowrap"
+                title="Gemini Connected"
               >
-                <span className="w-12 h-1 rounded-full bg-vscode-border overflow-hidden">
-                  <span
-                    className="block h-full bg-vscode-text-link"
-                    style={{ width: `${contextPct}%` }}
-                  />
-                </span>
-                <span className="text-[9px] font-mono text-vscode-desc">
-                  {contextPct}%
-                </span>
+                <span className="w-1.5 h-1.5 rounded-full bg-vscode-testing-run inline-block" />
+                Gemini ✓ Connected
               </span>
             )}
 
-            {/* Stop / Send */}
+            <span className="flex-1" />
+
             {props.isRunning ? (
               <>
                 {props.onPause && (
@@ -551,30 +586,9 @@ export function Composer(props: ComposerProps) {
                 disabled={!props.input.trim()}
                 aria-label="Send message"
                 title="Send (Enter)"
-                className="flex-shrink-0"
+                className="h-7 w-7 flex-shrink-0 px-0"
               >
-                <IconSend size={11} /> Send
-              </Button>
-            )}
-            {props.onRetry && !props.isRunning && (
-              <Button
-                onClick={props.onRetry}
-                aria-label="Retry last prompt"
-                title="Retry last prompt"
-                className="flex-shrink-0"
-              >
-                ↻
-              </Button>
-            )}
-            {props.onHeal && !props.isRunning && (
-              <Button
-                variant="ghost"
-                onClick={props.onHeal}
-                aria-label="Trigger self-healing"
-                title="Trigger self-healing for the last failure"
-                className="flex-shrink-0 text-vscode-warning-fg hover:text-vscode-warning-fg"
-              >
-                <IconShield size={11} />
+                <IconSend size={13} />
               </Button>
             )}
           </div>

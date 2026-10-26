@@ -34,12 +34,19 @@ export type {
   LlmCatalogField,
   LlmCatalogProvider,
   LlmToolCallingSupport,
+  CuratedProviderId,
 } from "./catalogue.js";
 export {
   CODEPILOT_PROVIDER_CATALOG,
+  CURATED_PROVIDER_IDS,
+  CURATED_PROVIDER_LIMIT,
+  SUPPORTED_PROVIDER_IDS,
+  isSupportedProviderId,
+  isLegacyProviderId,
   modelSupportsVision,
   modelToolCallingSupport,
 } from "./catalogue.js";
+export type { SupportedProviderId } from "./catalogue.js";
 export { OllamaProvider, OLLAMA_DEFAULT_BASE_URL } from "./providers/ollama.js";
 export { splitThinking } from "./providers/ollama.js";
 export { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
@@ -53,13 +60,16 @@ export {
   AnthropicProvider,
   ANTHROPIC_DEFAULT_BASE_URL,
 } from "./providers/anthropic.js";
-export { GoogleProvider, GOOGLE_DEFAULT_BASE_URL } from "./providers/google.js";
+export {
+  GoogleProvider,
+  GOOGLE_DEFAULT_BASE_URL,
+  toGeminiSchema,
+  toGeminiFunctionDeclarationSchema,
+} from "./providers/google.js";
 export {
   createLlmProvider,
   normalizeProviderId,
   defaultBaseUrlFor,
-  LMSTUDIO_DEFAULT_BASE_URL,
-  ZAI_DEFAULT_BASE_URL,
 } from "./factory.js";
 export { completeText } from "./complete.js";
 export type { CompleteTextOptions } from "./complete.js";

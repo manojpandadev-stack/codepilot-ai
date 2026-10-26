@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@codepilot/changeset-engine": "workspace:*",
+    "@codepilot/context-engine": "workspace:*",
     "@codepilot/shared": "workspace:*"
   },
   "devDependencies": {

@@ -92,10 +92,9 @@ describe("TerminalEnvironment — ssh alias validation (no credentials)", () => 
       "",
       "host\tname",
     ]) {
-      expect(
-        () => sshTerminalEnvironment(bad),
-        JSON.stringify(bad),
-      ).toThrow(/alias rejected/);
+      expect(() => sshTerminalEnvironment(bad), JSON.stringify(bad)).toThrow(
+        /alias rejected/,
+      );
     }
   });
 
@@ -110,9 +109,7 @@ describe("TerminalEnvironment — settings spec parsing", () => {
   it("parses local, wsl, wsl:distro, and ssh:alias", () => {
     expect(parseTerminalEnvironment("local").kind).toBe("local");
     expect(parseTerminalEnvironment("wsl").label).toBe("WSL");
-    expect(parseTerminalEnvironment("wsl:Ubuntu").label).toBe(
-      "WSL (Ubuntu)",
-    );
+    expect(parseTerminalEnvironment("wsl:Ubuntu").label).toBe("WSL (Ubuntu)");
     expect(parseTerminalEnvironment("ssh:prod").label).toBe("SSH (prod)");
     expect(parseTerminalEnvironment("  ssh:prod  ").kind).toBe("ssh");
   });

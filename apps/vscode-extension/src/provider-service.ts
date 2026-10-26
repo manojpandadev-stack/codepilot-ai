@@ -23,9 +23,12 @@ import * as vscode from "vscode";
 import {
   getCatalogProvider,
   getProviderCatalog,
+  getCuratedProviderCatalog,
+  isSupportedProviderId,
   type CatalogProvider,
 } from "@codepilot/model-gateway";
 import { checkNavigationPolicy } from "@codepilot/context-engine";
+import { isRemoteProvider } from "@codepilot/agent-runtime";
 
 // ============================================================================
 // Secret key mapping
@@ -41,12 +44,10 @@ export function secretKeyFor(providerId: string): string {
  * installs). Reading falls back to these so existing users keep working.
  */
 const LEGACY_SECRET_KEYS: Readonly<Record<string, string>> = {
+  "openai-native": "codepilot.apiKey.openai",
   openai: "codepilot.apiKey.openai",
-  "openai-compatible": "codepilot.apiKey.openaiCompatible",
-  anthropic: "codepilot.apiKey.anthropic",
+  gemini: "codepilot.apiKey.google",
   google: "codepilot.apiKey.google",
-  bedrock: "codepilot.apiKey.bedrock",
-  mistral: "codepilot.apiKey.mistral",
 };
 
 // ============================================================================
@@ -122,6 +123,86 @@ export function validateProviderBaseUrl(
 }
 
 // ============================================================================
+// Local Only policy — ONE authoritative answer for every provider request
+// ============================================================================
+
+/**
+ * The decision every outbound provider-service path must consult before it
+ * touches the network.
+ */
+export interface ProviderRequestPolicy {
+  /** FALSE ⇒ the request must not be attempted at all. */
+  allowed: boolean;
+  /** Secret-free, actionable refusal (present only when `allowed` is false). */
+  reason?: string;
+  /**
+   * `fetch` redirect mode.
+   *
+   * Local Only uses `"manual"` and NEVER follows a redirect. The gate can only
+   * validate the CONFIGURED endpoint; a loopback server that answers
+   * `302 Location: https://…` would otherwise send the request off the
+   * machine via a destination the policy never inspected — a silent Local Only
+   * bypass. Outside Local Only the default follow behaviour is preserved, so
+   * cloud providers that legitimately redirect are unaffected.
+   */
+  redirect: "follow" | "manual";
+}
+
+/**
+ * The single authoritative Local Only policy for provider-service requests.
+ *
+ * Locality is decided by the EFFECTIVE DESTINATION through the canonical
+ * runtime policy (`isRemoteProvider`), never by the provider id alone: a local
+ * provider id pointed at a remote `baseUrl` is still remote, and an unknown
+ * provider or unparsable endpoint fails closed. Mirrors the runtime guard
+ * exactly — only `"local"` forbids the network.
+ */
+export function providerRequestPolicy(
+  privacyMode: "local" | "hybrid" | "cloud",
+  providerId: string,
+  effectiveBaseUrl: string | undefined,
+): ProviderRequestPolicy {
+  if (
+    privacyMode === "local" &&
+    isRemoteProvider(providerId, effectiveBaseUrl)
+  ) {
+    return {
+      allowed: false,
+      redirect: "manual",
+      reason: `Local Only privacy mode blocks network access to the "${providerId}" provider. No request was made. Switch privacy mode in Settings to use it.`,
+    };
+  }
+  return {
+    allowed: true,
+    redirect: privacyMode === "local" ? "manual" : "follow",
+  };
+}
+
+/**
+ * Refusal used when a Local Only endpoint answers with a redirect. The request
+ * was attempted against a permitted loopback destination, but following it
+ * would leave the machine — so the honest outcome is a policy block, never a
+ * fabricated "connected"/"unavailable" verdict about the remote target.
+ */
+function redirectRefusal(providerId: string): string {
+  return `Local Only privacy mode blocked a redirect from the "${providerId}" provider to a remote endpoint. No request was made beyond the local endpoint.`;
+}
+
+/**
+ * A mask-style value (such as "••••••••••••••••") used as a UI placeholder.
+ * Mask strings must NEVER overwrite real credentials or be saved to SecretStorage.
+ */
+export function isCredentialMask(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  return (
+    trimmed.includes("•") ||
+    trimmed.includes("●") ||
+    /^[\u2022\u25cf\*]+$/.test(trimmed)
+  );
+}
+
+// ============================================================================
 // Provider service
 // ============================================================================
 
@@ -173,6 +254,23 @@ export interface ConnectionStateEntry {
   checkedAt?: string;
 }
 
+/** Result of an inference probe (chat-completions round trip). */
+export interface InferenceProbeResult {
+  /**
+   * - "blocked"  — Local Only refused the probe BEFORE any request; nothing
+   *   was sent and nothing can be concluded about the provider.
+   * - "auth-failed" — credentials rejected.
+   * - "failed" — the probe ran and the model did not complete a turn.
+   * - "success" — the provider actually completed a chat-completions call.
+   */
+  state: "success" | "failed" | "auth-failed" | "blocked";
+  /** Echoed model id (present whenever a probe was attempted). */
+  modelId?: string;
+  /** Human-readable, secret-free detail (safe for webview + logs). */
+  message: string;
+  latencyMs?: number;
+}
+
 export interface ProviderUsageSnapshot {
   providerId: string;
   kind: "provider-api" | "local-tracking" | "none";
@@ -193,10 +291,38 @@ export class ProviderService implements vscode.Disposable {
   private readonly secrets: vscode.SecretStorage;
   private readonly state: vscode.Memento;
   private readonly disposables: vscode.Disposable[] = [];
+  /**
+   * Effective privacy mode. Injected by the host so probes/discovery honour
+   * the SAME Local Only decision as the runtime.
+   *
+   * Defaults to "cloud" ONLY for direct construction outside the host (unit
+   * harnesses). The extension ALWAYS injects the real user setting, so
+   * product behaviour is governed by the user's privacy mode, never by this
+   * default.
+   */
+  private readonly privacyMode: () => "local" | "hybrid" | "cloud";
 
-  constructor(context: vscode.ExtensionContext) {
+  constructor(
+    context: vscode.ExtensionContext,
+    privacyMode?: () => "local" | "hybrid" | "cloud",
+  ) {
     this.secrets = context.secrets;
     this.state = context.globalState;
+    this.privacyMode = privacyMode ?? (() => "cloud");
+  }
+
+  /**
+   * The CURRENT policy for one provider, read fresh on every call so a privacy
+   * change takes effect immediately on a long-lived service instance.
+   *
+   * This is the ONLY gate every outbound provider-service path consults.
+   */
+  requestPolicy(providerId: string): ProviderRequestPolicy {
+    return providerRequestPolicy(
+      this.privacyMode(),
+      providerId,
+      this.effectiveBaseUrl(providerId),
+    );
   }
 
   dispose(): void {
@@ -208,6 +334,10 @@ export class ProviderService implements vscode.Disposable {
   // ------------------------------------------------------------------
 
   listProviders(): CatalogProvider[] {
+    return getCuratedProviderCatalog();
+  }
+
+  listAllProviders(): CatalogProvider[] {
     return getProviderCatalog();
   }
 
@@ -239,7 +369,7 @@ export class ProviderService implements vscode.Disposable {
 
   async setCredential(providerId: string, value: string): Promise<void> {
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed || isCredentialMask(trimmed)) return;
     await this.secrets.store(secretKeyFor(providerId), trimmed);
   }
 
@@ -309,10 +439,17 @@ export class ProviderService implements vscode.Disposable {
   async testConnection(
     providerId: string,
     signal?: AbortSignal,
+    overrideApiKey?: string,
   ): Promise<HealthResult> {
     const provider = getCatalogProvider(providerId);
-    if (!provider) {
-      return { state: "invalid-config", message: "Unknown provider." };
+    if (!provider || !isSupportedProviderId(providerId)) {
+      return { state: "invalid-config", message: "Unsupported provider." };
+    }
+    // Local Only is checked FIRST so the reported reason is the policy — not a
+    // misleading "configure a base URL" or "no testable endpoint" that would still be blocked afterwards.
+    const policy = this.requestPolicy(providerId);
+    if (!policy.allowed) {
+      return { state: "invalid-config", message: policy.reason ?? "Blocked." };
     }
     if (!provider.health.supportsTestConnection) {
       return {
@@ -328,11 +465,14 @@ export class ProviderService implements vscode.Disposable {
         message: "No base URL configured for this provider.",
       };
     }
-    const apiKey = await this.getCredential(providerId);
+    const apiKey = overrideApiKey ?? (await this.getCredential(providerId));
     if (provider.health.requiresApiKeyForProbe && !apiKey) {
       return {
         state: "auth-required",
-        message: "API key required before testing this provider.",
+        message:
+          providerId === "gemini"
+            ? "Gemini API key is required."
+            : "API key required before testing this provider.",
       };
     }
 
@@ -350,51 +490,117 @@ export class ProviderService implements vscode.Disposable {
           ...(signal ? [signal] : []),
         ]) ?? AbortSignal.timeout(8_000);
       const headers: Record<string, string> = { Accept: "application/json" };
-      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      if (apiKey) {
+        if (providerId === "gemini") {
+          headers["x-goog-api-key"] = apiKey;
+        } else {
+          headers.Authorization = `Bearer ${apiKey}`;
+        }
+      }
       const response = await fetch(probeUrl, {
         signal: effectiveSignal,
         headers,
+        redirect: policy.redirect,
       });
       const latencyMs = Date.now() - started;
-      if (response.status === 401 || response.status === 403) {
+      // Local Only never follows a redirect off the machine; an attempted
+      // escape is reported as a policy block, not as a provider verdict.
+      if (
+        policy.redirect === "manual" &&
+        response.status >= 300 &&
+        response.status < 400
+      ) {
+        return {
+          state: "invalid-config",
+          message: redirectRefusal(providerId),
+          latencyMs,
+        };
+      }
+      if (
+        response.status === 401 ||
+        response.status === 403 ||
+        (providerId === "gemini" && response.status === 400)
+      ) {
         return {
           state: "auth-invalid",
-          message: "Provider rejected the credential (HTTP 401/403).",
+          message:
+            providerId === "gemini"
+              ? "Gemini API key is invalid or could not be verified."
+              : "Provider rejected the credential (HTTP 401/403).",
+          latencyMs,
+        };
+      }
+      if (response.status === 402) {
+        return {
+          state: "rate-limited",
+          message:
+            providerId === "gemini"
+              ? "Gemini API quota/rate limit reached."
+              : "Provider reported insufficient credits or quota (HTTP 402).",
           latencyMs,
         };
       }
       if (response.status === 429) {
         return {
           state: "rate-limited",
-          message: "Provider is rate-limiting requests (HTTP 429).",
+          message:
+            providerId === "gemini"
+              ? "Gemini API quota/rate limit reached."
+              : "Provider is rate-limiting requests (HTTP 429).",
+          latencyMs,
+        };
+      }
+      if (response.status === 503) {
+        return {
+          state: "unavailable",
+          message:
+            providerId === "gemini"
+              ? "Gemini is temporarily busy. Try again shortly or select another available model."
+              : "Provider is temporarily unavailable (HTTP 503).",
           latencyMs,
         };
       }
       if (!response.ok) {
         return {
           state: "unavailable",
-          message: `Provider responded HTTP ${response.status}.`,
+          message:
+            providerId === "gemini"
+              ? "Could not reach Gemini. Check your network connection."
+              : `Provider responded HTTP ${response.status}.`,
           latencyMs,
         };
       }
-      // Validate the body actually looks like a model list.
+      // Validate the body actually looks like a model list (or valid /key probe response).
       const body: unknown = await response.json().catch(() => undefined);
-      const looksLikeModels =
-        !!body &&
-        typeof body === "object" &&
-        (Array.isArray((body as { data?: unknown }).data) ||
-          Array.isArray((body as { models?: unknown }).models) ||
-          Array.isArray(body));
-      if (!looksLikeModels) {
-        return {
-          state: "unavailable",
-          message: "Endpoint reachable but did not return a model list.",
-          latencyMs,
-        };
+      if (probePath === "/key") {
+        if (!body || typeof body !== "object") {
+          return {
+            state: "unavailable",
+            message: "Endpoint reachable but did not return a valid response.",
+            latencyMs,
+          };
+        }
+      } else {
+        const looksLikeModels =
+          !!body &&
+          typeof body === "object" &&
+          (Array.isArray((body as { data?: unknown }).data) ||
+            Array.isArray((body as { models?: unknown }).models) ||
+            Array.isArray(body));
+        if (!looksLikeModels) {
+          return {
+            state: "unavailable",
+            message:
+              providerId === "gemini"
+                ? "Could not reach Gemini. Check your network connection."
+                : "Endpoint reachable but did not return a model list.",
+            latencyMs,
+          };
+        }
       }
       return {
         state: "connected",
-        message: "Connected.",
+        message: providerId === "gemini" ? "Gemini Connected" : "Connected.",
         latencyMs,
       };
     } catch (err) {
@@ -403,10 +609,19 @@ export class ProviderService implements vscode.Disposable {
       if (/time.?out|abort/i.test(msg)) {
         return {
           state: "unavailable",
-          message: "Provider did not respond in time.",
+          message:
+            providerId === "gemini"
+              ? "Could not reach Gemini. Check your network connection."
+              : "Provider did not respond in time.",
         };
       }
-      return { state: "unavailable", message: `Network error: ${msg}` };
+      return {
+        state: "unavailable",
+        message:
+          providerId === "gemini"
+            ? "Could not reach Gemini. Check your network connection."
+            : `Network error: ${msg}`,
+      };
     }
   }
 
@@ -459,7 +674,10 @@ export class ProviderService implements vscode.Disposable {
           ...base,
           state,
           connected: state === "connected",
-          ...(result.message !== "Connected." ? { detail: result.message } : {}),
+          ...(result.message !== "Connected." &&
+          result.message !== "Gemini Connected"
+            ? { detail: result.message }
+            : {}),
           ...(result.latencyMs !== undefined
             ? { latencyMs: result.latencyMs }
             : {}),
@@ -467,6 +685,272 @@ export class ProviderService implements vscode.Disposable {
         };
       }),
     );
+  }
+
+  // ------------------------------------------------------------------
+  // Inference probe (chat-completions round trip)
+  // ------------------------------------------------------------------
+
+  /**
+   * Probe a provider with a real bounded chat-completions request.
+   *
+   * Unlike testConnection (catalogue `/models` reachability), this verifies
+   * the full inference path: credentials + endpoint + model + a minimal
+   * non-streaming completion with strict response-shape validation. A bare
+   * HTTP 2xx is NEVER reported as success — error envelopes, missing
+   * choices, reasoning-only payloads, empty content, and non-JSON bodies
+   * are all explicit failures. Exactly one request is issued (no retries:
+   * auth failures must surface immediately). Never throws; results are
+   * secret-free (only the Authorization header's presence is structural,
+   * its value never inspected, logged, or returned).
+   */
+  async testInference(
+    providerId: string,
+    modelId: string,
+    opts?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<InferenceProbeResult> {
+    const provider = getCatalogProvider(providerId);
+    if (!provider || !isSupportedProviderId(providerId)) {
+      return { state: "failed", message: "Unsupported provider." };
+    }
+    if (!modelId || modelId.trim().length === 0) {
+      return { state: "failed", message: "Model id is required." };
+    }
+    const base = this.effectiveBaseUrl(providerId);
+    // Local Only FIRST: the refusal is the honest reason no request was made.
+    const policy = this.requestPolicy(providerId);
+    // Missing credential is also request-free, so the more actionable verdict
+    // wins: with no key there is provably nothing to send, in any mode.
+    const apiKey = await this.getCredential(providerId);
+    if (provider.requiresApiKey && !apiKey) {
+      return {
+        state: "auth-failed",
+        modelId,
+        message: "API key required before testing inference.",
+      };
+    }
+    if (!policy.allowed) {
+      // Verdict is "blocked", not "failed": nothing was sent, so the provider
+      // was never actually tested and the UI must not show it as broken.
+      return { state: "blocked", message: policy.reason ?? "Blocked." };
+    }
+    if (!base) {
+      return {
+        state: "failed",
+        message: "No base URL configured for this provider.",
+      };
+    }
+
+    const probeUrl = `${base.replace(/\/+$/, "")}/chat/completions`;
+    const started = Date.now();
+    const timeoutMs = opts?.timeoutMs ?? 8_000;
+    let response: Response;
+    try {
+      const effectiveSignal =
+        AbortSignal.any?.([
+          AbortSignal.timeout(timeoutMs),
+          ...(opts?.signal ? [opts.signal] : []),
+        ]) ?? AbortSignal.timeout(timeoutMs);
+      response = await fetch(probeUrl, {
+        method: "POST",
+        signal: effectiveSignal,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 16,
+        }),
+        redirect: policy.redirect,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/abort|cancel/i.test(msg)) {
+        return {
+          state: "failed",
+          modelId,
+          message: "Inference probe cancelled.",
+        };
+      }
+      if (/time.?out/i.test(msg)) {
+        return {
+          state: "failed",
+          modelId,
+          message: "Provider did not respond in time.",
+        };
+      }
+      return { state: "failed", modelId, message: `Network error: ${msg}` };
+    }
+    const latencyMs = Date.now() - started;
+
+    // Local Only never follows a redirect off the machine; an attempted
+    // escape is a policy block, not a provider verdict.
+    if (
+      policy.redirect === "manual" &&
+      response.status >= 300 &&
+      response.status < 400
+    ) {
+      return {
+        state: "blocked",
+        modelId,
+        message: redirectRefusal(providerId),
+        latencyMs,
+      };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return {
+        state: "auth-failed",
+        modelId,
+        message: "Provider rejected the credential (HTTP 401/403).",
+        latencyMs,
+      };
+    }
+    if (response.status === 503) {
+      return {
+        state: "failed",
+        modelId,
+        message:
+          providerId === "gemini"
+            ? "Gemini is temporarily busy. Try again shortly or select another available model."
+            : "Provider is temporarily unavailable (HTTP 503).",
+        latencyMs,
+      };
+    }
+    if (!response.ok) {
+      return {
+        state: "failed",
+        modelId,
+        message: `Provider responded HTTP ${response.status}.`,
+        latencyMs,
+      };
+    }
+
+    let body: unknown;
+    try {
+      const text = await response.text();
+      body = JSON.parse(text);
+    } catch {
+      return {
+        state: "failed",
+        modelId,
+        message: "Provider returned a non-JSON response.",
+        latencyMs,
+      };
+    }
+    if (!body || typeof body !== "object") {
+      return {
+        state: "failed",
+        modelId,
+        message: "Provider returned a non-JSON response.",
+        latencyMs,
+      };
+    }
+    const envelope = body as {
+      error?: unknown;
+      choices?: unknown;
+      content?: unknown;
+    };
+    if (envelope.error !== undefined) {
+      const detail =
+        typeof envelope.error === "object" && envelope.error !== null
+          ? String(
+              (envelope.error as { message?: unknown }).message ??
+                JSON.stringify(envelope.error).slice(0, 200),
+            )
+          : String(envelope.error);
+      return {
+        state: "failed",
+        modelId,
+        message: `Provider error: ${detail.slice(0, 200)}`,
+        latencyMs,
+      };
+    }
+    if (!Array.isArray(envelope.choices)) {
+      // Legacy content-array shape ({ content: [{ text }] }).
+      if (Array.isArray(envelope.content)) {
+        const first = (envelope.content as Array<{ text?: unknown }>)[0];
+        if (
+          first &&
+          typeof first.text === "string" &&
+          first.text.trim().length > 0
+        ) {
+          return {
+            state: "success",
+            modelId,
+            message: "Model response received.",
+            latencyMs,
+          };
+        }
+      }
+      return {
+        state: "failed",
+        modelId,
+        message: "Provider returned no completion choices.",
+        latencyMs,
+      };
+    }
+    if (envelope.choices.length === 0) {
+      return {
+        state: "failed",
+        modelId,
+        message: "Provider returned no completion choices.",
+        latencyMs,
+      };
+    }
+    const first = envelope.choices[0] as
+      | {
+          message?: {
+            content?: unknown;
+            reasoning_content?: unknown;
+            reasoning?: unknown;
+          };
+          text?: unknown;
+        }
+      | undefined;
+    const message = first?.message;
+    const text =
+      typeof message?.content === "string"
+        ? message.content
+        : typeof first?.text === "string"
+          ? first.text
+          : undefined;
+    if (text === undefined) {
+      if (
+        message &&
+        typeof message === "object" &&
+        ("reasoning_content" in message || "reasoning" in message)
+      ) {
+        return {
+          state: "failed",
+          modelId,
+          message: "Provider returned reasoning without message content.",
+          latencyMs,
+        };
+      }
+      return {
+        state: "failed",
+        modelId,
+        message: "Provider returned no completion choices.",
+        latencyMs,
+      };
+    }
+    if (text.trim().length === 0) {
+      return {
+        state: "failed",
+        modelId,
+        message: "Provider returned empty content.",
+        latencyMs,
+      };
+    }
+    return {
+      state: "success",
+      modelId,
+      message: "Model response received.",
+      latencyMs,
+    };
   }
 
   /**
@@ -521,17 +1005,24 @@ export class ProviderService implements vscode.Disposable {
    */
   async getUsage(
     providerId: string,
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
   ): Promise<ProviderUsageSnapshot> {
     const provider = getCatalogProvider(providerId);
-    if (!provider) {
-      return { providerId, kind: "none", error: "Unknown provider." };
+    if (!provider || !isSupportedProviderId(providerId)) {
+      return { providerId, kind: "none", error: "Unsupported provider." };
     }
     const snapshot: ProviderUsageSnapshot = {
       providerId,
       kind: provider.usage.kind,
       billingPortalUrl: provider.usage.billingPortalUrl,
     };
+
+    // Local Only: refuse BEFORE any probe leaves the machine.
+    const policy = this.requestPolicy(providerId);
+    if (!policy.allowed) {
+      return { ...snapshot, error: policy.reason ?? "Blocked." };
+    }
+
     if (provider.usage.kind !== "provider-api") return snapshot;
 
     const apiKey = await this.getCredential(providerId);
@@ -541,61 +1032,7 @@ export class ProviderService implements vscode.Disposable {
         error: "API key required to fetch provider usage.",
       };
     }
-    // OpenRouter: GET /api/v1/credits — documented usage endpoint.
-    if (providerId === "openrouter") {
-      const base =
-        this.effectiveBaseUrl(providerId) ?? "https://openrouter.ai/api/v1";
-      try {
-        const effectiveSignal =
-          AbortSignal.any?.([
-            AbortSignal.timeout(8_000),
-            ...(signal ? [signal] : []),
-          ]) ?? AbortSignal.timeout(8_000);
-        const creditsUrl = new URL("/api/v1/credits", base).toString();
-        const response = await fetch(creditsUrl, {
-          signal: effectiveSignal,
-          headers: { Authorization: `Bearer ${apiKey}` },
-        });
-        if (!response.ok) {
-          return {
-            ...snapshot,
-            error: `Usage endpoint returned HTTP ${response.status}.`,
-          };
-        }
-        const body = (await response.json()) as {
-          data?: {
-            total_credits?: number;
-            total_usage?: number;
-          };
-        };
-        const totalCredits = body.data?.total_credits;
-        const totalUsage = body.data?.total_usage;
-        if (typeof totalCredits !== "number") {
-          return {
-            ...snapshot,
-            error: "Usage endpoint returned an unexpected shape.",
-          };
-        }
-        return {
-          ...snapshot,
-          usage: {
-            usedUsd: typeof totalUsage === "number" ? totalUsage : undefined,
-            limitUsd: totalCredits,
-            remainingUsd:
-              typeof totalUsage === "number"
-                ? Math.round((totalCredits - totalUsage) * 1e6) / 1e6
-                : undefined,
-          },
-        };
-      } catch (err) {
-        return {
-          ...snapshot,
-          error: `Usage fetch failed: ${
-            err instanceof Error ? err.message : "network error"
-          }`,
-        };
-      }
-    }
+
     return snapshot;
   }
 }
@@ -614,10 +1051,12 @@ export class ProviderPreferenceStore implements vscode.Disposable {
   dispose(): void {}
 
   favorites(): string[] {
-    return this.state.get<string[]>(FAVORITES_KEY) ?? [];
+    const raw = this.state.get<string[]>(FAVORITES_KEY) ?? [];
+    return raw.filter((id) => isSupportedProviderId(id));
   }
 
   toggleFavorite(providerId: string): boolean {
+    if (!isSupportedProviderId(providerId)) return false;
     const current = this.favorites();
     const next = current.includes(providerId)
       ? current.filter((id) => id !== providerId)
@@ -627,10 +1066,12 @@ export class ProviderPreferenceStore implements vscode.Disposable {
   }
 
   recent(): string[] {
-    return this.state.get<string[]>(RECENT_KEY) ?? [];
+    const raw = this.state.get<string[]>(RECENT_KEY) ?? [];
+    return raw.filter((id) => isSupportedProviderId(id));
   }
 
   noteUsed(providerId: string): void {
+    if (!isSupportedProviderId(providerId)) return;
     const next = [
       providerId,
       ...this.recent().filter((id) => id !== providerId),

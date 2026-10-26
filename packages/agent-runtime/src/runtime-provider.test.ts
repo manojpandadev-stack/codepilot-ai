@@ -50,6 +50,7 @@ function makeRuntime(modelId: string): CodePilotRuntime {
     providerId: "ollama",
     modelId,
     agentMode: "act",
+    onWriteProposal: async () => ({ changeSetId: "cs-test" }),
     // Tests play the permission pipeline: the gate path itself is covered
     // by M4 suites; here tools must reach execution.
     requestApproval: async () => ({ approved: true }),

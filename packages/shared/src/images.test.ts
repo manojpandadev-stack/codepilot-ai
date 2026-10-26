@@ -22,12 +22,15 @@ function bytesOf(arr: number[]): Uint8Array {
 
 /** Minimal PNG: signature + IHDR + tEXt (metadata) + IDAT + IEND. */
 function pngWithText(): Uint8Array {
-  const out: number[] = [
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  ];
+  const out: number[] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const chunk = (type: string, data: number[]) => {
     const len = data.length;
-    out.push((len >>> 24) & 0xff, (len >>> 16) & 0xff, (len >>> 8) & 0xff, len & 0xff);
+    out.push(
+      (len >>> 24) & 0xff,
+      (len >>> 16) & 0xff,
+      (len >>> 8) & 0xff,
+      len & 0xff,
+    );
     for (const c of type) out.push(c.charCodeAt(0));
     out.push(...data);
     out.push(0xde, 0xad, 0xbe, 0xef); // CRC unchecked by the stripper
@@ -49,24 +52,58 @@ function jpegWithExif(): Uint8Array {
     ...data,
   ];
   return bytesOf([
-    0xff, 0xd8,
+    0xff,
+    0xd8,
     ...seg(0xe1, [69, 120, 105, 102, 0, 0, 71, 80, 83]), // APP1 "Exif..GPS"
     ...seg(0xdb, [1, 2, 3]), // DQT (kept)
     ...seg(0xc0, [4, 5, 6]), // SOF0 (kept)
     ...seg(0xda, [7, 8]), // SOS (kept, rest verbatim)
-    0xaa, 0xbb,
-    0xff, 0xd9,
+    0xaa,
+    0xbb,
+    0xff,
+    0xd9,
   ]);
 }
 
 /** Minimal GIF89a with a comment extension. */
 function gifWithComment(): Uint8Array {
   return bytesOf([
-    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
-    0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // LSD, no GCT
-    0x21, 0xfe, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00, // comment "hello"
-    0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // descriptor
-    0x02, 0x01, 0x44, 0x00, // image data
+    0x47,
+    0x49,
+    0x46,
+    0x38,
+    0x39,
+    0x61, // GIF89a
+    0x01,
+    0x00,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x00, // LSD, no GCT
+    0x21,
+    0xfe,
+    0x05,
+    0x68,
+    0x65,
+    0x6c,
+    0x6c,
+    0x6f,
+    0x00, // comment "hello"
+    0x2c,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x00,
+    0x01,
+    0x00,
+    0x00, // descriptor
+    0x02,
+    0x01,
+    0x44,
+    0x00, // image data
     0x3b, // trailer
   ]);
 }
@@ -75,7 +112,12 @@ function gifWithComment(): Uint8Array {
 function webpWithExif(): Uint8Array {
   const chunk = (type: string, data: number[]) => {
     const out = [...type].map((c) => c.charCodeAt(0));
-    out.push(data.length & 0xff, (data.length >>> 8) & 0xff, (data.length >>> 16) & 0xff, (data.length >>> 24) & 0xff);
+    out.push(
+      data.length & 0xff,
+      (data.length >>> 8) & 0xff,
+      (data.length >>> 16) & 0xff,
+      (data.length >>> 24) & 0xff,
+    );
     out.push(...data);
     if (data.length % 2 === 1) out.push(0);
     return out;
@@ -85,9 +127,18 @@ function webpWithExif(): Uint8Array {
   const body = [...chunk("VP8 ", vp8), ...chunk("EXIF", exif)];
   const total = 4 + body.length; // "WEBP" + chunks
   return bytesOf([
-    0x52, 0x49, 0x46, 0x46,
-    total & 0xff, (total >>> 8) & 0xff, (total >>> 16) & 0xff, (total >>> 24) & 0xff,
-    0x57, 0x45, 0x42, 0x50,
+    0x52,
+    0x49,
+    0x46,
+    0x46,
+    total & 0xff,
+    (total >>> 8) & 0xff,
+    (total >>> 16) & 0xff,
+    (total >>> 24) & 0xff,
+    0x57,
+    0x45,
+    0x42,
+    0x50,
     ...body,
   ]);
 }

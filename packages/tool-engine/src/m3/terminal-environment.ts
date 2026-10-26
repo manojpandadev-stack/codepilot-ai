@@ -65,9 +65,7 @@ export function wslTerminalEnvironment(distro?: string): TerminalEnvironment {
         distro !== undefined
           ? ["-d", distro, invocation.command, ...invocation.args]
           : [invocation.command, ...invocation.args],
-      ...(invocation.input !== undefined
-        ? { input: invocation.input }
-        : {}),
+      ...(invocation.input !== undefined ? { input: invocation.input } : {}),
     }),
   };
 }

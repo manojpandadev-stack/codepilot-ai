@@ -156,7 +156,7 @@ describe("M12 v2 — verbatim resume runtime behavior", () => {
 describe("isRemoteProvider — remote/local classification", () => {
   it("classifies local runtimes as local", () => {
     expect(isRemoteProvider("ollama")).toBe(false);
-    expect(isRemoteProvider("lmstudio")).toBe(false);
+    expect(isRemoteProvider("ollama", "http://localhost:11434")).toBe(false);
   });
 
   it("classifies cloud/gateway catalogue providers as remote", () => {
@@ -189,29 +189,25 @@ describe("D/E: atomic provider switch via updateConfig", () => {
       privacyMode: "cloud",
     });
     try {
-      // Atomic switch: OpenRouter config arrives as ONE patch.
+      // Atomic switch: OpenAI config arrives as ONE patch.
       rt.updateConfig({
-        providerId: "openrouter",
-        modelId: "deepseek/deepseek-chat-v3.1:free",
-        apiKey: "sk-or-test-123",
-        baseUrl: "https://openrouter.ai/api/v1",
+        providerId: "openai-native",
+        modelId: "gpt-4o",
+        apiKey: "sk-openai-test-123",
+        baseUrl: "https://api.openai.com/v1",
       });
 
       await rt.startSession("hello");
 
-      // The wire proves atomicity: OpenRouter endpoint + new model + new
+      // The wire proves atomicity: OpenAI endpoint + new model + new
       // key, and the stale Ollama loopback URL is gone entirely.
       const chats = chatCompletionRequests(stub);
       expect(chats.length).toBeGreaterThan(0);
-      expect(chats[0]!.url).toBe(
-        "https://openrouter.ai/api/v1/chat/completions",
-      );
+      expect(chats[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
       const body = chats[0]!.body as Record<string, unknown>;
-      expect(body["model"]).toBe("deepseek/deepseek-chat-v3.1:free");
+      expect(body["model"]).toBe("gpt-4o");
       const headers = (chats[0]!.headers ?? {}) as Record<string, string>;
-      expect(headers["Authorization"]).toBe("Bearer sk-or-test-123");
-      // OpenRouter attribution headers travel with the request.
-      expect(headers["HTTP-Referer"]).toContain("github.com");
+      expect(headers["Authorization"]).toBe("Bearer sk-openai-test-123");
       for (const r of stub.requests) {
         expect(r.url).not.toContain("localhost:11434");
       }
@@ -327,7 +323,7 @@ describe("G: privacy guard — cloud provider + local privacy mode", () => {
   });
 
   it("blocks ALL remote providers under local privacy, not just OpenAI", async () => {
-    for (const providerId of ["anthropic", "openrouter", "gemini"]) {
+    for (const providerId of ["gemini", "openai-native"]) {
       stub = stubOllamaFetch([]);
       const rt = await makeStartedRuntime({
         providerId,
@@ -403,21 +399,21 @@ describe("guard re-evaluation per session", () => {
       // First session: local — allowed.
       await expect(rt.startSession("local task")).resolves.toBeTruthy();
 
-      // Mid-session switch to OpenRouter (user clicked a different provider).
+      // Mid-session switch to OpenAI (user clicked a different provider).
       rt.updateConfig({
-        providerId: "openrouter",
-        modelId: "deepseek/deepseek-chat-v3.1:free",
-        apiKey: "sk-or-x",
-        baseUrl: "https://openrouter.ai/api/v1",
+        providerId: "openai-native",
+        modelId: "gpt-4o",
+        apiKey: "sk-openai-x",
+        baseUrl: "https://api.openai.com/v1",
       });
 
       // Next session must be blocked — the switch cannot silently go cloud.
       await expect(rt.startSession("next task")).rejects.toMatchObject({
         message: expect.stringMatching(/privacy/i),
       });
-      // The blocked start never reached the OpenRouter endpoint.
+      // The blocked start never reached the OpenAI endpoint.
       for (const r of stub.requests) {
-        expect(r.url).not.toContain("openrouter.ai");
+        expect(r.url).not.toContain("api.openai.com");
       }
     } finally {
       await rt.dispose();

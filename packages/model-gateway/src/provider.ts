@@ -63,6 +63,16 @@ export interface DiscoveredModel {
   sizeBytes: number | null;
   /** ISO timestamp or epoch ms from the provider's model metadata. */
   lastModified: string | null;
+  /** Optional model description from provider metadata. */
+  description?: string;
+  /** Optional tri-state tool calling support from provider metadata. */
+  toolCalling?: "true" | "false" | "unknown";
+  /** Optional provenance of toolCalling support flag. */
+  toolsProvenance?: "metadata" | "catalogue" | "inferred";
+  /** Pricing per million input tokens, in USD. */
+  inputPerMtok?: number;
+  /** Pricing per million output tokens, in USD. */
+  outputPerMtok?: number;
 }
 
 // ============================================================================
@@ -117,10 +127,11 @@ export interface NormalizedProviderError {
 
 export type ProviderType =
   | "ollama"
-  | "openai-compatible"
+  | "openai-native"
   | "openai"
-  | "anthropic"
   | "gemini"
+  | "openai-compatible"
+  | "anthropic"
   | "bedrock"
   | "custom";
 
@@ -143,6 +154,17 @@ export interface ProviderConfig {
   defaultModelId?: string;
   /** Request timeout in milliseconds. Default: 120 000. */
   timeoutMs?: number;
+  /**
+   * `fetch` redirect mode for provider requests.
+   *
+   * `"manual"` makes the provider surface a 3xx instead of following it, which
+   * is what a Local Only privacy policy requires: the policy can only validate
+   * the CONFIGURED endpoint, so following `302 Location: https://…` would send
+   * the request (and the stored credential) to a destination that was never
+   * inspected. Defaults to `"follow"` to preserve existing behaviour for
+   * providers that legitimately redirect.
+   */
+  redirect?: "follow" | "manual";
   /** Whether this provider is enabled in the registry. */
   enabled: boolean;
   /**

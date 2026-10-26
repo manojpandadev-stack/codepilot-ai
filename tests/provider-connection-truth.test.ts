@@ -48,61 +48,52 @@ beforeEach(() => {
 describe("CONNECTION — cloud configured ≠ connected (BUG 1 root cause)", () => {
   it("1. valid cloud endpoint + valid key → connectionState() reports connected", async () => {
     const svc = makeService();
-    svc.setConfig("openai-compatible", {
-      baseUrl: "https://api.example.com/v1",
-    });
-    inMemorySecrets.set("codepilot.apiKey.openai-compatible", "good-key");
+    inMemorySecrets.set("codepilot.apiKey.openai-native", "good-key");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => jsonResponse({ data: [{ id: "gpt" }] })) as unknown as typeof fetch,
+      vi.fn(async () => jsonResponse({ data: [{ id: "gpt-4o" }] })) as unknown as typeof fetch,
     );
-    const entry = await svc.connectionState("openai-compatible");
+    const entry = await svc.connectionState("openai-native");
     expect(entry.state).toBe("connected");
     expect(entry.connected).toBe(true);
   });
 
   it("2. invalid API key → auth-invalid (never connected)", async () => {
     const svc = makeService();
-    svc.setConfig("openai-compatible", {
-      baseUrl: "https://api.example.com/v1",
-    });
-    inMemorySecrets.set("codepilot.apiKey.openai-compatible", "bad-key");
+    inMemorySecrets.set("codepilot.apiKey.openai-native", "bad-key");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse({ error: "invalid" }, 401)) as unknown as typeof fetch,
     );
-    const entry = await svc.connectionState("openai-compatible");
+    const entry = await svc.connectionState("openai-native");
     expect(entry.state).toBe("auth-invalid");
     expect(entry.connected).toBe(false);
   });
 
   it("3. unreachable endpoint → unavailable (never connected)", async () => {
     const svc = makeService();
-    svc.setConfig("openai-compatible", {
-      baseUrl: "https://api.example.com/v1",
-    });
-    inMemorySecrets.set("codepilot.apiKey.openai-compatible", "any-key");
+    inMemorySecrets.set("codepilot.apiKey.openai-native", "any-key");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         throw new TypeError("fetch failed");
       }) as unknown as typeof fetch,
     );
-    const entry = await svc.connectionState("openai-compatible");
+    const entry = await svc.connectionState("openai-native");
     expect(entry.state).toBe("unavailable");
     expect(entry.connected).toBe(false);
   });
 
   it("4. valid credential, no successful probe → configured/unverified (never connected)", async () => {
     const svc = makeService();
-    inMemorySecrets.set("codepilot.apiKey.openrouter", "present-but-unprobed");
+    inMemorySecrets.set("codepilot.apiKey.openai-native", "present-but-unprobed");
     // List path: static, no network.
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [] }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const states = await svc.listConnectionStates();
-    const openrouter = states.find((s) => s.id === "openrouter");
-    expect(openrouter?.state).toBe("configured");
-    expect(openrouter?.connected).toBe(false);
+    const openai = states.find((s) => s.id === "openai-native");
+    expect(openai?.state).toBe("configured");
+    expect(openai?.connected).toBe(false);
     // No CLOUD endpoint was probed on the list path (local probes allowed).
     const urls = fetchMock.mock.calls.map((c) => String(c[0]));
     expect(urls.filter((u) => !u.includes("localhost"))).toEqual([]);
@@ -114,7 +105,7 @@ describe("CONNECTION — cloud configured ≠ connected (BUG 1 root cause)", () 
         throw new TypeError("fetch failed");
       }) as unknown as typeof fetch,
     );
-    const probed = await svc.connectionState("openrouter");
+    const probed = await svc.connectionState("openai-native");
     expect(probed.connected).toBe(false);
     expect(["configured", "unavailable", "unverified"]).toContain(probed.state);
   });
@@ -148,8 +139,8 @@ describe("CONNECTION — selection isolation and staleness (BUG 1)", () => {
   it("7+8. provider switch isolation: each provider's verdict is its own; selected state is fresh-probed", async () => {
     const svc = makeService();
     svc.setConfig("ollama", { baseUrl: "http://localhost:11434" });
-    svc.setConfig("lmstudio", { baseUrl: "http://localhost:1234/v1" });
-    // Ollama up, LM Studio down: verdicts must never cross, regardless of
+    inMemorySecrets.set("codepilot.apiKey.openai-native", "key");
+    // Ollama up, OpenAI probe down: verdicts must never cross, regardless of
     // which provider is "selected" (the service takes no selection input).
     const fetchMock = vi.fn<typeof fetch>(
       async (input: string | URL | Request) => {
@@ -157,7 +148,7 @@ describe("CONNECTION — selection isolation and staleness (BUG 1)", () => {
         if (url.endsWith("/api/tags")) {
           return jsonResponse({ models: [{ name: "qwen3:8b" }] });
         }
-        throw new TypeError("connect ECONNREFUSED 127.0.0.1:1234");
+        throw new TypeError("network failed");
       },
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -165,13 +156,13 @@ describe("CONNECTION — selection isolation and staleness (BUG 1)", () => {
     const states = await svc.listConnectionStates();
     const byId = new Map(states.map((s) => [s.id, s]));
     expect(byId.get("ollama")?.state).toBe("connected");
-    expect(byId.get("lmstudio")?.state).toBe("unavailable");
+    expect(byId.get("openai-native")?.state).toBe("configured");
 
     // The selected-provider verdict is derived ONLY from that provider's own
     // probe — never borrowed from another entry.
-    const lmSelected = await svc.connectionState("lmstudio");
-    expect(lmSelected.id).toBe("lmstudio");
-    expect(lmSelected.state).toBe("unavailable");
+    const openaiSelected = await svc.connectionState("openai-native");
+    expect(openaiSelected.id).toBe("openai-native");
+    expect(openaiSelected.state).toBe("unavailable");
   });
 
   it("9. stale health never leaks: header derivation prefers the fresh selected verdict and maps typed states honestly", () => {
@@ -246,15 +237,12 @@ describe("CONNECTION — selection isolation and staleness (BUG 1)", () => {
 describe("CONNECTION — rate-limited and error-shape honesty", () => {
   it("rate-limited probe (429) → rate-limited state, never connected", async () => {
     const svc = makeService();
-    svc.setConfig("openai-compatible", {
-      baseUrl: "https://api.example.com/v1",
-    });
-    inMemorySecrets.set("codepilot.apiKey.openai-compatible", "key");
+    inMemorySecrets.set("codepilot.apiKey.openai-native", "key");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse({ error: "slow down" }, 429)) as unknown as typeof fetch,
     );
-    const entry = await svc.connectionState("openai-compatible");
+    const entry = await svc.connectionState("openai-native");
     expect(entry.state).toBe("rate-limited");
     expect(entry.connected).toBe(false);
   });

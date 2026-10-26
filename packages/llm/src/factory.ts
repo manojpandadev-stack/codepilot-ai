@@ -10,20 +10,8 @@
 
 import type { LlmProvider, LlmProviderOptions } from "./types.js";
 import { OllamaProvider, OLLAMA_DEFAULT_BASE_URL } from "./providers/ollama.js";
-import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 import { OpenAIProvider, OPENAI_DEFAULT_BASE_URL } from "./providers/openai.js";
-import {
-  OpenRouterProvider,
-  OPENROUTER_DEFAULT_BASE_URL,
-} from "./providers/openrouter.js";
-import {
-  AnthropicProvider,
-  ANTHROPIC_DEFAULT_BASE_URL,
-} from "./providers/anthropic.js";
 import { GoogleProvider, GOOGLE_DEFAULT_BASE_URL } from "./providers/google.js";
-
-export const LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1";
-export const ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/paas/v4";
 
 /** Normalize legacy/alias CodePilot provider ids to canonical adapter ids. */
 export function normalizeProviderId(providerId: string): string {
@@ -42,18 +30,10 @@ export function defaultBaseUrlFor(canonicalId: string): string | undefined {
   switch (canonicalId) {
     case "ollama":
       return OLLAMA_DEFAULT_BASE_URL;
-    case "lmstudio":
-      return LMSTUDIO_DEFAULT_BASE_URL;
     case "openai-native":
       return OPENAI_DEFAULT_BASE_URL;
-    case "anthropic":
-      return ANTHROPIC_DEFAULT_BASE_URL;
     case "gemini":
       return GOOGLE_DEFAULT_BASE_URL;
-    case "openrouter":
-      return OPENROUTER_DEFAULT_BASE_URL;
-    case "zai":
-      return ZAI_DEFAULT_BASE_URL;
     default:
       return undefined;
   }
@@ -69,29 +49,13 @@ export function createLlmProvider(options: LlmProviderOptions): LlmProvider {
   switch (canonical) {
     case "ollama":
       return new OllamaProvider(resolved);
-    case "lmstudio":
-      return new OpenAICompatibleProvider(resolved);
     case "openai-native":
       return new OpenAIProvider(resolved);
-    case "anthropic":
-      return new AnthropicProvider(resolved);
     case "gemini":
       return new GoogleProvider(resolved);
-    case "openrouter":
-      return new OpenRouterProvider(resolved);
-    case "zai":
-    case "openai-compatible":
-    case "custom":
-      if (!resolved.baseUrl) {
-        throw new Error(`provider "${canonical}" requires an explicit baseUrl`);
-      }
-      return new OpenAICompatibleProvider(resolved);
     default:
-      if (!resolved.baseUrl) {
-        throw new Error(
-          `unknown provider "${options.providerId}" requires an explicit baseUrl (fail-closed)`,
-        );
-      }
-      return new OpenAICompatibleProvider(resolved);
+      throw new Error(
+        `Unsupported provider "${options.providerId}". CodePilot supports only OpenAI, Gemini, and Ollama.`,
+      );
   }
 }

@@ -520,6 +520,95 @@ describe("GoogleProvider", () => {
       outputTokens: 6,
     });
   });
+
+  it("labels a structured 503 (code/status) as temporarily busy", async () => {
+    const lines = [
+      `data: ${JSON.stringify({
+        error: {
+          code: 503,
+          status: "UNAVAILABLE",
+          message: "The service is currently unavailable.",
+        },
+      })}`,
+    ];
+    const { GoogleProvider } = await import("./providers/google.js");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sseStream(lines), { status: 200 })),
+    );
+    const provider = new GoogleProvider({
+      providerId: "gemini",
+      modelId: "gemini-2.5-flash",
+      apiKey: "test-key",
+    });
+    const chunks = await collect(
+      provider.completeStream({ messages: [{ role: "user", content: "go" }] }),
+    );
+    expect(chunks[chunks.length - 1]).toMatchObject({
+      type: "done",
+      success: false,
+      error:
+        "Gemini is temporarily busy. Try again shortly or select another available model.",
+    });
+  });
+
+  it("does NOT relabel a 400 whose text merely contains 'unavailable'", async () => {
+    const original =
+      "GenerateContentRequest.tools[0].function_declarations[0].parameters: property 'foo' is unavailable in this region";
+    const lines = [
+      `data: ${JSON.stringify({
+        error: { code: 400, status: "INVALID_ARGUMENT", message: original },
+      })}`,
+    ];
+    const { GoogleProvider } = await import("./providers/google.js");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sseStream(lines), { status: 200 })),
+    );
+    const provider = new GoogleProvider({
+      providerId: "gemini",
+      modelId: "gemini-2.5-flash",
+      apiKey: "test-key",
+    });
+    const chunks = await collect(
+      provider.completeStream({ messages: [{ role: "user", content: "go" }] }),
+    );
+    const terminal = chunks[chunks.length - 1];
+    expect(terminal).toMatchObject({ type: "done", success: false });
+    expect((terminal as { error?: string }).error).toBe(original);
+    expect((terminal as { error?: string }).error).not.toContain(
+      "temporarily busy",
+    );
+  });
+
+  it("does NOT relabel a 429 whose text merely contains 'high demand'", async () => {
+    const original =
+      "Quota exceeded for quota metric 'GenerateContent Requests': the service is experiencing high demand, retry with backoff";
+    const lines = [
+      `data: ${JSON.stringify({
+        error: { code: 429, status: "RESOURCE_EXHAUSTED", message: original },
+      })}`,
+    ];
+    const { GoogleProvider } = await import("./providers/google.js");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sseStream(lines), { status: 200 })),
+    );
+    const provider = new GoogleProvider({
+      providerId: "gemini",
+      modelId: "gemini-2.5-flash",
+      apiKey: "test-key",
+    });
+    const chunks = await collect(
+      provider.completeStream({ messages: [{ role: "user", content: "go" }] }),
+    );
+    const terminal = chunks[chunks.length - 1];
+    expect(terminal).toMatchObject({ type: "done", success: false });
+    expect((terminal as { error?: string }).error).toBe(original);
+    expect((terminal as { error?: string }).error).not.toContain(
+      "temporarily busy",
+    );
+  });
 });
 
 describe("createLlmProvider", () => {
@@ -533,15 +622,16 @@ describe("createLlmProvider", () => {
   it("fails closed for unknown providers without a base url", async () => {
     expect(() =>
       createLlmProvider({ providerId: "mystery", modelId: "m" }),
-    ).toThrow(/explicit baseUrl/);
+    ).toThrow(/Unsupported provider "mystery"/);
   });
 
-  it("routes unknown providers with a base url to compatible", async () => {
-    const p = createLlmProvider({
-      providerId: "mystery",
-      modelId: "m",
-      baseUrl: "https://example.test/v1",
-    });
-    expect(p.providerId).toBe("mystery");
+  it("fails closed for unknown providers even with a base url", async () => {
+    expect(() =>
+      createLlmProvider({
+        providerId: "mystery",
+        modelId: "m",
+        baseUrl: "https://example.test/v1",
+      }),
+    ).toThrow(/Unsupported provider "mystery"/);
   });
 });

@@ -26,5 +26,9 @@ export default defineConfig({
     ],
     passWithNoTests: true,
     testTimeout: 30_000,
+    // The integration suite starts real browsers, shells, and persistence
+    // stress workloads. Unbounded worker fan-out starves those tests on
+    // developer machines and causes avoidable timeout flakes.
+    maxWorkers: 4,
   },
 });

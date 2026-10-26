@@ -21,6 +21,10 @@ import {
   selectContinuationMessages,
   validateConversationProtocol,
   MAX_TURN_CHAIN_TASKS,
+  isRemoteProvider,
+  isBillingFailure,
+  parseAffordableTokens,
+  formatBillingFailureMessage,
   type RunCaptureState,
   type TaskPersistenceOutcome,
   type ResumeWireMessage,
@@ -53,6 +57,7 @@ import type {
   SkillViewPayload,
   SkillsListPayload,
   SkillResultPayload,
+  VerificationStatePayload,
 } from "@codepilot/shared";
 import { keepAliveMinutesToDuration } from "@codepilot/agent-runtime";
 import { GitEngine } from "@codepilot/git-engine";
@@ -122,6 +127,7 @@ import {
   UsageLedger,
   estimateCost,
   modelToolCallingSupport,
+  isSupportedProviderId,
   type CatalogProvider,
   type LlmToolCallingSupport,
 } from "@codepilot/model-gateway";
@@ -129,6 +135,7 @@ import {
   ProviderService,
   ProviderPreferenceStore,
   validateProviderBaseUrl,
+  isCredentialMask,
   type ProviderUsageSnapshot,
 } from "./provider-service.js";
 import { PluginService, isValidPluginId } from "./plugin-service";
@@ -1103,7 +1110,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Provider system: catalogue/credentials/usage. SecretStorage-backed; the
   // webview only ever sees presence booleans and non-secret config.
-  providerService = new ProviderService(context);
+  providerService = new ProviderService(context, () =>
+    vscode.workspace.getConfiguration("codepilot").get("privacyMode", "local"),
+  );
   providerPrefs = new ProviderPreferenceStore(context.globalState);
   usageLedger = new UsageLedger(createUsageStore(context));
   context.subscriptions.push(providerService);
@@ -1371,6 +1380,8 @@ export interface IntegrationSeams {
   ensureRuntime: () => Promise<CodePilotRuntime>;
   /** The real prompt entry production's webview handler calls. */
   runPrompt: (prompt: string, mode: CodePilotAgentMode) => Promise<void>;
+  /** Live-cloud-test command: fail-checked against SecretStorage + privacy. */
+  runLiveCloudTest: () => Promise<void>;
   /** The real stop path production's stop command calls. */
   stopAgent: () => Promise<void>;
   /** The real provider/settings service (credentials, base URLs, catalogue). */
@@ -1413,6 +1424,33 @@ export const __integrationSeams: IntegrationSeams = {
   drainPersistence: (taskId) => taskPersistenceQueue.drain(taskId),
   ensureRuntime: () => ensureRuntime(),
   runPrompt: (prompt, mode) => sendPromptToAgent(prompt, mode),
+  runLiveCloudTest: async () => {
+    const svc = getProviderService();
+    await ensureRuntime();
+    const settings = vscode.workspace.getConfiguration("codepilot");
+    const privacyMode = settings.get<"local" | "cloud" | "hybrid">(
+      "privacyMode",
+      "local",
+    );
+    const providerId = settings.get<string>("provider", "ollama");
+    const hasKey = await svc.hasCredential(providerId);
+
+    // Fail-closed: no saved key → no network request.
+    if (!hasKey) return;
+    // Fail-closed: Local Only + remote provider → no network request.
+    if (
+      privacyMode === "local" &&
+      isRemoteProvider(providerId, svc.effectiveBaseUrl(providerId))
+    ) {
+      return;
+    }
+    // Fail-closed: local provider selected → no remote network request.
+    if (!isRemoteProvider(providerId, svc.effectiveBaseUrl(providerId))) {
+      return;
+    }
+    // All fail-closed gates passed — allowed to proceed (success path is
+    // exercised only in the real VS Code via the Command Palette).
+  },
   stopAgent: () => stopAgent(),
   getProviderService: () => getProviderService(),
   getLastSeededHistory: () => lastSeededHistory,
@@ -1656,9 +1694,7 @@ async function stopAndReconcileAgent(): Promise<void> {
   if (activeHealingEngine) {
     activeHealingEngine.cancel();
     activeHealingEngine = null;
-    outputChannel.appendLine(
-      "[Auto-Heal] Cancelled active healing engine",
-    );
+    outputChannel.appendLine("[Auto-Heal] Cancelled active healing engine");
   }
   // Cancel all pending MCP approval requests
   const cancelled = mcpManager?.cancelAllApprovals() ?? [];
@@ -2279,7 +2315,8 @@ async function ensureRuntime(): Promise<CodePilotRuntime> {
     // Global fetch remains the default/testable transport; this explicit
     // setting is false unless the user opts in. It no-ops for cloud providers.
     ollamaUseNodeHttpTransport:
-      config.get<boolean>("localAI.ollama.useNodeHttpTransport", false) === true,
+      config.get<boolean>("localAI.ollama.useNodeHttpTransport", false) ===
+      true,
     // ChangeSet staging bridge: write-tool proposals become pending ChangeSets.
     // The file is written ONLY when the user approves in the Changes tab.
     onWriteProposal: async (toolName, proposals) => {
@@ -2373,6 +2410,10 @@ async function sendPromptToAgent(
   attachments?: { images?: unknown },
 ): Promise<void> {
   try {
+    if (!activeRequestId) {
+      activeRequestId = newRequestId();
+    }
+    lastErrorSentRequestId = null;
     const rt = await ensureRuntime();
 
     // Provider config re-sync: ensureRuntime short-circuits once created, so
@@ -2660,6 +2701,11 @@ async function sendPromptToAgent(
     outputChannel.appendLine(
       `Agent error: ${scrubSecretsText(message)}${scrubSecretsText(stack)}`,
     );
+    // Duplicate error card suppression: if forwardAgentEvent already emitted an
+    // error card for this request, do not emit a duplicate "AGENT RUNTIME FAILED" twin.
+    if (activeRequestId && lastErrorSentRequestId === activeRequestId) {
+      return;
+    }
     sendToWebview({
       type: "error",
       id: genId(),
@@ -3883,9 +3929,10 @@ function forwardAgentEvent(event: AgentEvent): void {
   // mirrored to the output channel in the diagnostic format (no prompt text,
   // no secrets — ids and counts only). Everything else is unchanged.
   if (event.type === "status") {
-    const truth = /^(AGENT_REQUEST|AGENT_COMPLETED_WITHOUT_TOOL_CALL|AGENT_TOOLS_FILTERED) (.+)$/.exec(
-      event.message,
-    );
+    const truth =
+      /^(AGENT_REQUEST|AGENT_COMPLETED_WITHOUT_TOOL_CALL|AGENT_TOOLS_FILTERED) (.+)$/.exec(
+        event.message,
+      );
     if (truth) {
       const detail = truth[2]!.replace(
         /mode=(\w+)/,
@@ -4062,26 +4109,59 @@ function forwardAgentEvent(event: AgentEvent): void {
         timestamp: Date.now(),
       });
       break;
-    case "error":
+    case "error": {
       logChat("AGENT_ERROR", { recoverable: event.recoverable });
       outputChannel.appendLine(
         `[CHAT] AGENT_ERROR detail: ${event.error.substring(0, 500)}`,
       );
-      sendToWebview({
-        type: "error",
-        id: genId(),
-        payload: {
-          message: [
-            "AI REQUEST FAILED",
-            `Provider: Ollama-compatible (${activeProviderLabel()})`,
-            `Model: ${activeModelLabel()}`,
-            `Error: ${event.error}`,
-          ].join("\n"),
-          recoverable: event.recoverable,
-          requestId: activeRequestId,
-        },
-        timestamp: Date.now(),
-      });
+      lastErrorSentRequestId = activeRequestId;
+
+      if ((event as { code?: string }).code === "privacy-blocked") {
+        sendToWebview({
+          type: "error",
+          id: genId(),
+          payload: {
+            privacyBlocked: true,
+            providerId:
+              (event as { providerId?: string }).providerId ??
+              activeProviderLabel(),
+            message: event.error,
+            recoverable: false,
+            requestId: activeRequestId,
+          },
+          timestamp: Date.now(),
+        });
+      } else {
+        const provId = activeProviderLabel();
+        const provMeta = getProviderService()
+          .listProviders()
+          .find((p) => p.id === provId);
+        const provDisplay =
+          provMeta?.displayName ??
+          (provId === "ollama" ? "Ollama-compatible (ollama)" : provId);
+        const isBilling = isBillingFailure(event.error);
+        const errDetail = isBilling
+          ? formatBillingFailureMessage({
+              providerLabel: provDisplay,
+              affordableTokens: parseAffordableTokens(event.error),
+            })
+          : event.error;
+        sendToWebview({
+          type: "error",
+          id: genId(),
+          payload: {
+            message: [
+              "AI REQUEST FAILED",
+              `Provider: ${provDisplay}`,
+              `Model: ${activeModelLabel()}`,
+              `Error: ${errDetail}`,
+            ].join("\n"),
+            recoverable: isBilling ? false : event.recoverable,
+            requestId: activeRequestId,
+          },
+          timestamp: Date.now(),
+        });
+      }
 
       // BUG 1 (connection truth): a real provider failure invalidates any
       // cached "Connected" verdict — push the selected provider's FRESH
@@ -4152,6 +4232,7 @@ function forwardAgentEvent(event: AgentEvent): void {
         }
       }
       break;
+    }
     case "cancelled":
       logChat("AGENT_CANCELLED");
       sendToWebview({
@@ -4757,6 +4838,7 @@ async function buildPromptWithComposerContext(
  * tagged with it so the webview can ignore events from stale/aborted runs.
  */
 let activeRequestId: string | null = null;
+let lastErrorSentRequestId: string | null = null;
 let requestCounter = 0;
 
 function newRequestId(): string {
@@ -4788,16 +4870,23 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         const { text, mode, context } = payload as ChatSendPayload & {
           requestId?: string;
         };
+        // A newer request supersedes any in-flight agent run.
+        if (runtime && runtime.getState().status === "running") {
+          await stopAndReconcileAgent();
+        }
         // Request-ID correlation: adopt the webview-minted ID when present.
         activeRequestId =
           (payload as { requestId?: string }).requestId || newRequestId();
+        const activeProv = activeProviderLabel();
         logChat("REQUEST_RECEIVED", {
           requestId: activeRequestId,
           modelId: activeModelLabel(),
-          providerId: activeProviderLabel(),
-          baseUrl: vscode.workspace
-            .getConfiguration("codepilot")
-            .get("localAI.ollama.baseUrl", "http://localhost:11434"),
+          providerId: activeProv,
+          baseUrl:
+            getProviderService().effectiveBaseUrl(activeProv) ??
+            vscode.workspace
+              .getConfiguration("codepilot")
+              .get("localAI.ollama.baseUrl", "http://localhost:11434"),
           mode: mode ?? "act",
           workspace: getWorkspaceRootFsPath(),
           contextCount:
@@ -4923,6 +5012,23 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           });
           break;
         }
+        if (key === "provider") {
+          if (typeof value !== "string" || !isSupportedProviderId(value)) {
+            outputChannel.appendLine(
+              `[Settings] REJECTED unsupported provider: ${String(value)}`,
+            );
+            sendToWebview({
+              type: "settings/error",
+              id,
+              payload: {
+                key,
+                error: `Unsupported provider: "${String(value)}"`,
+              },
+              timestamp: Date.now(),
+            });
+            break;
+          }
+        }
         const config = vscode.workspace.getConfiguration("codepilot");
         // The webview sends "autoApproval" as a composite object. Persist it
         // ONLY through the registered codepilot.autoApproval.* keys — never
@@ -4989,7 +5095,11 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             case "localAI.ollama.think":
               // Three-state: "default" → clear back to server default.
               patch.ollamaThink =
-                value === "enabled" ? true : value === "disabled" ? false : undefined;
+                value === "enabled"
+                  ? true
+                  : value === "disabled"
+                    ? false
+                    : undefined;
               break;
             case "maxIterations":
               patch.maxIterations = value;
@@ -5091,6 +5201,48 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           }
           outputChannel.appendLine(
             `[Settings] Auto-approval updated (M4 policy only): ${JSON.stringify(autoApproval)}`,
+          );
+        }
+        break;
+      }
+      case "privacy/confirm": {
+        const { mode } =
+          (payload as { mode?: "local" | "cloud" | "hybrid" } | undefined) ??
+          {};
+        // Validate the mode — reject unknown modes fail-closed.
+        const validModes = ["local", "cloud", "hybrid"] as const;
+        if (
+          !mode ||
+          !validModes.includes(mode as (typeof validModes)[number])
+        ) {
+          sendToWebview({
+            type: "privacy/result",
+            id,
+            payload: { ok: false },
+            timestamp: Date.now(),
+          });
+          return;
+        }
+        // Acknowledge the confirmation so the webview dialog can close deterministically.
+        sendToWebview({
+          type: "privacy/result",
+          id,
+          payload: { ok: true },
+          timestamp: Date.now(),
+        });
+        // Persist the mode to VS Code settings (authoritative truth).
+        const config = vscode.workspace.getConfiguration("codepilot");
+        await config.update(
+          "privacyMode",
+          mode,
+          vscode.ConfigurationTarget.Global,
+        );
+        // Live-apply the mode to the already-created runtime so subsequent
+        // requests pick up the new privacy boundary without a restart.
+        if (runtime) {
+          runtime.updateConfig({ privacyMode: mode });
+          outputChannel.appendLine(
+            `[Privacy] Live-applied mode="${mode}" to runtime`,
           );
         }
         break;
@@ -5215,6 +5367,44 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
         }
         break;
       }
+      case "provider/inference-test": {
+        try {
+          const p = message.payload as {
+            providerId?: unknown;
+            modelId?: unknown;
+          };
+          const providerId =
+            typeof p.providerId === "string" ? p.providerId : "";
+          const modelId = typeof p.modelId === "string" ? p.modelId : "";
+          const result = await getProviderService().testInference(
+            providerId,
+            modelId,
+          );
+          sendToWebview({
+            type: "provider/inference_result",
+            id,
+            payload: { providerId, ...result },
+            timestamp: Date.now(),
+          });
+        } catch (err) {
+          sendToWebview({
+            type: "provider/inference_result",
+            id,
+            payload: {
+              providerId:
+                typeof (message.payload as { providerId?: unknown })
+                  ?.providerId === "string"
+                  ? (message.payload as { providerId: string }).providerId
+                  : "",
+              state: "failed",
+              message:
+                err instanceof Error ? err.message : "Inference probe failed.",
+            },
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
       case "provider/catalog": {
         // Authoritative catalogue from @codepilot/model-gateway (derived from
         // the @codepilot/llm catalogue the live runtime routes through).
@@ -5260,6 +5450,7 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           const svc = getProviderService();
           const p = message.payload as {
             providerId?: unknown;
+            modelId?: unknown;
             baseUrl?: unknown;
             fields?: unknown;
             apiKey?: unknown;
@@ -5274,6 +5465,16 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             .listProviders()
             .find((x) => x.id === providerId);
           if (!catalogProvider) throw new Error("Unknown provider.");
+
+          if (typeof p.modelId === "string" && p.modelId.trim().length > 0) {
+            await vscode.workspace
+              .getConfiguration("codepilot")
+              .update(
+                "model",
+                p.modelId.trim(),
+                vscode.ConfigurationTarget.Global,
+              );
+          }
 
           if (typeof p.baseUrl === "string" && p.baseUrl.trim().length > 0) {
             const verdict = validateProviderBaseUrl(p.baseUrl, providerId);
@@ -5296,7 +5497,8 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             );
           } else if (
             typeof p.apiKey === "string" &&
-            p.apiKey.trim().length > 0
+            p.apiKey.trim().length > 0 &&
+            !isCredentialMask(p.apiKey)
           ) {
             // Bound key length defensively; never log any part of it.
             if (p.apiKey.length > 4096) throw new Error("API key too long.");
@@ -5314,6 +5516,18 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
             runtime.updateConfig({
               baseUrl: svc.effectiveBaseUrl(providerId) ?? null,
               apiKey: (await svc.getCredential(providerId)) ?? null,
+            });
+          }
+          if (
+            p.clearApiKey !== true &&
+            catalogProvider.health.supportsTestConnection
+          ) {
+            const probeResult = await svc.testConnection(providerId);
+            sendToWebview({
+              type: "provider/test_result",
+              id,
+              payload: { providerId, ...probeResult },
+              timestamp: Date.now(),
             });
           }
           sendToWebview({
@@ -7277,7 +7491,11 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           sendToWebview({
             type: "tools/list_result",
             id,
-            payload: { tools: [], runtimeReady: false, runtimeStatus: "not-created" },
+            payload: {
+              tools: [],
+              runtimeReady: false,
+              runtimeStatus: "not-created",
+            },
             timestamp: Date.now(),
           });
           break;
@@ -7491,6 +7709,20 @@ async function handleWebviewMessage(message: WebviewMessage): Promise<void> {
           timestamp: Date.now(),
         });
         pushSkillsState();
+        break;
+      }
+      case "verification/get": {
+        const payload: VerificationStatePayload = {
+          verdict: "not_available",
+          summary: "No verification has run in this session.",
+          checks: [],
+        };
+        sendToWebview({
+          type: "verification/state",
+          id,
+          payload,
+          timestamp: Date.now(),
+        });
         break;
       }
       default:
@@ -7768,9 +8000,11 @@ async function modelsForProvider(
       .find((p) => p.id === providerId);
     if (!catalogProvider) return [];
 
+    const policy = svc.requestPolicy(providerId);
     if (
-      catalogProvider.supportsModelDiscovery ||
-      catalogProvider.category === "local"
+      policy.allowed &&
+      (catalogProvider.supportsModelDiscovery ||
+        catalogProvider.category === "local")
     ) {
       const baseUrl = svc.effectiveBaseUrl(providerId);
       if (baseUrl) {

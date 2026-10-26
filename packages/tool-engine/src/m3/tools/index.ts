@@ -10,6 +10,7 @@ import { createDirectoryTools } from "./directory.js";
 import { createGitTools } from "./git.js";
 import { createAskUserTool } from "./interaction.js";
 import { createCommandTools, TerminalStore } from "./command.js";
+import { createWebFetchTool } from "./web-fetch.js";
 
 /**
  * Options for building the CodePilot built-in tool set.
@@ -43,6 +44,10 @@ export function createBuiltinTools(
     ...createGitTools(boundary, service),
     createAskUserTool(),
     ...createCommandTools(boundary, service, policy, store),
+    // Network capability — registered here so it is governed by the same
+    // ToolRegistry/M4 pipeline as every other tool. Its execution still goes
+    // through the SSRF-guarded `webFetch` in @codepilot/context-engine.
+    createWebFetchTool(),
   ] as ToolDefinition[];
 }
 

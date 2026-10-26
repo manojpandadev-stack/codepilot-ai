@@ -62,7 +62,10 @@ describe("tool display contract — integrity", () => {
 
   it("known alias pairs resolve to the callable name", () => {
     expect(byName("search").callableName).toBe("search_codebase");
-    expect(byName("web_fetch").callableName).toBe("fetch_web_content");
+    // `web_fetch` is the canonical SSRF-guarded callable; `fetch_web_content`
+// remains a backward-compatible alias with its own row.
+expect(byName("web_fetch").callableName).toBe("web_fetch");
+expect(byName("fetch_web_content").callableName).toBe("fetch_web_content");
     expect(byName("write_file").callableName).toBe("editor");
     expect(byName("read_files").callableName).toBe("read_files");
     expect(byName("bash").callableName).toBe("bash");
@@ -87,14 +90,27 @@ describe("tool display contract — coverage", () => {
   });
 
   it("all-enabled factory output equals the canonical tool set", () => {
+    // Fail-closed privacy: the full set (including network tools) requires
+    // an explicit non-local privacy context — never a missing one.
+    const names = createCodePilotBuiltinTools({
+      cwd: process.cwd(),
+      enableBash: true,
+      enableWebFetch: true,
+      privacyMode: "cloud",
+    }).map((t) => t.name);
+    expect([...names].sort()).toEqual(
+      [...CODEPILOT_MODEL_TOOL_NAMES].sort(),
+    );
+  });
+
+  it("factory without privacy context suppresses network tools (fail-closed)", () => {
     const names = createCodePilotBuiltinTools({
       cwd: process.cwd(),
       enableBash: true,
       enableWebFetch: true,
     }).map((t) => t.name);
-    expect([...names].sort()).toEqual(
-      [...CODEPILOT_MODEL_TOOL_NAMES].sort(),
-    );
+    expect(names).not.toContain("fetch_web_content");
+    expect(names).not.toContain("web_search");
   });
 });
 

@@ -234,6 +234,33 @@ describe("Security Validation", () => {
       const result = commandValidator.validate("");
       expect(result.allowed).toBe(false);
     });
+
+    // The ACTUAL enforcement boundary for commands in the agent runtime is
+    // `PolicyEngine.checkPermission` inside CodePilotRuntime.buildGate —
+    // it runs BEFORE the M4 approval card is ever presented, so a
+    // blocked-pattern command is refused outright (an approval cannot
+    // override it) on every tool with an execute-category policy.
+    it("runtime gate boundary: blocked-pattern command for bash is refused by checkPermission (act mode)", () => {
+      const denied = policyEngine.checkPermission("bash", {
+        command: "rm -rf /",
+      });
+      expect(denied.enabled).toBe(false);
+      expect(denied.autoApprove).toBe(false);
+    });
+
+    it("runtime gate boundary: the `cmd` alias is validated too", () => {
+      const denied = policyEngine.checkPermission("run_commands", {
+        cmd: "sudo apt install vim",
+      });
+      expect(denied.enabled).toBe(false);
+    });
+
+    it("runtime gate boundary: a safe command passes the gate unchanged", () => {
+      const allowed = policyEngine.checkPermission("bash", {
+        command: "echo hi",
+      });
+      expect(allowed.enabled).toBe(true);
+    });
   });
 
   // ============================================================================

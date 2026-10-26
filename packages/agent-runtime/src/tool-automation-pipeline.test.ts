@@ -23,10 +23,7 @@
  * M4 approval acceptance/rejection is exercised further in Phase 10.
  */
 import { describe, expect, it, vi } from "vitest";
-import {
-  OllamaLlmProvider,
-  toOllamaMessages,
-} from "./native/llm/ollama.js";
+import { OllamaLlmProvider, toOllamaMessages } from "./native/llm/ollama.js";
 import {
   LlmError,
   type LlmProvider,
@@ -38,8 +35,15 @@ import {
   dispatchToolCall,
   type ToolGate,
 } from "./native/engine/tool-dispatch.js";
-import { runAgentLoop, type AgentLoopEvent } from "./native/engine/agent-loop.js";
-import { createTool, type AgentMessage, type AgentTool } from "./native/types.js";
+import {
+  runAgentLoop,
+  type AgentLoopEvent,
+} from "./native/engine/agent-loop.js";
+import {
+  createTool,
+  type AgentMessage,
+  type AgentTool,
+} from "./native/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,9 +80,7 @@ function readFilesTool(impl?: AgentTool["execute"]): AgentTool {
       },
       required: ["files"],
     },
-    execute:
-      impl ??
-      (async () => "FILE CONTENT HI"),
+    execute: impl ?? (async () => "FILE CONTENT HI"),
   });
 }
 
@@ -113,7 +115,10 @@ class ScriptedProvider implements LlmProvider {
   }
 }
 
-const toolCallEvent = (toolName: string, args: Record<string, unknown>): LlmStreamEvent => ({
+const toolCallEvent = (
+  toolName: string,
+  args: Record<string, unknown>,
+): LlmStreamEvent => ({
   type: "tool-call",
   call: call(toolName, args),
 });
@@ -132,17 +137,22 @@ const blocksOf = (m: AgentMessage): Array<Record<string, unknown>> =>
 describe("Phase 5 — Ollama request serialization", () => {
   it("serializes tools to {type:'function', function:{name,description,parameters}} in the /api/chat body", async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    const fetchImpl = vi.fn(async (_input: unknown, init?: { body?: string }) => {
-      bodies.push(JSON.parse(init?.body ?? "{}") as Record<string, unknown>);
-      return okChatResponse([
-        { message: { role: "assistant", content: "ok" }, done: false },
-        { message: { role: "assistant", content: "" }, done: true },
-      ]);
-    }) as unknown as typeof fetch;
+    const fetchImpl = vi.fn(
+      async (_input: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? "{}") as Record<string, unknown>);
+        return okChatResponse([
+          { message: { role: "assistant", content: "ok" }, done: false },
+          { message: { role: "assistant", content: "" }, done: true },
+        ]);
+      },
+    ) as unknown as typeof fetch;
 
     const toolA = readFilesTool();
     const toolB = bashTool();
-    const provider = new OllamaLlmProvider({ baseUrl: "http://127.0.0.1:11434", fetchImpl });
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://127.0.0.1:11434",
+      fetchImpl,
+    });
     const events: LlmStreamEvent[] = [];
     for await (const evt of provider.stream({
       providerId: "ollama",
@@ -179,7 +189,10 @@ describe("Phase 5 — Ollama request serialization", () => {
         },
       },
     ]);
-    expect(events[events.length - 1]).toEqual({ type: "finish", reason: "complete" });
+    expect(events[events.length - 1]).toEqual({
+      type: "finish",
+      reason: "complete",
+    });
   });
 
   it("toOllamaMessages maps tool_use/tool_result protocol to assistant.tool_calls + role:'tool' (error prefix included)", () => {
@@ -189,19 +202,35 @@ describe("Phase 5 — Ollama request serialization", () => {
         role: "assistant",
         content: [
           { type: "text", text: "let me read it" },
-          { type: "tool_use", id: "call_1", name: "read_files", input: { files: [{ path: "a.txt" }] } },
+          {
+            type: "tool_use",
+            id: "call_1",
+            name: "read_files",
+            input: { files: [{ path: "a.txt" }] },
+          },
         ],
       },
       {
         role: "user",
         content: [
-          { type: "tool_result", tool_use_id: "call_1", name: "read_files", content: "FILE BODY" },
+          {
+            type: "tool_result",
+            tool_use_id: "call_1",
+            name: "read_files",
+            content: "FILE BODY",
+          },
         ],
       },
       {
         role: "user",
         content: [
-          { type: "tool_result", tool_use_id: "call_2", name: "bash", content: "boom", is_error: true },
+          {
+            type: "tool_result",
+            tool_use_id: "call_2",
+            name: "bash",
+            content: "boom",
+            is_error: true,
+          },
         ],
       },
     ] as AgentMessage[]);
@@ -211,7 +240,12 @@ describe("Phase 5 — Ollama request serialization", () => {
       role: "assistant",
       content: "let me read it",
       tool_calls: [
-        { function: { name: "read_files", arguments: { files: [{ path: "a.txt" }] } } },
+        {
+          function: {
+            name: "read_files",
+            arguments: { files: [{ path: "a.txt" }] },
+          },
+        },
       ],
     });
     expect(wire[2]).toEqual({ role: "tool", content: "FILE BODY" });
@@ -248,12 +282,22 @@ describe("Phase 6 — Ollama NDJSON streaming tool calls", () => {
             role: "assistant",
             content: "",
             tool_calls: [
-              { function: { name: "read_files", arguments: { files: [{ path: "package.json" }] } } },
+              {
+                function: {
+                  name: "read_files",
+                  arguments: { files: [{ path: "package.json" }] },
+                },
+              },
             ],
           },
           done: false,
         },
-        { message: { role: "assistant", content: "" }, done: true, prompt_eval_count: 12, eval_count: 34 },
+        {
+          message: { role: "assistant", content: "" },
+          done: true,
+          prompt_eval_count: 12,
+          eval_count: 34,
+        },
       ]),
     ) as unknown as typeof fetch;
     const provider = new OllamaLlmProvider({ fetchImpl });
@@ -263,49 +307,79 @@ describe("Phase 6 — Ollama NDJSON streaming tool calls", () => {
     expect(toolEvents).toHaveLength(1);
     const tc = toolEvents[0] as { call: LlmToolCall };
     expect(tc.call.toolName).toBe("read_files");
-    expect(tc.call.argumentsText).toBe(JSON.stringify({ files: [{ path: "package.json" }] }));
+    expect(tc.call.argumentsText).toBe(
+      JSON.stringify({ files: [{ path: "package.json" }] }),
+    );
     expect(tc.call.toolCallId).toMatch(/^call_/);
     const usage = events.find((e) => e.type === "usage") as {
       usage: { inputTokens: number; outputTokens: number };
     };
     expect(usage.usage.inputTokens).toBe(12);
     expect(usage.usage.outputTokens).toBe(34);
-    expect(events[events.length - 1]).toEqual({ type: "finish", reason: "complete" });
+    expect(events[events.length - 1]).toEqual({
+      type: "finish",
+      reason: "complete",
+    });
   });
 
   it("string arguments, multiple calls, thinking + content are ALL forwarded (nothing dropped)", async () => {
     const fetchImpl = vi.fn(async () =>
       okChatResponse([
-        { message: { role: "assistant", thinking: "hmm", content: "let me look" }, done: false },
+        {
+          message: {
+            role: "assistant",
+            thinking: "hmm",
+            content: "let me look",
+          },
+          done: false,
+        },
         {
           message: {
             role: "assistant",
             content: "",
             tool_calls: [
-              { function: { name: "read_files", arguments: '{"files":[{"path":"a.txt"}]}' } },
+              {
+                function: {
+                  name: "read_files",
+                  arguments: '{"files":[{"path":"a.txt"}]}',
+                },
+              },
               { function: { name: "bash", arguments: { command: "ls" } } },
             ],
           },
           done: false,
         },
-        { message: { role: "assistant", content: "" }, done: true, eval_count: 7 },
+        {
+          message: { role: "assistant", content: "" },
+          done: true,
+          eval_count: 7,
+        },
       ]),
     ) as unknown as typeof fetch;
     const provider = new OllamaLlmProvider({ fetchImpl });
 
-    const events = await drain(provider, { tools: [readFilesTool(), bashTool()] });
+    const events = await drain(provider, {
+      tools: [readFilesTool(), bashTool()],
+    });
     const types = events.map((e) => e.type);
     expect(types).toContain("reasoning-delta");
     expect(events.filter((e) => e.type === "text-delta")).toHaveLength(1);
-    const calls = events.filter((e) => e.type === "tool-call") as Array<{ call: LlmToolCall }>;
+    const calls = events.filter((e) => e.type === "tool-call") as Array<{
+      call: LlmToolCall;
+    }>;
     expect(calls).toHaveLength(2);
     // String arguments preserved VERBATIM (no re-serialization drift).
     expect(calls[0]!.call.toolName).toBe("read_files");
     expect(calls[0]!.call.argumentsText).toBe('{"files":[{"path":"a.txt"}]}');
     // Object arguments canonicalized to JSON text.
     expect(calls[1]!.call.toolName).toBe("bash");
-    expect(calls[1]!.call.argumentsText).toBe(JSON.stringify({ command: "ls" }));
-    expect(events[events.length - 1]).toEqual({ type: "finish", reason: "complete" });
+    expect(calls[1]!.call.argumentsText).toBe(
+      JSON.stringify({ command: "ls" }),
+    );
+    expect(events[events.length - 1]).toEqual({
+      type: "finish",
+      reason: "complete",
+    });
   });
 
   it("malformed NDJSON line is tolerated; the stream continues to the valid call", async () => {
@@ -315,17 +389,24 @@ describe("Phase 6 — Ollama NDJSON streaming tool calls", () => {
         message: {
           role: "assistant",
           content: "",
-          tool_calls: [{ function: { name: "read_files", arguments: { files: [] } } }],
+          tool_calls: [
+            { function: { name: "read_files", arguments: { files: [] } } },
+          ],
         },
         done: false,
       }) +
       ndjson({ message: { role: "assistant", content: "" }, done: true });
-    const fetchImpl = vi.fn(async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+    const fetchImpl = vi.fn(
+      async () => new Response(body, { status: 200 }),
+    ) as unknown as typeof fetch;
     const provider = new OllamaLlmProvider({ fetchImpl });
 
     const events = await drain(provider, { tools: [readFilesTool()] });
     expect(events.filter((e) => e.type === "tool-call")).toHaveLength(1);
-    expect(events[events.length - 1]).toEqual({ type: "finish", reason: "complete" });
+    expect(events[events.length - 1]).toEqual({
+      type: "finish",
+      reason: "complete",
+    });
   });
 
   it("an `error` line surfaces as finish(error) — never a fake completion", async () => {
@@ -335,7 +416,11 @@ describe("Phase 6 — Ollama NDJSON streaming tool calls", () => {
     const provider = new OllamaLlmProvider({ fetchImpl });
 
     const events = await drain(provider, {});
-    const last = events[events.length - 1] as { type: string; reason?: string; error?: string };
+    const last = events[events.length - 1] as {
+      type: string;
+      reason?: string;
+      error?: string;
+    };
     expect(last.type).toBe("finish");
     expect(last.reason).toBe("error");
     expect(last.error).toContain("model exploded");
@@ -435,7 +520,10 @@ describe("Phase 7 — tool dispatcher is deny-closed", () => {
       timeoutMs: 30,
       execute: (_input, toolCtx) =>
         new Promise((_resolve, reject) => {
-          const t = setTimeout(() => reject(new Error("should have been aborted")), 10_000);
+          const t = setTimeout(
+            () => reject(new Error("should have been aborted")),
+            10_000,
+          );
           toolCtx.signal?.addEventListener(
             "abort",
             () => {
@@ -446,11 +534,169 @@ describe("Phase 7 — tool dispatcher is deny-closed", () => {
           );
         }),
     });
-    const outcome = await dispatchToolCall(slow, call("slow", {}), approveAll, ctx);
+    const outcome = await dispatchToolCall(
+      slow,
+      call("slow", {}),
+      approveAll,
+      ctx,
+    );
     expect(outcome.isError).toBe(true);
     expect(outcome.denied).toBe(false);
     expect(outcome.content).toContain("failed");
     expect(outcome.durationMs).toBeLessThan(5_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7b — HARD DEADLINE: timeout settles non-cooperative tools too
+// ---------------------------------------------------------------------------
+
+describe("Phase 7 — hard execution deadline (timeout never hangs dispatch)", () => {
+  const ctx = { sessionId: "s1", iteration: 1 };
+
+  it("a never-resolving tool that IGNORES its signal becomes a structured timeout failure", async () => {
+    const started = Date.now();
+    const hung = createTool({
+      name: "hung",
+      description: "never settles and ignores the abort signal",
+      inputSchema: { type: "object" },
+      timeoutMs: 30,
+      // Deliberately ignores toolCtx.signal and never resolves/rejects.
+      execute: () => new Promise(() => {}),
+    });
+    const outcome = await dispatchToolCall(
+      hung,
+      call("hung", {}),
+      approveAll,
+      ctx,
+    );
+    expect(outcome.denied).toBe(false);
+    expect(outcome.isError).toBe(true);
+    expect(outcome.content).toContain("hung");
+    expect(outcome.content).toContain("timed out after 30ms");
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("a cooperative timeout still receives the abort signal before failing", async () => {
+    let signalSeen = false;
+    const cooperative = createTool({
+      name: "cooperative",
+      description: "rejects when its signal aborts",
+      inputSchema: { type: "object" },
+      timeoutMs: 30,
+      execute: (_input, toolCtx) =>
+        new Promise((_resolve, reject) => {
+          toolCtx.signal?.addEventListener(
+            "abort",
+            () => {
+              signalSeen = true;
+              reject(new Error("aborted by tool signal"));
+            },
+            { once: true },
+          );
+        }),
+    });
+    const outcome = await dispatchToolCall(
+      cooperative,
+      call("cooperative", {}),
+      approveAll,
+      ctx,
+    );
+    expect(signalSeen).toBe(true); // abort propagation preserved
+    expect(outcome.isError).toBe(true);
+    expect(outcome.content).toContain("failed");
+    expect(outcome.denied).toBe(false);
+  });
+
+  it("successful completion well before the timeout returns the result untouched", async () => {
+    const fast = createTool({
+      name: "fast",
+      description: "settles quickly",
+      inputSchema: { type: "object" },
+      timeoutMs: 5_000,
+      execute: async () => "quick result",
+    });
+    const outcome = await dispatchToolCall(
+      fast,
+      call("fast", {}),
+      approveAll,
+      ctx,
+    );
+    expect(outcome.isError).toBe(false);
+    expect(outcome.denied).toBe(false);
+    expect(outcome.content).toBe("quick result");
+  });
+
+  it("tool rejection becomes a structured failure carrying the tool's message", async () => {
+    const failing = createTool({
+      name: "failing",
+      description: "rejects with a real error",
+      inputSchema: { type: "object" },
+      timeoutMs: 5_000,
+      execute: async () => {
+        throw new Error("disk on fire");
+      },
+    });
+    const outcome = await dispatchToolCall(
+      failing,
+      call("failing", {}),
+      approveAll,
+      ctx,
+    );
+    expect(outcome.isError).toBe(true);
+    expect(outcome.denied).toBe(false);
+    expect(outcome.content).toContain("disk on fire");
+  });
+
+  it("external cancellation during execution throws AbortError (propagates to the loop)", async () => {
+    const controller = new AbortController();
+    const stubborn = createTool({
+      name: "stubborn",
+      description: "keeps running until the outer run is cancelled",
+      inputSchema: { type: "object" },
+      timeoutMs: 10_000,
+      execute: () => new Promise(() => {}),
+    });
+    const pending = dispatchToolCall(
+      stubborn,
+      call("stubborn", {}),
+      approveAll,
+      {
+        sessionId: "s1",
+        iteration: 1,
+        signal: controller.signal,
+      },
+    );
+    setTimeout(() => controller.abort(), 20);
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("a rejection that lands AFTER the deadline won is never an unhandled rejection", async () => {
+    let lateReject!: (err: Error) => void;
+    const late = createTool({
+      name: "late",
+      description: "rejects long after the deadline fired",
+      inputSchema: { type: "object" },
+      timeoutMs: 30,
+      execute: () =>
+        new Promise<void>((_resolve, reject) => {
+          lateReject = reject;
+        }),
+    });
+    const outcome = await dispatchToolCall(
+      late,
+      call("late", {}),
+      approveAll,
+      ctx,
+    );
+    expect(outcome.isError).toBe(true);
+    expect(outcome.content).toContain("timed out after 30ms");
+    // Fire the losing side's rejection AFTER the race already settled.
+    lateReject(new Error("too late"));
+    await new Promise((r) => setTimeout(r, 50));
+    // Vitest fails the run on any unhandled rejection — reaching this line
+    // with the process healthy is the assertion.
+    expect(true).toBe(true);
   });
 });
 
@@ -463,7 +709,15 @@ describe("Phase 8 — tool result returned to the model", () => {
     const provider = new ScriptedProvider();
     provider.pushTurn([
       toolCallEvent("read_files", { files: [{ path: "planner.txt" }] }),
-      { type: "usage", usage: { inputTokens: 5, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      {
+        type: "usage",
+        usage: {
+          inputTokens: 5,
+          outputTokens: 6,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
       finishOk(),
     ]);
     provider.pushTurn([
@@ -489,7 +743,9 @@ describe("Phase 8 — tool result returned to the model", () => {
 
     // Loop events: exactly one started + one completed with the tool's output.
     const started = events.filter((e) => e.type === "tool_started");
-    const completed = events.filter((e) => e.type === "tool_completed") as Array<{
+    const completed = events.filter(
+      (e) => e.type === "tool_completed",
+    ) as Array<{
       output: string;
       isError: boolean;
     }>;
@@ -501,16 +757,24 @@ describe("Phase 8 — tool result returned to the model", () => {
     // Protocol invariant: assistant tool_use paired with tool_result in the
     // FOLLOWING user message of the transcript.
     const toolUseMsg = messages.find(
-      (m) => m.role === "assistant" && blocksOf(m).some((b) => b.type === "tool_use"),
+      (m) =>
+        m.role === "assistant" &&
+        blocksOf(m).some((b) => b.type === "tool_use"),
     );
     const toolResultMsg = messages.find(
-      (m) => m.role === "user" && blocksOf(m).some((b) => b.type === "tool_result"),
+      (m) =>
+        m.role === "user" && blocksOf(m).some((b) => b.type === "tool_result"),
     );
     expect(toolUseMsg).toBeDefined();
     expect(toolResultMsg).toBeDefined();
     const useBlock = blocksOf(toolUseMsg!).find((b) => b.type === "tool_use");
-    const resultBlock = blocksOf(toolResultMsg!).find((b) => b.type === "tool_result");
-    expect(useBlock).toMatchObject({ id: expect.any(String), name: "read_files" });
+    const resultBlock = blocksOf(toolResultMsg!).find(
+      (b) => b.type === "tool_result",
+    );
+    expect(useBlock).toMatchObject({
+      id: expect.any(String),
+      name: "read_files",
+    });
     expect(resultBlock).toMatchObject({
       tool_use_id: (useBlock as { id: string }).id,
       name: "read_files",
@@ -523,7 +787,11 @@ describe("Phase 8 — tool result returned to the model", () => {
     const firstWire = toOllamaMessages(provider.requests[0]!.messages);
     expect(firstWire.some((m) => m.role === "tool")).toBe(false);
     const secondWire = toOllamaMessages(provider.requests[1]!.messages);
-    expect(secondWire.some((m) => m.role === "tool" && m.content === "FILE CONTENT HI")).toBe(true);
+    expect(
+      secondWire.some(
+        (m) => m.role === "tool" && m.content === "FILE CONTENT HI",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -534,8 +802,14 @@ describe("Phase 8 — tool result returned to the model", () => {
 describe("Phase 9 — multi-step tool loop", () => {
   it("read → bash → final answer across three iterations, no premature termination", async () => {
     const provider = new ScriptedProvider();
-    provider.pushTurn([toolCallEvent("read_files", { files: [{ path: "planner.txt" }] }), finishOk()]);
-    provider.pushTurn([toolCallEvent("bash", { command: "node --version" }), finishOk()]);
+    provider.pushTurn([
+      toolCallEvent("read_files", { files: [{ path: "planner.txt" }] }),
+      finishOk(),
+    ]);
+    provider.pushTurn([
+      toolCallEvent("bash", { command: "node --version" }),
+      finishOk(),
+    ]);
     provider.pushTurn([
       { type: "text-delta", text: "planner.txt read; node version is v24.0.0" },
       finishOk(),
@@ -545,21 +819,30 @@ describe("Phase 9 — multi-step tool loop", () => {
     const bashExecute = vi.fn(async (_input: unknown) => "v24.0.0");
     const events: AgentLoopEvent[] = [];
     const messages: AgentMessage[] = [];
-    const result = await runAgentLoop(messages, "Read planner.txt then run node --version.", {
-      provider,
-      modelId: "qwen2.5-coder:3b",
-      sessionId: "s-phase9",
-      tools: [readFilesTool(readExecute as AgentTool["execute"]), bashTool(bashExecute as AgentTool["execute"])],
-      gate: approveAll,
-      maxIterations: 10,
-      onEvent: (e) => events.push(e),
-    });
+    const result = await runAgentLoop(
+      messages,
+      "Read planner.txt then run node --version.",
+      {
+        provider,
+        modelId: "qwen2.5-coder:3b",
+        sessionId: "s-phase9",
+        tools: [
+          readFilesTool(readExecute as AgentTool["execute"]),
+          bashTool(bashExecute as AgentTool["execute"]),
+        ],
+        gate: approveAll,
+        maxIterations: 10,
+        onEvent: (e) => events.push(e),
+      },
+    );
 
     expect(result.reason).toBe("complete");
     expect(result.iterations).toBe(3);
     expect(result.text).toBe("planner.txt read; node version is v24.0.0");
 
-    const completed = events.filter((e) => e.type === "tool_completed") as Array<{
+    const completed = events.filter(
+      (e) => e.type === "tool_completed",
+    ) as Array<{
       toolName: string;
       output: string;
     }>;
@@ -569,29 +852,41 @@ describe("Phase 9 — multi-step tool loop", () => {
     // Both executions happened, in order, with the model's arguments.
     expect(readExecute).toHaveBeenCalledTimes(1);
     expect(bashExecute).toHaveBeenCalledTimes(1);
-    expect(bashExecute.mock.calls[0]?.[0]).toEqual({ command: "node --version" });
+    expect(bashExecute.mock.calls[0]?.[0]).toEqual({
+      command: "node --version",
+    });
 
     // Transcript: 2 assistant tool_use messages + 2 user tool_result messages.
     const useMsgs = messages.filter(
-      (m) => m.role === "assistant" && blocksOf(m).some((b) => b.type === "tool_use"),
+      (m) =>
+        m.role === "assistant" &&
+        blocksOf(m).some((b) => b.type === "tool_use"),
     );
     const resultMsgs = messages.filter(
-      (m) => m.role === "user" && blocksOf(m).some((b) => b.type === "tool_result"),
+      (m) =>
+        m.role === "user" && blocksOf(m).some((b) => b.type === "tool_result"),
     );
     expect(useMsgs).toHaveLength(2);
     expect(resultMsgs).toHaveLength(2);
 
     // Chaining: the bash request (turn 2) already contains turn 1's result.
     const turn2Wire = toOllamaMessages(provider.requests[1]!.messages);
-    expect(turn2Wire.some((m) => m.role === "tool" && m.content === "PLANNER BODY")).toBe(true);
+    expect(
+      turn2Wire.some((m) => m.role === "tool" && m.content === "PLANNER BODY"),
+    ).toBe(true);
     const turn3Wire = toOllamaMessages(provider.requests[2]!.messages);
-    expect(turn3Wire.some((m) => m.role === "tool" && m.content === "v24.0.0")).toBe(true);
+    expect(
+      turn3Wire.some((m) => m.role === "tool" && m.content === "v24.0.0"),
+    ).toBe(true);
   });
 
   it("runaway tool loop is bounded by maxIterations (explicit error, not a hang)", async () => {
     const provider = new ScriptedProvider();
     for (let i = 0; i < 3; i += 1) {
-      provider.pushTurn([toolCallEvent("read_files", { files: [{ path: `f${i}.txt` }] }), finishOk()]);
+      provider.pushTurn([
+        toolCallEvent("read_files", { files: [{ path: `f${i}.txt` }] }),
+        finishOk(),
+      ]);
     }
     const messages: AgentMessage[] = [];
     const result = await runAgentLoop(messages, "loop forever", {
@@ -629,9 +924,16 @@ describe("Phase 4 — registered tools reach the provider request unmodified", (
       onEvent: () => undefined,
     });
     expect(provider.requests[0]!.tools).toBe(tools); // same objects, no cloning drift
-    expect(provider.requests[0]!.tools?.map((t) => t.name)).toEqual(["read_files", "bash"]);
-    expect(provider.requests[0]!.tools?.[0]!.description).toBe(tools[0]!.description);
-    expect(provider.requests[0]!.tools?.[0]!.inputSchema).toEqual(tools[0]!.inputSchema);
+    expect(provider.requests[0]!.tools?.map((t) => t.name)).toEqual([
+      "read_files",
+      "bash",
+    ]);
+    expect(provider.requests[0]!.tools?.[0]!.description).toBe(
+      tools[0]!.description,
+    );
+    expect(provider.requests[0]!.tools?.[0]!.inputSchema).toEqual(
+      tools[0]!.inputSchema,
+    );
   });
 });
 
@@ -642,6 +944,8 @@ describe("LlmError contract", () => {
     const err = new LlmError("ollama", "chat failed 500", { status: 500 });
     expect(err.transient).toBe(true);
     expect(err.message).toContain("[ollama]");
-    expect(new LlmError("ollama", "bad request", { status: 400 }).transient).toBe(false);
+    expect(
+      new LlmError("ollama", "bad request", { status: 400 }).transient,
+    ).toBe(false);
   });
 });

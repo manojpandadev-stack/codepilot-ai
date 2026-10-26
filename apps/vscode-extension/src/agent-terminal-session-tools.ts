@@ -157,8 +157,7 @@ export function createAgentTerminalSessionTools(
         );
       }
       const rec = (input ?? {}) as Record<string, unknown>;
-      const cwdRaw =
-        typeof rec.cwd === "string" ? rec.cwd.trim() : undefined;
+      const cwdRaw = typeof rec.cwd === "string" ? rec.cwd.trim() : undefined;
       const created = manager.startAgentSession({
         taskId,
         ...(cwdRaw ? { cwd: cwdRaw } : {}),

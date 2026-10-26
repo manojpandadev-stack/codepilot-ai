@@ -26,6 +26,8 @@ export interface LlmToolCall {
   toolName: string;
   /** Raw JSON text of the arguments (parsed lazily by the engine). */
   argumentsText: string;
+  /** Optional vendor signature (e.g. Gemini thinking models). */
+  thoughtSignature?: string;
 }
 
 export type LlmStreamEvent =
@@ -35,14 +37,27 @@ export type LlmStreamEvent =
   | { type: "usage"; usage: AgentUsage }
   | {
       type: "finish";
-      reason: "complete" | "aborted" | "error";
+      reason: "complete" | "aborted" | "error" | "incomplete";
       error?: string;
     };
+
+/** Model listing entry (discovery/health paths). */
+export interface LlmListedModel {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+}
 
 export interface LlmProvider {
   readonly id: string;
   /** Stream one completion. The final yielded event is always `finish`. */
   stream(request: LlmRequest): AsyncIterable<LlmStreamEvent>;
+  /** Optional model discovery extension (connection-state/UI paths). */
+  listModels?(signal?: AbortSignal): Promise<LlmListedModel[]>;
+  /** Optional liveness probe (connection-state paths). */
+  checkHealth?(
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; latencyMs?: number }>;
 }
 
 export class LlmError extends Error {

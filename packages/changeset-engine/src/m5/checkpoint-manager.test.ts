@@ -314,7 +314,6 @@ describe("CheckpointManager — revert edge cases", () => {
   });
 });
 
-
 // ================================================================
 // Durability (Phase 8) — checkpoint snapshots survive restarts
 // ================================================================
@@ -342,7 +341,9 @@ describe("CheckpointManager — durability (Phase 8)", () => {
         ops: [{ kind: "write", path: "a.txt", content: "v1\n" }],
       });
       const cp = first.createCheckpoint({ taskId: "t1", description: "cp1" });
-      expect(fs.readdirSync(dir).filter((n) => n.endsWith(".json"))).toHaveLength(1);
+      expect(
+        fs.readdirSync(dir).filter((n) => n.endsWith(".json")),
+      ).toHaveLength(1);
 
       // Restart: a brand-new manager over the same store must see the
       // checkpoint with full snapshot content (no CHECKPOINT_NOT_FOUND).
@@ -357,7 +358,9 @@ describe("CheckpointManager — durability (Phase 8)", () => {
       const loaded = second.getCheckpoint(cp.checkpointId);
       expect(loaded).toBeDefined();
       expect(loaded?.status).toBe("active");
-      expect(loaded?.files.find((f) => f.path === "a.txt")?.content).toBe("v1\n");
+      expect(loaded?.files.find((f) => f.path === "a.txt")?.content).toBe(
+        "v1\n",
+      );
       expect(second.listCheckpoints("t1").map((c) => c.checkpointId)).toEqual([
         cp.checkpointId,
       ]);
@@ -379,9 +382,14 @@ describe("CheckpointManager — durability (Phase 8)", () => {
       const old = first.createCheckpoint({ taskId: "t1", description: "old" });
 
       const second = new CheckpointManager({ mutation, storageDir: dir });
-      const fresh = second.createCheckpoint({ taskId: "t1", description: "fresh" });
+      const fresh = second.createCheckpoint({
+        taskId: "t1",
+        description: "fresh",
+      });
       expect(fresh.checkpointId).not.toBe(old.checkpointId);
-      expect(seqOf(fresh.checkpointId)).toBeGreaterThan(seqOf(old.checkpointId));
+      expect(seqOf(fresh.checkpointId)).toBeGreaterThan(
+        seqOf(old.checkpointId),
+      );
     } finally {
       ws.cleanup();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -408,15 +416,23 @@ describe("CheckpointManager — durability (Phase 8)", () => {
         workspaceRoot: ws.root,
         pathGuard: testPathGuard(ws.root),
       });
-      const second = new CheckpointManager({ mutation: mutation2, storageDir: dir });
-      const result = await second.restoreCheckpoint(cp.checkpointId, { taskId: "t1" });
+      const second = new CheckpointManager({
+        mutation: mutation2,
+        storageDir: dir,
+      });
+      const result = await second.restoreCheckpoint(cp.checkpointId, {
+        taskId: "t1",
+      });
       expect(result.ok).toBe(true);
 
       const mutation3 = new FileMutationService({
         workspaceRoot: ws.root,
         pathGuard: testPathGuard(ws.root),
       });
-      const third = new CheckpointManager({ mutation: mutation3, storageDir: dir });
+      const third = new CheckpointManager({
+        mutation: mutation3,
+        storageDir: dir,
+      });
       expect(third.getCheckpoint(cp.checkpointId)?.status).toBe("restored");
 
       // Deletion removes the persisted file.
@@ -442,9 +458,7 @@ describe("CheckpointManager — durability (Phase 8)", () => {
       const cp = good.createCheckpoint({ taskId: "t1", description: "good" });
 
       // Corrupt entry + tmp-leftover, then a "restart".
-      const corruptId = fs
-        .readdirSync(dir)
-        .find((n) => n.endsWith(".json"))!;
+      const corruptId = fs.readdirSync(dir).find((n) => n.endsWith(".json"))!;
       fs.writeFileSync(path.join(dir, corruptId), "{not-json");
       fs.writeFileSync(
         path.join(dir, "cp-1-deadbeefdead.json.tmp-99999"),
@@ -455,11 +469,14 @@ describe("CheckpointManager — durability (Phase 8)", () => {
         workspaceRoot: ws.root,
         pathGuard: testPathGuard(ws.root),
       });
-      const reloaded = new CheckpointManager({ mutation: mutation2, storageDir: dir });
+      const reloaded = new CheckpointManager({
+        mutation: mutation2,
+        storageDir: dir,
+      });
       expect(reloaded.getCheckpoint(cp.checkpointId)).toBeUndefined();
-      expect(
-        fs.readdirSync(dir).some((n) => n.includes(".corrupt-")),
-      ).toBe(true);
+      expect(fs.readdirSync(dir).some((n) => n.includes(".corrupt-"))).toBe(
+        true,
+      );
       // The good checkpoint still works after quarantine of the corrupt one.
       const healthy = good.createCheckpoint({ taskId: "t1", description: "h" });
       expect(healthy.checkpointId).not.toBe(cp.checkpointId);
@@ -504,7 +521,10 @@ describe("CheckpointManager — durability (Phase 8)", () => {
     const ws = tempWorkspace({ "a.txt": "v1\n" });
     try {
       const { checkpoints } = rig(ws.root);
-      const cp = checkpoints.createCheckpoint({ taskId: "t1", description: "mem" });
+      const cp = checkpoints.createCheckpoint({
+        taskId: "t1",
+        description: "mem",
+      });
       expect(checkpoints.getCheckpoint(cp.checkpointId)).toBeDefined();
       // No storageDir: no files are written anywhere (best-effort proof —
       // the manager never touches the filesystem for persistence).

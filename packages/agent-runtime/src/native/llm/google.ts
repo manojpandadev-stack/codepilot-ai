@@ -83,7 +83,9 @@ export function toGeminiContents(messages: AgentMessage[]): {
         } else if (b.type === "tool_use") {
           parts.push({
             functionCall: { name: b.name, args: b.input ?? {} },
-            ...(b.thoughtSignature ? { thoughtSignature: b.thoughtSignature } : {}),
+            ...(b.thoughtSignature
+              ? { thoughtSignature: b.thoughtSignature }
+              : {}),
           });
         }
       }
@@ -190,7 +192,11 @@ export function toGeminiSchema(raw: unknown): Record<string, unknown> {
       inferredNullable = true;
     }
     const nonNullTypes = types.filter((t) => t !== "null");
-    if (nonNullTypes.length > 0 && nonNullTypes[0] && JSON_TO_GEMINI_TYPE[nonNullTypes[0]]) {
+    if (
+      nonNullTypes.length > 0 &&
+      nonNullTypes[0] &&
+      JSON_TO_GEMINI_TYPE[nonNullTypes[0]]
+    ) {
       resolvedType = JSON_TO_GEMINI_TYPE[nonNullTypes[0]];
     }
   }
@@ -259,16 +265,24 @@ export function toGeminiSchema(raw: unknown): Record<string, unknown> {
   if (typeof input.maxLength === "number") output.maxLength = input.maxLength;
   if (typeof input.minItems === "number") output.minItems = input.minItems;
   if (typeof input.maxItems === "number") output.maxItems = input.maxItems;
-  if (typeof input.minProperties === "number") output.minProperties = input.minProperties;
-  if (typeof input.maxProperties === "number") output.maxProperties = input.maxProperties;
+  if (typeof input.minProperties === "number")
+    output.minProperties = input.minProperties;
+  if (typeof input.maxProperties === "number")
+    output.maxProperties = input.maxProperties;
   if (typeof input.pattern === "string") output.pattern = input.pattern;
   if (input.example !== undefined) output.example = input.example;
 
   // 6. Properties & Required (for OBJECT)
   let propertiesMap: Record<string, unknown> | undefined;
-  if (input.properties && typeof input.properties === "object" && !Array.isArray(input.properties)) {
+  if (
+    input.properties &&
+    typeof input.properties === "object" &&
+    !Array.isArray(input.properties)
+  ) {
     propertiesMap = {};
-    for (const [propName, propSchema] of Object.entries(input.properties as Record<string, unknown>)) {
+    for (const [propName, propSchema] of Object.entries(
+      input.properties as Record<string, unknown>,
+    )) {
       if (propSchema !== undefined) {
         propertiesMap[propName] = toGeminiSchema(propSchema);
       }
@@ -277,8 +291,9 @@ export function toGeminiSchema(raw: unknown): Record<string, unknown> {
 
   let requiredFields: string[] | undefined;
   if (Array.isArray(input.required)) {
-    const req = (input.required as unknown[])
-      .filter((k): k is string => typeof k === "string" && k.length > 0);
+    const req = (input.required as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
     if (req.length > 0) {
       requiredFields = req;
     }
@@ -289,7 +304,10 @@ export function toGeminiSchema(raw: unknown): Record<string, unknown> {
     for (const sub of input.allOf as unknown[]) {
       if (sub && typeof sub === "object") {
         const subNormalized = toGeminiSchema(sub);
-        if (subNormalized.properties && typeof subNormalized.properties === "object") {
+        if (
+          subNormalized.properties &&
+          typeof subNormalized.properties === "object"
+        ) {
           propertiesMap = {
             ...(propertiesMap ?? {}),
             ...(subNormalized.properties as Record<string, unknown>),
@@ -297,10 +315,16 @@ export function toGeminiSchema(raw: unknown): Record<string, unknown> {
         }
         if (Array.isArray(subNormalized.required)) {
           requiredFields = Array.from(
-            new Set([...(requiredFields ?? []), ...(subNormalized.required as string[])]),
+            new Set([
+              ...(requiredFields ?? []),
+              ...(subNormalized.required as string[]),
+            ]),
           );
         }
-        if (!output.description && typeof subNormalized.description === "string") {
+        if (
+          !output.description &&
+          typeof subNormalized.description === "string"
+        ) {
           output.description = subNormalized.description;
         }
       }
@@ -346,7 +370,9 @@ export function toGeminiSchema(raw: unknown): Record<string, unknown> {
  * Top-level function declaration parameter schema conversion.
  * Gemini requires the top-level parameters to be an OBJECT with properties.
  */
-export function toGeminiFunctionDeclarationSchema(raw: unknown): Record<string, unknown> {
+export function toGeminiFunctionDeclarationSchema(
+  raw: unknown,
+): Record<string, unknown> {
   const schema = toGeminiSchema(raw);
   if (schema.type !== "OBJECT") {
     schema.type = "OBJECT";
@@ -398,7 +424,9 @@ export class GoogleLlmProvider implements LlmProvider {
                 functionDeclarations: tools.map((tool: AgentTool) => ({
                   name: tool.name,
                   description: tool.description?.trim() || tool.name,
-                  parameters: toGeminiFunctionDeclarationSchema(tool.inputSchema),
+                  parameters: toGeminiFunctionDeclarationSchema(
+                    tool.inputSchema,
+                  ),
                 })),
               },
             ],
@@ -517,8 +545,10 @@ export class GoogleLlmProvider implements LlmProvider {
             // unavailability with code 503 or status UNAVAILABLE; HTTP-level 503
             // is already handled above via response.status.
             const is503 =
-              (evt.error as { code?: unknown; status?: unknown }).code === 503 ||
-              (evt.error as { code?: unknown; status?: unknown }).status === "UNAVAILABLE";
+              (evt.error as { code?: unknown; status?: unknown }).code ===
+                503 ||
+              (evt.error as { code?: unknown; status?: unknown }).status ===
+                "UNAVAILABLE";
             if (is503) {
               throw new LlmError(
                 this.id,

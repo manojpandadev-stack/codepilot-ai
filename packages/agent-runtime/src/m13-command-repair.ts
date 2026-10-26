@@ -4,12 +4,12 @@
  * A bounded diagnose→edit→rerun loop for terminal tool failures
  * (bash/run_commands). When a command fails with a RECOVERABLE error class,
  * the loop applies a small set of deterministic, safe transformations and
- * reruns — each rerun re-evaluated through the M4 gate by the host (the
- * runner is injected; identical command text stays covered by the original
- * approval, transformed text is re-gated deny-closed).
+ * reruns — each rerun re-evaluated through the M4 gate by the host. A
+ * transient/network failure is outcome-unknown and is never automatically
+ * replayed, because the command may have partially or fully executed.
  *
  * Bounds (no infinite loop, ever):
- * - MAX_AUTO_REPAIR_ATTEMPTS total reruns per command (default 3).
+ * - MAX_AUTO_REPAIR_ATTEMPTS total attempts per command (default 3).
  * - Loop guard: the same failure signature (class + command) stops the
  *   loop after `maxSameSignatureRepeats` (default 2) consecutive repeats.
  * - Attempt records persist (JSON, atomic tmp+rename, bounded history) so
@@ -31,10 +31,7 @@ export const MAX_SAME_SIGNATURE_REPEATS = 2;
 export const MAX_REPAIR_RECORDS = 100;
 
 export type CommandFailureClass =
-  | "transient"
-  | "network"
-  | "missing_module"
-  | "non_recoverable";
+  "transient" | "network" | "missing_module" | "non_recoverable";
 
 export interface CommandRepairAttempt {
   /** 1-based attempt index (1 = original command). */
@@ -49,9 +46,7 @@ export interface CommandRepairAttempt {
 }
 
 export type CommandRepairStatus =
-  | "recovered"
-  | "exhausted"
-  | "non_recoverable";
+  "recovered" | "exhausted" | "non_recoverable" | "outcome_unknown";
 
 export interface CommandRepairRecord {
   command: string;
@@ -74,7 +69,8 @@ const TRANSIENT_PATTERN =
 const NETWORK_PATTERN = /ENOTFOUND|getaddrinfo|ENETUNREACH|EHOSTUNREACH/i;
 const MISSING_MODULE_PATTERN = /Cannot find module '([^']+)'/;
 /** Package names that are safe to auto-install (scoped or plain tokens). */
-const SAFE_PACKAGE_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$|^[a-z0-9][a-z0-9._-]*$/i;
+const SAFE_PACKAGE_PATTERN =
+  /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$|^[a-z0-9][a-z0-9._-]*$/i;
 
 /** Classify a command failure from its error text. */
 export function classifyCommandFailure(errorText: string): {
@@ -108,8 +104,9 @@ export function planCommandRepair(
   installAlreadyUsed = false,
 ): string | null {
   if (classification === "transient" || classification === "network") {
-    // Same command — the failure was infrastructure-shaped.
-    return command;
+    // A timeout or network error does not prove the process/request had no
+    // side effects. Never replay the same terminal command automatically.
+    return null;
   }
   if (classification === "missing_module" && missingModule) {
     if (installAlreadyUsed) return null;
@@ -144,9 +141,9 @@ interface PersistShape {
 
 /**
  * Bounded command-failure repair loop. The `runner` executes one command
- * and throws on failure; it is injected by the host so every rerun passes
- * through the host's M4 gate (identical text covered by the original
- * approval, transformed text re-evaluated deny-closed).
+ * and throws on failure; it is injected by the host so every transformed
+ * command passes through the host's M4 gate. Ambiguous transient/network
+ * failures stop with outcome-unknown instead of replaying.
  */
 export class CommandRepairLoop {
   private readonly maxAttempts: number;
@@ -212,6 +209,13 @@ export class CommandRepairLoop {
         if (classification === "non_recoverable") {
           this.persist(command, attempts, "non_recoverable", startedAt);
           return { status: "non_recoverable", command: current, attempts };
+        }
+        if (classification === "transient" || classification === "network") {
+          // The operation may have completed partially or fully before the
+          // transport/process reported failure. Preserve that uncertainty
+          // instead of retrying a potentially mutating shell command.
+          this.persist(command, attempts, "outcome_unknown", startedAt);
+          return { status: "outcome_unknown", command: current, attempts };
         }
         // Loop guard: same signature repeating → stop.
         const signature = commandFailureSignature(current, classification);
@@ -329,11 +333,7 @@ export interface TerminalToolRepairDeps {
   isTerminalTool: (toolName: string) => boolean;
   /** Extract the command text from the tool input (null when unknown). */
   extractCommand: (input: unknown) => string | null;
-  /**
-   * Execute one repair attempt. Identical command text stays covered by
-   * the original approval; transformed text MUST be re-gated by the host
-   * (deny-closed) before executing.
-   */
+  /** Execute one repair attempt; the host must M4-gate each execution. */
   executeRepair: (command: string) => Promise<string>;
 }
 

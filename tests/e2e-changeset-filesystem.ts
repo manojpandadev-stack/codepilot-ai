@@ -40,7 +40,7 @@ function cleanup() {
 
 async function runTests() {
   setup();
-  const manager = new ChangeSetManager({ workspaceRoot: testDir });
+  const manager = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: testDir });
   let passed = 0;
   let failed = 0;
 

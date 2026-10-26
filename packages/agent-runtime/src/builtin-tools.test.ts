@@ -13,7 +13,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { createCodePilotBuiltinTools, CODEPILOT_MODEL_TOOL_NAMES } from "./builtin-tools.js";
+import {
+  createCodePilotBuiltinTools,
+  CODEPILOT_MODEL_TOOL_NAMES,
+} from "./builtin-tools.js";
 import {
   CommandExecutionService,
   persistToolOutput,
@@ -117,7 +120,6 @@ describe("run_commands streaming integration", () => {
   });
 });
 
-
 // ---------------------------------------------------------------- plan tool
 describe("plan tool (structured execution plan)", () => {
   interface PlanEvent {
@@ -200,14 +202,27 @@ describe("plan tool (structured execution plan)", () => {
     const done = JSON.parse(
       String(
         await planTool.execute(
-          { action: "update", step_id: "step-1", status: "completed", note: "green" },
+          {
+            action: "update",
+            step_id: "step-1",
+            status: "completed",
+            note: "green",
+          },
           { toolCallId: "tc-plan-2c" },
         ),
       ),
     );
     expect(done.step.status).toBe("completed");
-    expect(done.progress).toMatchObject({ completed: 1, running: 0, pending: 1 });
-    expect(events.map((e) => e.kind)).toEqual(["created", "updated", "updated"]);
+    expect(done.progress).toMatchObject({
+      completed: 1,
+      running: 0,
+      pending: 1,
+    });
+    expect(events.map((e) => e.kind)).toEqual([
+      "created",
+      "updated",
+      "updated",
+    ]);
     expect(events[2]!.plan.steps[0]!.note).toBe("green");
   });
 
@@ -253,7 +268,6 @@ describe("plan tool (structured execution plan)", () => {
   });
 });
 
-
 // ------------------------------------- inspect_symbols (Phase 4 parity)
 describe("inspect_symbols (structural map, Phase 4)", () => {
   const dirs: string[] = [];
@@ -273,7 +287,10 @@ describe("inspect_symbols (structural map, Phase 4)", () => {
     const tool = createCodePilotBuiltinTools({ cwd, enableBash: false }).find(
       (t) => t.name === "inspect_symbols",
     );
-    expect(tool, "inspect_symbols missing from the always-on factory").toBeDefined();
+    expect(
+      tool,
+      "inspect_symbols missing from the always-on factory",
+    ).toBeDefined();
     return tool!;
   }
 
@@ -355,24 +372,23 @@ describe("inspect_symbols (structural map, Phase 4)", () => {
       tool.execute({ path: "../outside.ts" }, { toolCallId: "inspect-4" }),
     ).rejects.toThrow();
     await expect(
-      tool.execute({ path: path.join(cwd, "abs.ts") }, { toolCallId: "inspect-5" }),
+      tool.execute(
+        { path: path.join(cwd, "abs.ts") },
+        { toolCallId: "inspect-5" },
+      ),
     ).rejects.toThrow();
-    fs.writeFileSync(
-      path.join(cwd, "bin.ts"),
-      Buffer.from([0x00, 0x01, 0x02]),
-    );
+    fs.writeFileSync(path.join(cwd, "bin.ts"), Buffer.from([0x00, 0x01, 0x02]));
     await expect(
       tool.execute({ path: "bin.ts" }, { toolCallId: "inspect-6" }),
     ).rejects.toThrow(/binary/);
     await expect(
       tool.execute({ path: "missing.ts" }, { toolCallId: "inspect-7" }),
     ).rejects.toThrow(/missing/);
-    await expect(
-      tool.execute({}, { toolCallId: "inspect-8" }),
-    ).rejects.toThrow(/requires \{ path \}/);
+    await expect(tool.execute({}, { toolCallId: "inspect-8" })).rejects.toThrow(
+      /requires \{ path \}/,
+    );
   });
 });
-
 
 // ------------------------------------- read-only git tools (Phase 5)
 describe("git tools (read-only, model-callable)", () => {
@@ -504,7 +520,6 @@ describe("git tools (read-only, model-callable)", () => {
   });
 });
 
-
 // ------------------------------------ read_tool_output sidecar (Phase 7b)
 describe("read_tool_output builtin", () => {
   const cleanupFiles: string[] = [];
@@ -563,7 +578,6 @@ describe("read_tool_output builtin", () => {
   });
 });
 
-
 // ------------------------------- search_codebase behavioral (row 9)
 describe("search_codebase behavioral", () => {
   it("finds regex matches across workspace files and ignores dependency dirs", async () => {
@@ -620,5 +634,47 @@ describe("search_codebase behavioral", () => {
       /invalid regex/,
     );
     await expect(tool.execute({})).rejects.toThrow(/requires \{ query \}/);
+  });
+});
+
+describe("F-01 local-only privacy: tool construction is the single source of truth", () => {
+  it("createCodePilotBuiltinTools under local privacyMode omits web tools even when enableWebFetch is true", () => {
+    // A caller that accidentally passes enableWebFetch:true while the effective
+    // privacy mode is local must still not get web tools. The privacy decision
+    // is owned by privacyMode, not by enableWebFetch.
+    const tools = createCodePilotBuiltinTools({
+      cwd: process.cwd(),
+      enableWebFetch: true,
+      privacyMode: "local" as const,
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).not.toContain("fetch_web_content");
+    expect(names).not.toContain("web_search");
+  });
+
+  it("createCodePilotBuiltinTools under cloud privacyMode honors enableWebFetch", () => {
+    const tools = createCodePilotBuiltinTools({
+      cwd: process.cwd(),
+      enableWebFetch: true,
+      privacyMode: "cloud" as const,
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("fetch_web_content");
+    expect(names).toContain("web_search");
+  });
+
+  it("createCodePilotBuiltinTools without privacyMode denies web capability by default", () => {
+    const off = createCodePilotBuiltinTools({
+      cwd: process.cwd(),
+      enableWebFetch: false,
+    });
+    expect(off.map((t) => t.name)).not.toContain("fetch_web_content");
+
+    const on = createCodePilotBuiltinTools({
+      cwd: process.cwd(),
+      enableWebFetch: true,
+    });
+    expect(on.map((t) => t.name)).not.toContain("fetch_web_content");
+    expect(on.map((t) => t.name)).not.toContain("web_search");
   });
 });

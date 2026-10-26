@@ -67,9 +67,9 @@ describe("listWslDistros", () => {
 
 describe("selectWslDistro", () => {
   it("returns the first installed distro", () => {
-    expect(
-      selectWslDistro({ runner: () => "Debian\r\nUbuntu\r\n" }),
-    ).toBe("Debian");
+    expect(selectWslDistro({ runner: () => "Debian\r\nUbuntu\r\n" })).toBe(
+      "Debian",
+    );
   });
 
   it("returns null when no distros are installed", () => {

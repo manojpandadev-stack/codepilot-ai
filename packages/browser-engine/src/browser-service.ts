@@ -88,7 +88,7 @@ export interface BrowserServiceOptions {
   channel?: string;
 }
 
-interface BrowserSession {
+export interface BrowserSession {
   id: string;
   taskId: string;
   context: BrowserContext;
@@ -375,7 +375,9 @@ export class BrowserService {
    * policy before Chromium connects. Non-http(s) schemes and private targets
    * are aborted.
    */
-  private async installRouteInterceptor(session: BrowserSession): Promise<void> {
+  private async installRouteInterceptor(
+    session: BrowserSession,
+  ): Promise<void> {
     // Awaited by session creation: a session must NEVER be handed out before
     // the SSRF interceptor is active (fail-closed), and install failures
     // surface as normal session-creation errors instead of unhandled

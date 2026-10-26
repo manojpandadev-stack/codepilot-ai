@@ -60,9 +60,7 @@ export function parseWslDistroList(output: string): string[] {
 }
 
 /** List installed WSL distro names; `[]` when WSL is unavailable. */
-export function listWslDistros(options?: {
-  runner?: WslListRunner;
-}): string[] {
+export function listWslDistros(options?: { runner?: WslListRunner }): string[] {
   const run = options?.runner ?? defaultRunner;
   try {
     return parseWslDistroList(run(["-l", "-q"]));

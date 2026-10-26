@@ -14,23 +14,18 @@
  */
 
 import { describe, it, expect } from "vitest";
-import {
-  modelSupportsVision,
-  modelToolCallingSupport,
-} from "./catalogue.js";
+import { modelSupportsVision, modelToolCallingSupport } from "./catalogue.js";
 
 describe("modelSupportsVision — catalogued models decide by capability", () => {
   it("reports true for catalogued vision models", () => {
     expect(modelSupportsVision("openai-native", "gpt-4o")).toBe(true);
     expect(modelSupportsVision("openai-native", "gpt-4o-mini")).toBe(true);
-    expect(modelSupportsVision("anthropic", "claude-sonnet-4-20250514")).toBe(
-      true,
-    );
+    expect(modelSupportsVision("gemini", "gemini-2.5-pro")).toBe(true);
     expect(modelSupportsVision("google", "gemini-2.5-pro")).toBe(true);
   });
 
   it("reports false for a catalogued text-only model (fail-closed signal)", () => {
-    expect(modelSupportsVision("zai", "glm-4-flash")).toBe(false);
+    expect(modelSupportsVision("ollama", "qwen3:8b")).toBe(false);
   });
 });
 
@@ -97,9 +92,9 @@ describe("modelToolCallingSupport — tri-state policy", () => {
     // A catalogued model without a toolCallingSupport field is unknown, not
     // false — absence of curated evidence is never a denial.
     expect(modelToolCallingSupport("openai-native", "gpt-4o")).toBe("unknown");
-    expect(modelToolCallingSupport("anthropic", "claude-sonnet-4-20250514")).toBe(
-      "unknown",
-    );
+    expect(
+      modelToolCallingSupport("anthropic", "claude-sonnet-4-20250514"),
+    ).toBe("unknown");
   });
 
   it("treats unlisted local-runtime and BYO models as unknown (never false)", () => {
@@ -118,7 +113,7 @@ describe("modelToolCallingSupport — tri-state policy", () => {
     expect(modelToolCallingSupport("openai-native", "gpt-5-unknown")).toBe(
       "true",
     );
-    expect(modelToolCallingSupport("openrouter", "some-model")).toBe("true");
+    expect(modelToolCallingSupport("gemini", "some-model")).toBe("true");
   });
 
   it("returns unknown for an unknown provider id", () => {

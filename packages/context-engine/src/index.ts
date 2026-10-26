@@ -8,6 +8,7 @@
 
 import { MAX_CONTEXT_TOKENS_DEFAULT } from "@codepilot/shared";
 import { ssrfSafeFetch } from "./ssrf-guard.js";
+import { extractTitle } from "./m13-web-agent.js";
 
 // ============================================================================
 // Token Estimation
@@ -436,6 +437,123 @@ function htmlToText(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// ============================================================================
+// Public `webFetch` — the ONE public owner of guarded web fetching.
+//
+// This is a thin facade: every security decision (protocol check, hostname
+// classification, all-address DNS validation, IP pinning, per-redirect
+// re-validation, bounded redirects/timeout/size) stays in
+// `ssrfSafeFetch` (./ssrf-guard.js). Nothing is re-implemented here — this
+// only adapts the guard's flat result into the structured contract that
+// consumers (tool-engine `web_fetch`, runtime web tools) expect.
+// ============================================================================
+
+/**
+ * Actionable error surfaced when Web Fetch is invoked while the user selected
+ * Local-Only privacy. The privacy decision itself belongs to the tool layer
+ * (which never offers the tool); this constant exists so every surface
+ * reports the identical, non-silent reason.
+ */
+export const LOCAL_ONLY_ERROR =
+  "Web Fetch requires remote network access, but CodePilot is currently in Local-Only mode.";
+
+export interface WebFetchOptions {
+  timeoutMs?: number;
+  /** Bound on returned text. `maxBytes` is the caller-facing alias. */
+  maxChars?: number;
+  maxBytes?: number;
+  maxRedirects?: number;
+  signal?: AbortSignal;
+  resolveAll?: (
+    h: string,
+  ) => Promise<Array<{ address: string; family: number }>>;
+  /** Test seam: inject the raw HTTP exchange (no real socket). */
+  request?: (
+    target: URL,
+    ip: string | undefined,
+    host: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<{
+    status: number;
+    headers: Record<string, string>;
+    body: string;
+  }>;
+  allowedDomains?: string[];
+  deniedDomains?: string[];
+}
+
+export interface WebFetchResult {
+  /** The URL that was requested. */
+  url: string;
+  /** The URL finally fetched (after redirects). */
+  finalUrl: string;
+  status: number;
+  contentType: string;
+  /** HTML <title> when present, else "". */
+  title: string;
+  /** Extracted, size-bounded text. */
+  text: string;
+  /** True when `text` was cut at the configured bound. */
+  truncated: boolean;
+}
+
+function abortError(where: string): DOMException {
+  return new DOMException(`web_fetch cancelled ${where}`, "AbortError");
+}
+
+/**
+ * Fetch a public http(s) resource through the audited SSRF pipeline.
+ *
+ * Throws:
+ *  - `AbortError` when `options.signal` is (or becomes) aborted — cancellation
+ *    must never surface as a successful fetch.
+ *  - `Error` when the guard blocks the destination or the hop fails.
+ */
+export async function webFetch(
+  url: string,
+  options: WebFetchOptions = {},
+): Promise<WebFetchResult> {
+  if (options.signal?.aborted) throw abortError("before the request");
+
+  const maxChars = options.maxChars ?? options.maxBytes ?? 30_000;
+  const guard = await ssrfSafeFetch(url, {
+    timeoutMs: options.timeoutMs ?? 15_000,
+    maxChars,
+    maxRedirects: options.maxRedirects ?? 5,
+    ...(options.resolveAll ? { resolveAll: options.resolveAll } : {}),
+    ...(options.request ? { request: options.request } : {}),
+    ...(options.allowedDomains
+      ? { allowedDomains: options.allowedDomains }
+      : {}),
+    ...(options.deniedDomains ? { deniedDomains: options.deniedDomains } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+
+  if (options.signal?.aborted) throw abortError("after the request");
+  if (!guard.ok) {
+    if (guard.error === "aborted") throw abortError("during the request");
+    throw new Error(`web_fetch blocked: ${guard.error ?? "unknown reason"}`);
+  }
+
+  const contentType = guard.contentType ?? "";
+  const isHtml = contentType.includes("text/html");
+  const rawText = guard.text ?? "";
+  const full = isHtml ? htmlToText(rawText) : rawText;
+  const truncated = full.length > maxChars;
+  const title = isHtml ? extractTitle(rawText) : "";
+
+  return {
+    url,
+    finalUrl: guard.finalUrl,
+    status: guard.status ?? 0,
+    contentType,
+    title,
+    text: truncated ? `${full.slice(0, maxChars)}\n... [truncated]` : full,
+    truncated,
+  };
 }
 
 /**

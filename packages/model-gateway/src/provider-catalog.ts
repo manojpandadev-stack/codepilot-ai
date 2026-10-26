@@ -17,6 +17,7 @@
 
 import {
   CODEPILOT_PROVIDER_CATALOG,
+  CURATED_PROVIDER_IDS,
   modelToolCallingSupport,
   type LlmToolCallingSupport,
 } from "@codepilot/llm";
@@ -109,6 +110,8 @@ export interface CatalogProvider {
   description?: string;
   category: ProviderCategory;
   status: ProviderStatus;
+  /** Whether this provider is part of the curated (primary) list. */
+  curated: boolean;
   /** Wire protocol the SDK handler speaks. */
   protocol:
     | "openai-chat"
@@ -155,108 +158,32 @@ export interface CatalogProvider {
  * returns account-level usage/credit information. Everything else reports
  * "local tracking" or "unavailable" — never fabricated numbers.
  */
-const USAGE_PROVIDER_API: ReadonlySet<string> = new Set([
-  // OpenRouter documents GET /api/v1/credits (auth: Bearer key).
-  "openrouter",
-]);
+const USAGE_PROVIDER_API: ReadonlySet<string> = new Set([]);
 
 const BILLING_PORTALS: Readonly<Record<string, string>> = {
-  openai: "https://platform.openai.com/usage",
-  anthropic: "https://console.anthropic.com/settings/billing",
   "openai-native": "https://platform.openai.com/usage",
   gemini: "https://console.cloud.google.com/billing",
-  together: "https://api.together.xyz/settings/billing",
-  fireworks: "https://fireworks.ai/account/billing",
-  groq: "https://console.groq.com/settings/billing",
-  deepseek: "https://platform.deepseek.com/usage",
-  moonshot: "https://platform.moonshot.ai/console",
-  minimax: "https://platform.minimax.io",
-  zhipuai: "https://open.bigmodel.cn",
-  zai: "https://z.ai",
-  "302ai": "https://api.302.ai",
-  openrouter: "https://openrouter.ai/credits",
-  cerebras: "https://cloud.cerebras.ai",
-  huggingface: "https://huggingface.co/settings/billing",
 };
 
-/** Providers that primarily authenticate via a subscription/OAuth flow. */
-const SUBSCRIPTION_IDS: ReadonlySet<string> = new Set([
-  "openai-codex", // ChatGPT subscription
-  "openai-codex-cli",
-  "claude-code",
-  "cline", // Cline account
-  "cline-pass",
-  "github-copilot",
-  "qwen-code",
-  "opencode",
-]);
-
 /** Local runtimes. */
-const LOCAL_IDS: ReadonlySet<string> = new Set(["ollama", "lmstudio"]);
+const LOCAL_IDS: ReadonlySet<string> = new Set(["ollama"]);
 
 /**
- * Per-provider Test Connection probe paths (appended to the provider's base
- * URL). Vendors genuinely differ — this is authoritative data, not a guess:
- *   - Ollama: native API. Model listing/health is `GET /api/tags`.
- *     `GET /models` and `GET /` both return 404 there.
- *   - LM Studio & everything else that supports a probe: OpenAI-compatible
- *     `GET {base}/models` (the SDK baseUrl already carries the `/v1` prefix).
+ * Per-provider Test Connection probe paths (appended to the provider's base URL).
  */
 const HEALTH_PROBE_PATHS: Readonly<Record<string, string>> = {
   ollama: OLLAMA_API_TAGS, // "/api/tags"
-  lmstudio: "/models",
+  "openai-native": "/models",
+  gemini: "/v1beta/models",
 };
 
 /** Default probe path for providers without a vendor-specific one. */
 const DEFAULT_HEALTH_PROBE_PATH = "/models";
 
-/** Multi-provider gateways/routers. */
-const GATEWAY_IDS: ReadonlySet<string> = new Set([
-  "openrouter",
-  "requesty",
-  "litellm",
-  "vercel-ai-gateway",
-  "unorouter",
-  "orcarouter",
-  "fastrouter",
-  "trustedrouter",
-  "llmgateway",
-  "kilo",
-  "aihubmix",
-  "zenmux",
-  "anyapi",
-  "helicone",
-  "wandb",
-]);
-
 const DESCRIPTION_OVERRIDES: Readonly<Record<string, string>> = {
   "openai-native": "GPT models via the official OpenAI API.",
-  "openai-codex": "OpenAI models through a ChatGPT subscription.",
-  anthropic: "Claude models via the official Anthropic API.",
   gemini: "Google Gemini models via the Gemini API.",
-  vertex: "Google Gemini models via Vertex AI (GCP project billing).",
-  bedrock: "Claude and other models via AWS Bedrock (IAM credentials). Discovery-only — no generation path.",
   ollama: "Run open models locally — nothing leaves your machine.",
-  lmstudio: "Local models served by LM Studio on this machine.",
-  openai: "OpenAI-Compatible endpoints (custom base URL + model).",
-  "openai-compatible":
-    "Any OpenAI-compatible API — bring your own base URL, key and model.",
-  openrouter:
-    "One API for 280+ models from many providers, with a live credits API.",
-  deepseek: "DeepSeek chat and reasoner models.",
-  together: "Open-weight models hosted by Together AI.",
-  zai: "Z.AI GLM models (Zhipu international).",
-  zhipuai: "Zhipu GLM models (China platform).",
-  moonshot: "Moonshot Kimi models.",
-  minimax: "MiniMax M-series models (Anthropic-compatible endpoint).",
-  groq: "Ultra-fast inference for open models on LPU hardware.",
-  cerebras: "Wafer-scale fast inference for open models.",
-  fireworks: "Fireworks AI hosted open models.",
-  requesty: "Multi-provider router with per-request routing controls.",
-  litellm: "Self-hosted LiteLLM proxy (OpenAI-compatible).",
-  huggingface: "Hugging Face Inference Providers router.",
-  "github-copilot": "GitHub Copilot models via GitHub authentication.",
-  "claude-code": "Claude models via a Claude subscription login.",
 } as const;
 
 // ============================================================================
@@ -338,74 +265,12 @@ function loadSdkProviderInfo(): SdkProviderInfo[] {
 
 function mapStatus(id: string): ProviderStatus {
   if (LOCAL_IDS.has(id)) return "LOCAL";
-  if (SUBSCRIPTION_IDS.has(id)) return "SUBSCRIPTION";
-  if (GATEWAY_IDS.has(id)) return "GATEWAY";
-  // Known cloud providers with first-class native providers. Note: only ids
-  // present in CODEPILOT_PROVIDER_CATALOG ever reach this mapping; the
-  // remaining entries are dormant until a matching catalogue entry exists.
-  const firstClass = new Set([
-    "openai-native",
-    "anthropic",
-    "gemini",
-    "vertex",
-    "bedrock",
-    "deepseek",
-    "mistral",
-    "xai",
-    "together",
-    "fireworks",
-    "groq",
-    "cerebras",
-    "sambanova",
-    "nebius",
-    "baseten",
-    "requesty",
-    "huggingface",
-    "302ai",
-    "alibaba",
-    "minimax",
-    "moonshot",
-    "zhipuai",
-    "zai",
-    "stepfun",
-    "stepfun-ai",
-    "upstage",
-    "xiaomi",
-    "doubao",
-    "modelscope",
-    "novita-ai",
-    "nvidia",
-    "vultr",
-    "scaleway",
-    "ovhcloud",
-    "digitalocean",
-    "neon",
-    "crusoe",
-    "modal",
-    "gmicloud",
-    "hyper",
-    "tinfoil",
-    "privatemode-ai",
-    "sapaicore",
-    "databricks",
-    "snowflake-cortex",
-    "clarifai",
-    "vercel-ai-gateway",
-    "v0",
-    "vercel-ai-gateway",
-  ]);
-  if (firstClass.has(id)) return "SUPPORTED";
-  // Any other catalogue id without a dedicated native provider speaks
-  // OpenAI-compatible via an explicit base URL.
+  if (id === "openai-native" || id === "gemini") return "SUPPORTED";
   return "CONFIGURABLE";
 }
 
-function categoryFor(id: string, status: ProviderStatus): ProviderCategory {
+function categoryFor(_id: string, status: ProviderStatus): ProviderCategory {
   if (status === "LOCAL") return "local";
-  if (status === "GATEWAY" || status === "SUBSCRIPTION") return "gateway";
-  if (id === "openai" || id === "openai-compatible" || id === "custom") {
-    return "custom";
-  }
   return "cloud";
 }
 
@@ -426,7 +291,7 @@ function protocolFor(sdk: SdkProviderInfo): CatalogProvider["protocol"] {
   }
 }
 
-function fieldsFor(sdk: SdkProviderInfo, id: string): CatalogField[] {
+function fieldsFor(sdk: SdkProviderInfo, _id: string): CatalogField[] {
   const out: CatalogField[] = [];
   const raw = sdk.metadata?.configFields ?? [];
   for (const f of raw) {
@@ -446,8 +311,7 @@ function fieldsFor(sdk: SdkProviderInfo, id: string): CatalogField[] {
       path: f.path,
       label: f.label ?? f.path,
       type,
-      required:
-        type === "password" && (id !== "openrouter" || f.path === "apiKey"),
+      required: type === "password",
       placeholder: f.placeholder,
       description: f.description,
     });
@@ -468,7 +332,9 @@ function modelFor(sdkModel: SdkModelInfo, providerId: string): CatalogModel {
     streaming: caps.includes("streaming") || caps.includes("tools"),
     // Tri-state truth: the model entry's explicit value wins; otherwise the
     // catalogue resolver decides (BYO/unlisted → "unknown", never "true").
-    toolCalling: sdkModel.toolCallingSupport ?? modelToolCallingSupport(providerId, sdkModel.id),
+    toolCalling:
+      sdkModel.toolCallingSupport ??
+      modelToolCallingSupport(providerId, sdkModel.id),
     inputPerMtok: sdkModel.pricing?.input,
     outputPerMtok: sdkModel.pricing?.output,
   };
@@ -496,6 +362,7 @@ export function getProviderCatalog(): CatalogProvider[] {
       description: DESCRIPTION_OVERRIDES[id] ?? p.description,
       category: categoryFor(id, status),
       status,
+      curated: (CURATED_PROVIDER_IDS as readonly string[]).includes(id),
       protocol: protocolFor(p),
       sdkClient: p.client,
       baseUrl: p.baseUrl,
@@ -519,7 +386,8 @@ export function getProviderCatalog(): CatalogProvider[] {
       models,
       defaultModelId: p.defaultModelId,
       health: {
-        supportsTestConnection: supportsDiscovery || LOCAL_IDS.has(id),
+        supportsTestConnection:
+          supportsDiscovery || LOCAL_IDS.has(id) || id === "gemini",
         requiresApiKeyForProbe: requiresKeyForProbe(p, id),
         probePath: HEALTH_PROBE_PATHS[id] ?? DEFAULT_HEALTH_PROBE_PATH,
       },
@@ -538,13 +406,19 @@ export function getProviderCatalog(): CatalogProvider[] {
 
 function requiresKeyForProbe(p: SdkProviderInfo, id: string): boolean {
   if (LOCAL_IDS.has(id)) return false;
-  if (id === "openrouter") return false; // lists models without a key
   return (p.env?.length ?? 0) > 0;
 }
 
-/** Lookup one provider by id. */
+/** Get only curated providers (primary <= 12 entries). */
+export function getCuratedProviderCatalog(): CatalogProvider[] {
+  return getProviderCatalog().filter((p) => p.curated);
+}
+
+/** Lookup one provider by id (supports canonical IDs and backward-compatible aliases). */
 export function getCatalogProvider(id: string): CatalogProvider | undefined {
-  return getProviderCatalog().find((p) => p.id === id);
+  const canonicalId =
+    id === "openai" ? "openai-native" : id === "google" ? "gemini" : id;
+  return getProviderCatalog().find((p) => p.id === canonicalId);
 }
 
 /** Deterministic sort: popular/local first, then alphabetical. */

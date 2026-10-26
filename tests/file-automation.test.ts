@@ -151,7 +151,7 @@ describe("Phase 11 — file automation (temp workspace, real tools)", () => {
 
   it("EDIT: approval appears, then the edit stages as a ChangeSet (file untouched until accepted)", async () => {
     writeFileSync(join(dir, "notes.txt"), "hello\n", "utf8");
-    const csm = new ChangeSetManager({ workspaceRoot: dir });
+    const csm = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: dir });
     const staged: Array<{
       toolName: string;
       relativePath: string;
@@ -246,7 +246,7 @@ describe("Phase 11 — file automation (temp workspace, real tools)", () => {
 
   it("EDIT-DENIED: rejected M4 approval stages nothing and the file is untouched", async () => {
     writeFileSync(join(dir, "notes.txt"), "hello\n", "utf8");
-    const csm = new ChangeSetManager({ workspaceRoot: dir });
+    const csm = new ChangeSetManager({ allowDirectWrite: true,  workspaceRoot: dir });
     const staged: unknown[] = [];
 
     const bodies: Array<Record<string, unknown>> = [];

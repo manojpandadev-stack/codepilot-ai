@@ -55,7 +55,9 @@ interface Capture {
 }
 
 /** Stub global fetch: every /api/chat request body is recorded. */
-function stubChat(responder: (body: Record<string, unknown>) => Response): Capture {
+function stubChat(
+  responder: (body: Record<string, unknown>) => Response,
+): Capture {
   const bodies: Array<Record<string, unknown>> = [];
   const fetchImpl = vi.fn(async (_input: unknown, init?: { body?: string }) => {
     const body = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
@@ -67,7 +69,10 @@ function stubChat(responder: (body: Record<string, unknown>) => Response): Captu
 }
 
 /** Collect runtime events, keyed by type. */
-function collect(): { events: AgentEvent[]; byType: (t: string) => AgentEvent[] } {
+function collect(): {
+  events: AgentEvent[];
+  byType: (t: string) => AgentEvent[];
+} {
   const events: AgentEvent[] = [];
   return {
     events,
@@ -78,7 +83,11 @@ function collect(): { events: AgentEvent[]; byType: (t: string) => AgentEvent[] 
 function makeRuntime(
   mode: "ask" | "plan" | "act" | "auto" | "review",
   responder: (body: Record<string, unknown>) => Response,
-): { runtime: CodePilotRuntime; capture: Capture; sink: ReturnType<typeof collect> } {
+): {
+  runtime: CodePilotRuntime;
+  capture: Capture;
+  sink: ReturnType<typeof collect>;
+} {
   const sink = collect();
   const runtime = new CodePilotRuntime({
     workspaceRoot: process.cwd(),
@@ -86,6 +95,10 @@ function makeRuntime(
     modelId: "qwen3:8b",
     agentMode: mode,
     requestApproval: async () => ({ approved: true }),
+    // A staging bridge is what makes `editor`/`apply_patch`/`delete_file`
+    // exist at all. Without one the runtime withholds every write tool
+    // (fail closed) — see the no-bridge case below.
+    onWriteProposal: async () => ({ changeSetId: "cs-test" }),
   });
   runtime.subscribe((e) => sink.events.push(e));
   const capture = stubChat(responder);
@@ -93,9 +106,7 @@ function makeRuntime(
 }
 
 const statusMessages = (sink: ReturnType<typeof collect>): string[] =>
-  sink
-    .byType("status")
-    .map((e) => (e as { message?: string }).message ?? "");
+  sink.byType("status").map((e) => (e as { message?: string }).message ?? "");
 
 const finalAnswer = (): Response => chatResponse(FINAL_ANSWER_LINES);
 
@@ -132,9 +143,9 @@ describe("Phase 1 — runtime-authoritative mode/tool contract", () => {
     await runtime.dispose().catch(() => undefined);
 
     const body = capture.bodies.find((b) => Array.isArray(b.messages));
-    const names = ((body?.tools ?? []) as Array<{ function: { name: string } }>).map(
-      (t) => t.function.name,
-    );
+    const names = (
+      (body?.tools ?? []) as Array<{ function: { name: string } }>
+    ).map((t) => t.function.name);
     expect(names).not.toContain("bash");
     expect(names).not.toContain("editor");
     expect(names).toContain("read_files");
@@ -147,15 +158,17 @@ describe("Phase 1 — runtime-authoritative mode/tool contract", () => {
     await runtime.dispose().catch(() => undefined);
 
     const body = capture.bodies.find((b) => Array.isArray(b.messages));
-    const names = ((body?.tools ?? []) as Array<{ function: { name: string } }>).map(
-      (t) => t.function.name,
-    );
+    const names = (
+      (body?.tools ?? []) as Array<{ function: { name: string } }>
+    ).map((t) => t.function.name);
     expect(names).toContain("bash");
     expect(names).toContain("run_commands");
     expect(names).toContain("editor");
     expect(names).toContain("read_files");
 
-    const truth = statusMessages(sink).find((m) => m.startsWith("AGENT_REQUEST"));
+    const truth = statusMessages(sink).find((m) =>
+      m.startsWith("AGENT_REQUEST"),
+    );
     expect(truth).toBeDefined();
     expect(truth).toContain("mode=act");
     expect(truth).toContain("provider=ollama");
@@ -167,6 +180,33 @@ describe("Phase 1 — runtime-authoritative mode/tool contract", () => {
     expect(runtime.getLastRunToolSummary().count).toBe(count);
   });
 
+  it("a runtime WITHOUT a staging bridge withholds every write tool (fail closed)", async () => {
+    const sink = collect();
+    const runtime = new CodePilotRuntime({
+      workspaceRoot: process.cwd(),
+      providerId: "ollama",
+      modelId: "qwen3:8b",
+      agentMode: "act",
+      requestApproval: async () => ({ approved: true }),
+    });
+    runtime.subscribe((e) => sink.events.push(e));
+    const capture = stubChat(() => finalAnswer());
+    await runtime.initialize();
+    await runtime.startSession("Edit a file.");
+    await runtime.dispose().catch(() => undefined);
+
+    const body = capture.bodies.find((b) => Array.isArray(b.messages));
+    const names = (
+      (body?.tools ?? []) as Array<{ function: { name: string } }>
+    ).map((t) => t.function.name);
+    expect(names).not.toContain("editor");
+    expect(names).not.toContain("apply_patch");
+    expect(names).not.toContain("delete_file");
+    // Non-write tools are unaffected.
+    expect(names).toContain("read_files");
+    expect(names).toContain("bash");
+  });
+
   it("REVIEW and AUTO keep the full toolset (no filter)", async () => {
     for (const mode of ["review", "auto"] as const) {
       const { runtime, capture } = makeRuntime(mode, () => finalAnswer());
@@ -174,9 +214,9 @@ describe("Phase 1 — runtime-authoritative mode/tool contract", () => {
       await runtime.startSession("Review the workspace.");
       await runtime.dispose().catch(() => undefined);
       const body = capture.bodies.find((b) => Array.isArray(b.messages));
-      const names = ((body?.tools ?? []) as Array<{ function: { name: string } }>).map(
-        (t) => t.function.name,
-      );
+      const names = (
+        (body?.tools ?? []) as Array<{ function: { name: string } }>
+      ).map((t) => t.function.name);
       expect(names).toContain("bash");
       expect(names).toContain("read_files");
     }
@@ -210,6 +250,13 @@ describe("Phase 1 — runtime-authoritative mode/tool contract", () => {
         firstTurn = false;
         return chatResponse([
           toolCallLine("read_files", { files: [{ path: "package.json" }] }),
+          // Protocol terminal line (Ollama always ends with done:true; an
+          // unterminated stream is truncation, never a completed turn).
+          {
+            message: { role: "assistant", content: "" },
+            done: true,
+            eval_count: 3,
+          },
         ]);
       }
       return finalAnswer();

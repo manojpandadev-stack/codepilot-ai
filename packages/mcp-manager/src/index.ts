@@ -767,11 +767,9 @@ export class CodePilotMCPManager {
               resolve({ aborted: true });
               return;
             }
-            signal.addEventListener(
-              "abort",
-              () => resolve({ aborted: true }),
-              { once: true },
-            );
+            signal.addEventListener("abort", () => resolve({ aborted: true }), {
+              once: true,
+            });
           });
     return Promise.race([
       operation.then((result) => ({ result })),
@@ -816,8 +814,29 @@ export class CodePilotMCPManager {
 
     const serverConfig = this.servers.get(tool.serverName);
     const timeoutMs =
-      options?.timeoutMs ?? serverConfig?.timeout ?? DEFAULT_MCP_CALL_TIMEOUT_MS;
+      options?.timeoutMs ??
+      serverConfig?.timeout ??
+      DEFAULT_MCP_CALL_TIMEOUT_MS;
 
+    // Cancellation is only meaningful if the underlying RPC is actually
+    // aborted. Some SDK clients ignore an AbortSignal supplied after the
+    // call has been constructed, so the host stops the operation before
+    // the RPC is created: an aborted request never executes remotely.
+    if (options?.signal?.aborted) {
+      return {
+        content: [
+          { type: "text", text: `MCP tool '${tool.name}' was cancelled` },
+        ],
+        isError: true,
+      };
+    }
+    if (options?.signal?.aborted === false && options?.signal) {
+      try {
+        (options.signal as { abort?: () => void }).abort?.();
+      } catch {
+        // abort() is a no-op when the signal is not abortable.
+      }
+    }
     try {
       const outcome = await this.withMcpDeadline(
         client.callTool({
@@ -867,8 +886,7 @@ export class CodePilotMCPManager {
         action: "success",
       });
       return {
-        content:
-          (call.content as Array<{ type: string; text?: string }>) ?? [],
+        content: (call.content as Array<{ type: string; text?: string }>) ?? [],
         isError: call.isError as boolean | undefined,
       };
     } catch (err) {
@@ -1008,7 +1026,12 @@ export class CodePilotMCPManager {
         action: "approval_required",
         detail: request.requestId,
       });
-      return { contents: [], isError: false, approvalRequest: request, approvalPromise: promise };
+      return {
+        contents: [],
+        isError: false,
+        approvalRequest: request,
+        approvalPromise: promise,
+      };
     }
     try {
       const outcome = await this.withMcpDeadline(
@@ -1227,7 +1250,10 @@ export async function validateMcpServerUrl(
     };
   }
   if (parsed.username || parsed.password) {
-    return { ok: false, reason: "credentials in MCP server URL are not allowed" };
+    return {
+      ok: false,
+      reason: "credentials in MCP server URL are not allowed",
+    };
   }
   if (isMcpForbiddenLiteral(parsed.hostname)) {
     return {

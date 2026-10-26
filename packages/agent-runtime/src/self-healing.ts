@@ -83,7 +83,14 @@ export interface SelfHealingConfig {
   maxAttempts?: number;
   /** Timeout per attempt in ms (default: 120000 = 2 minutes). */
   attemptTimeoutMs?: number;
-  /** Whether to require user approval for repairs (default: true). */
+  /**
+   * Whether repairs must be approved before they are applied (default: true).
+   * When true AND the caller supplies an approval channel to `heal()`, every
+   * repair is decided by that channel and a denial ends the cycle before
+   * `applyRepair` runs. Hosts that pass no channel (the production host, whose
+   * `applyRepair` performs no direct write and whose real mutations go through
+   * the M4-gated, ChangeSet-staged agent session) must opt out explicitly.
+   */
   requireApproval?: boolean;
   /** Workspace root for security boundary checks. */
   workspaceRoot: string;
@@ -111,6 +118,20 @@ export type RepairApplier = (
   repairDescription: string,
   filesChanged: string[],
 ) => Promise<{ success: boolean; error?: string; filesChanged?: string[] }>;
+
+/**
+ * Per-attempt repair approval channel. Invoked BEFORE `applyRepair` on every
+ * attempt whenever `requireApproval` is true; a denial (or a thrown error)
+ * stops the cycle immediately — no further repair attempts.
+ */
+export type RepairApprover = (request: {
+  attempt: number;
+  diagnosis: string;
+  repairDescription: string;
+  filesChanged: string[];
+}) =>
+  | Promise<{ approved: boolean; reason?: string }>
+  | { approved: boolean; reason?: string };
 
 // ============================================================================
 // SelfHealingEngine
@@ -144,6 +165,11 @@ export class SelfHealingEngine {
    * @param validate - Function to run validation (tests, build, lint).
    * @param diagnose - Function to analyze the failure and propose a repair.
    * @param applyRepair - Function to apply the proposed repair.
+   * @param approveRepair - Approval channel consulted before EVERY
+   *   `applyRepair` call while `requireApproval` is true (the default).
+   *   Without it a required-approval engine falls back to its configured
+   *   policy: see `requireApproval` handling below — `applyRepair` is only
+   *   ever reached through an approval decision when a channel exists.
    * @returns The complete healing result.
    */
   async heal(
@@ -151,6 +177,7 @@ export class SelfHealingEngine {
     validate: ValidationRunner,
     diagnose: RepairDiagnoser,
     applyRepair: RepairApplier,
+    approveRepair?: RepairApprover,
   ): Promise<HealingResult> {
     // If the initial validation already passes, nothing to heal.
     if (initialFailure.passed) {
@@ -276,6 +303,58 @@ export class SelfHealingEngine {
         timestamp: Date.now(),
         data: { diagnosis: diagnosisResult.diagnosis },
       });
+
+      // Phase 1b: Approval (fail-closed when a channel is configured).
+      // `requireApproval` is NOT a no-op knob: whenever a host supplies an
+      // approval channel, the repair is decided by it and a denial ends the
+      // cycle — `applyRepair` is never called.
+      if (this.config.requireApproval && approveRepair) {
+        let approved = false;
+        let reason = "";
+        try {
+          const decision = await this.withTimeout(
+            () =>
+              Promise.resolve(
+                approveRepair({
+                  attempt,
+                  diagnosis: diagnosisResult.diagnosis,
+                  repairDescription: diagnosisResult.repairDescription,
+                  filesChanged: diagnosisResult.filesChanged,
+                }),
+              ),
+            this.config.attemptTimeoutMs,
+            `approval-${attempt}`,
+          );
+          approved = decision.approved === true;
+          reason = decision.reason ?? "";
+        } catch (err) {
+          approved = false;
+          reason = err instanceof Error ? err.message : String(err);
+        }
+        if (this.abortController.signal.aborted) break;
+        if (!approved) {
+          const error = `Repair denied: ${reason || "user denied the proposed change"}`;
+          repairHistory.push({
+            attemptNumber: attempt,
+            timestamp: Date.now(),
+            diagnosis: diagnosisResult.diagnosis,
+            repairDescription: diagnosisResult.repairDescription,
+            filesChanged: [],
+            validation: lastValidation,
+            success: false,
+            error,
+          });
+          this.emitHealingEvent({
+            type: "repair_failed",
+            attempt,
+            maxAttempts: this.config.maxAttempts,
+            timestamp: Date.now(),
+            data: { error, phase: "approval" },
+          });
+          // Denial STOPS healing — no further repair attempts, ever.
+          break;
+        }
+      }
 
       // Phase 2: Apply repair
       this.emitHealingEvent({
@@ -736,6 +815,8 @@ const NON_RECOVERABLE_PATTERNS = [
   /out of memory/i,
   /segfault/i,
   /core dumped/i,
+  /gemini is temporarily busy/i,
+  /model experiencing high demand/i,
 ];
 
 /** Patterns that indicate security violations. */

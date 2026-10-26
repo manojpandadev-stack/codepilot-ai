@@ -40,8 +40,9 @@ export class PrivacyViolationError extends Error {
 export function assertSummarizerPrivacyAllowed(
   providerId: string,
   privacyMode: "local" | "cloud",
+  baseUrl?: string | undefined | null,
 ): void {
-  if (privacyMode === "local" && isRemoteProvider(providerId)) {
+  if (privacyMode === "local" && isRemoteProvider(providerId, baseUrl)) {
     throw new PrivacyViolationError(toNativeProviderId(providerId));
   }
 }
@@ -246,7 +247,11 @@ export async function summarizeConversation(
   config: SummarizerConfig,
   options?: { priorSummary?: string; signal?: AbortSignal },
 ): Promise<SummarizeResult | null> {
-  assertSummarizerPrivacyAllowed(config.providerId, config.privacyMode);
+  assertSummarizerPrivacyAllowed(
+    config.providerId,
+    config.privacyMode,
+    config.baseUrl,
+  );
 
   const maxChars = config.maxTranscriptChars ?? 48_000;
   const transcript = renderTranscript(segment, maxChars);

@@ -127,7 +127,6 @@ describe("detectShell", () => {
   });
 });
 
-
 describe("TerminalSession — interactive stdin (keepStdinOpen)", () => {
   const ECHO_SCRIPT =
     "process.stdin.setEncoding('utf8');" +

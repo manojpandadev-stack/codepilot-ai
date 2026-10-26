@@ -226,11 +226,7 @@ export function updateTaskPlanStep(
     step.note = bound(String(update.note), MAX_PLAN_NOTE_CHARS, "note");
   }
   if (update.error !== undefined && status === "failed") {
-    step.lastError = bound(
-      String(update.error),
-      MAX_PLAN_NOTE_CHARS,
-      "error",
-    );
+    step.lastError = bound(String(update.error), MAX_PLAN_NOTE_CHARS, "error");
   }
   const steps = plan.steps.map((s, i) => (i === stepIndex ? step : s));
   const currentStepId =
@@ -312,9 +308,7 @@ export function parseModelPlanText(
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const rec = parsed as Record<string, unknown>;
         const objective =
-          typeof rec.objective === "string"
-            ? rec.objective
-            : firstLine(text);
+          typeof rec.objective === "string" ? rec.objective : firstLine(text);
         const steps = Array.isArray(rec.steps)
           ? (rec.steps as unknown[]).map((s) =>
               typeof s === "object" && s !== null
@@ -328,7 +322,9 @@ export function parseModelPlanText(
               objective,
               steps: steps.map((s) => ({
                 title: String(s.title ?? s.description ?? ""),
-                ...(Array.isArray(s.dependsOn) ? { dependsOn: s.dependsOn } : {}),
+                ...(Array.isArray(s.dependsOn)
+                  ? { dependsOn: s.dependsOn }
+                  : {}),
                 ...(Array.isArray(s.affectedFiles)
                   ? { affectedFiles: s.affectedFiles }
                   : {}),

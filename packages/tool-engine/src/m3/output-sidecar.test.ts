@@ -149,9 +149,7 @@ describe("output sidecar — bounded store", () => {
     expect(ref).toBeTruthy();
     const file = path.join(dir, `${ref}.txt`);
     const stat = fs.statSync(file);
-    expect(stat.size).toBeLessThanOrEqual(
-      OUTPUT_SIDECAR_MAX_FILE_CHARS + 400,
-    );
+    expect(stat.size).toBeLessThanOrEqual(OUTPUT_SIDECAR_MAX_FILE_CHARS + 400);
     const content = fs.readFileSync(file, "utf8");
     expect(content).toContain("HEADSTART");
     expect(content).toContain("TAIL-END");

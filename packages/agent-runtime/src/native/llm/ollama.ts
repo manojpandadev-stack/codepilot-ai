@@ -171,6 +171,13 @@ export interface OllamaLlmOptions {
    */
   firstTokenTimeoutMs?: number;
   baseUrl?: string;
+  /**
+   * `fetch` redirect mode. `"manual"` surfaces a 3xx instead of following it,
+   * which Local Only requires: the privacy policy can only validate the
+   * CONFIGURED endpoint, so following `302 Location: https://...` would send
+   * the prompt to a destination it never inspected. Omitted => default (follow).
+   */
+  redirect?: "follow" | "manual";
   fetchImpl?: typeof fetch;
   /**
    * Transport selection. DEFAULT "fetch" = Node's global fetch (undici) —
@@ -210,6 +217,8 @@ export class OllamaLlmProvider implements LlmProvider {
   readonly id = "ollama";
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  /** fetch redirect mode ("manual" under Local Only). Undefined => default. */
+  private readonly redirect?: "follow" | "manual";
   /** True only when the zero-timeout node:http adapter was opted into. */
   readonly usesNodeHttpTransport: boolean;
   private readonly timeoutMs: number;
@@ -233,11 +242,14 @@ export class OllamaLlmProvider implements LlmProvider {
       (this.usesNodeHttpTransport
         ? (nodeHttpFetch as unknown as typeof fetch)
         : fetch)) as typeof fetch;
+    this.redirect = options.redirect;
     this.timeoutMs = options.timeoutMs ?? 300_000;
     this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 900_000;
     this.keepAlive = options.keepAlive ?? "10m";
     this.numCtx =
-      options.numCtx !== undefined && Number.isFinite(options.numCtx) && options.numCtx > 0
+      options.numCtx !== undefined &&
+      Number.isFinite(options.numCtx) &&
+      options.numCtx > 0
         ? Math.floor(options.numCtx)
         : undefined;
     this.numPredict =
@@ -252,7 +264,9 @@ export class OllamaLlmProvider implements LlmProvider {
   async listInstalledModels(): Promise<Array<{ name: string; size?: number }>> {
     let res: Response;
     try {
-      res = await this.fetchImpl(`${this.baseUrl}/api/tags`);
+      res = await this.fetchImpl(`${this.baseUrl}/api/tags`, {
+        ...(this.redirect ? { redirect: this.redirect } : {}),
+      });
     } catch (err) {
       // Undici's global fetch rejects network failures with the opaque
       // "fetch failed" TypeError; unwrap the cause (e.g. "connect
@@ -284,6 +298,22 @@ export class OllamaLlmProvider implements LlmProvider {
 
   async *stream(request: LlmRequest): AsyncIterable<LlmStreamEvent> {
     const tools = request.tools ?? [];
+    // Phase 7: the agent loop's resolved output budget (min(configured cap,
+    // remaining context)) is a HARD CEILING on num_predict — it must never
+    // be exceeded when supplied. The VS Code `numPredict` setting stays a
+    // preference BELOW that ceiling: deterministic precedence = the smaller
+    // of the two positive values, whichever exists. Neither present → key
+    // omitted (server/model default), exactly as before.
+    const positiveInt = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined;
+    const budgetMaxTokens = positiveInt(request.maxTokens);
+    const configuredNumPredict = this.numPredict;
+    const effectiveNumPredict =
+      budgetMaxTokens !== undefined && configuredNumPredict !== undefined
+        ? Math.min(budgetMaxTokens, configuredNumPredict)
+        : (budgetMaxTokens ?? configuredNumPredict);
     const body: Record<string, unknown> = {
       model: request.modelId,
       messages: [
@@ -302,12 +332,14 @@ export class OllamaLlmProvider implements LlmProvider {
       // BUG 4: num_ctx/num_predict from the VS Code localAI settings reach
       // the wire; temperature stays per-request. `options` is omitted
       // entirely when nothing is configured (never an empty/partial object).
-      ...(this.numCtx !== undefined || this.numPredict !== undefined || request.temperature !== undefined
+      ...(this.numCtx !== undefined ||
+      effectiveNumPredict !== undefined ||
+      request.temperature !== undefined
         ? {
             options: {
               ...(this.numCtx !== undefined ? { num_ctx: this.numCtx } : {}),
-              ...(this.numPredict !== undefined
-                ? { num_predict: this.numPredict }
+              ...(effectiveNumPredict !== undefined
+                ? { num_predict: effectiveNumPredict }
                 : {}),
               ...(request.temperature !== undefined
                 ? { temperature: request.temperature }
@@ -350,6 +382,7 @@ export class OllamaLlmProvider implements LlmProvider {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal: controller.signal,
+        ...(this.redirect ? { redirect: this.redirect } : {}),
       });
     } catch (err) {
       clearTimeout(timeout);
@@ -374,7 +407,10 @@ export class OllamaLlmProvider implements LlmProvider {
         cause instanceof Error
           ? ((cause as { code?: string }).code ?? cause.message)
           : "";
-      if (typeof causeCode === "string" && causeCode.includes("HEADERS_TIMEOUT")) {
+      if (
+        typeof causeCode === "string" &&
+        causeCode.includes("HEADERS_TIMEOUT")
+      ) {
         throw new LlmError(
           this.id,
           `chat request to ${this.baseUrl}/api/chat was dropped by the HTTP client's 300s headers timeout while the local model was still prefilling (no response headers yet). The provider's own first-token window (firstTokenTimeoutMs) is longer — raise it deliberately AND run the request on a transport without undici's headers cap, or reduce context/prompt size.`,
@@ -389,9 +425,7 @@ export class OllamaLlmProvider implements LlmProvider {
         // real transport pattern instead of the opaque "fetch failed".
         `chat request to ${this.baseUrl}/api/chat failed: ${
           err instanceof Error ? err.message : String(err)
-        }${
-          cause instanceof Error ? `: ${cause.message}` : ""
-        }`,
+        }${cause instanceof Error ? `: ${cause.message}` : ""}`,
       );
     }
 
@@ -475,7 +509,9 @@ export class OllamaLlmProvider implements LlmProvider {
           },
         };
       }
-      yield { type: "finish", reason: "complete" };
+      // No done:true seen means the stream was truncated (EOF without
+      // terminal evidence) — never report it as a successful completion.
+      yield { type: "finish", reason: done ? "complete" : "incomplete" };
     } catch (err) {
       if (request.signal?.aborted) {
         yield { type: "finish", reason: "aborted" };

@@ -37,11 +37,7 @@ describe("createTaskPlan", () => {
     const plan = sample();
     expect(plan.version).toBe(1);
     expect(plan.objective).toBe("Ship the release");
-    expect(plan.steps.map((s) => s.id)).toEqual([
-      "step-1",
-      "step-2",
-      "step-3",
-    ]);
+    expect(plan.steps.map((s) => s.id)).toEqual(["step-1", "step-2", "step-3"]);
     expect(plan.steps.every((s) => s.status === "pending")).toBe(true);
     expect(plan.steps.every((s) => s.attempts === 0)).toBe(true);
     expect(plan.steps[1]!.dependsOn).toEqual(["step-1"]);
@@ -55,11 +51,14 @@ describe("createTaskPlan", () => {
       createTaskPlan({ objective: "   ", steps: [{ title: "a" }] }, NOW),
     ).toThrow(/objective/);
     expect(() =>
-      createTaskPlan({ objective: "x".repeat(1001), steps: [{ title: "a" }] }, NOW),
+      createTaskPlan(
+        { objective: "x".repeat(1001), steps: [{ title: "a" }] },
+        NOW,
+      ),
     ).toThrow(/at most 1000/);
-    expect(() =>
-      createTaskPlan({ objective: "ok", steps: [] }, NOW),
-    ).toThrow(/at least one step/);
+    expect(() => createTaskPlan({ objective: "ok", steps: [] }, NOW)).toThrow(
+      /at least one step/,
+    );
     expect(() =>
       createTaskPlan(
         { objective: "ok", steps: [{ title: "x".repeat(401) }] },
@@ -109,7 +108,10 @@ describe("createTaskPlan", () => {
     ).toThrow(/at most 20/);
     expect(() =>
       createTaskPlan(
-        { objective: "ok", steps: [{ title: "a", affectedFiles: ["x".repeat(301)] }] },
+        {
+          objective: "ok",
+          steps: [{ title: "a", affectedFiles: ["x".repeat(301)] }],
+        },
         NOW,
       ),
     ).toThrow(/at most 300/);
@@ -133,8 +135,16 @@ describe("updateTaskPlanStep", () => {
 
   it("running → completed clears currentStepId; progress derives", () => {
     let plan = sample();
-    plan = updateTaskPlanStep(plan, { stepId: "step-1", status: "running" }, NOW).plan;
-    plan = updateTaskPlanStep(plan, { stepId: "step-1", status: "completed" }, NOW).plan;
+    plan = updateTaskPlanStep(
+      plan,
+      { stepId: "step-1", status: "running" },
+      NOW,
+    ).plan;
+    plan = updateTaskPlanStep(
+      plan,
+      { stepId: "step-1", status: "completed" },
+      NOW,
+    ).plan;
     expect(plan.currentStepId).toBeUndefined();
     expect(planProgress(plan)).toEqual({
       total: 3,
@@ -194,9 +204,9 @@ describe("updateTaskPlanStep", () => {
     expect(() =>
       updateTaskPlanStep(plan, { stepNumber: 99, status: "running" }, NOW),
     ).toThrow(/stepNumber/);
-    expect(() =>
-      updateTaskPlanStep(plan, { status: "running" }, NOW),
-    ).toThrow(/requires \{ stepId \}/);
+    expect(() => updateTaskPlanStep(plan, { status: "running" }, NOW)).toThrow(
+      /requires \{ stepId \}/,
+    );
     expect(() =>
       updateTaskPlanStep(plan, { stepId: "step-1", status: "bogus" }, NOW),
     ).toThrow(/must be one of/);

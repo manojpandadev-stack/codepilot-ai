@@ -87,6 +87,7 @@ export class OllamaProvider implements ModelProvider {
       const response = await fetch(`${baseUrl}/api/tags`, {
         signal: effectiveSignal,
         headers: { Accept: "application/json" },
+        redirect: this.config.redirect,
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -126,6 +127,7 @@ export class OllamaProvider implements ModelProvider {
       const response = await fetch(`${baseUrl}/api/tags`, {
         signal: effectiveSignal,
         headers: { Accept: "application/json" },
+        redirect: this.config.redirect,
       });
       const latencyMs = Date.now() - start;
 

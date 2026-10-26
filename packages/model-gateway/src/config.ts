@@ -34,19 +34,15 @@ export const HEALTH_CACHE_TTL_MS = 15_000;
 /** All known built-in provider IDs. */
 export const BUILTIN_PROVIDER_IDS = [
   "ollama",
-  "openai",
-  "openai-compatible",
-  "anthropic",
-  "google",
-  "openrouter",
-  "lmstudio",
-  "deepseek",
-  "mistral",
-  "xai",
-  "bedrock",
+  "openai-native",
+  "gemini",
 ] as const;
 
 export type BuiltinProviderId = (typeof BUILTIN_PROVIDER_IDS)[number];
+
+export function isSupportedProviderId(id: string): id is BuiltinProviderId {
+  return (BUILTIN_PROVIDER_IDS as readonly string[]).includes(id);
+}
 
 /**
  * Factory defaults for each built-in provider.
@@ -65,92 +61,21 @@ export const BUILTIN_PROVIDER_DEFAULTS: Record<
     timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
     enabled: true,
   },
-  openai: {
-    id: "openai",
+  "openai-native": {
+    id: "openai-native",
     name: "OpenAI",
-    type: "openai-compatible" as ProviderType,
+    type: "openai" as ProviderType,
     baseUrl: "https://api.openai.com/v1",
     defaultModelId: "gpt-4o-mini",
     timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
     enabled: false,
   },
-  "openai-compatible": {
-    id: "openai-compatible",
-    name: "OpenAI-Compatible",
-    type: "openai-compatible" as ProviderType,
-    baseUrl: "", // must be set by user
-    defaultModelId: "",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  anthropic: {
-    id: "anthropic",
-    name: "Anthropic",
-    type: "anthropic" as ProviderType,
-    baseUrl: "https://api.anthropic.com",
-    defaultModelId: "claude-sonnet-4-20250514",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  google: {
-    id: "google",
+  gemini: {
+    id: "gemini",
     name: "Google Gemini",
     type: "gemini" as ProviderType,
     baseUrl: "https://generativelanguage.googleapis.com",
     defaultModelId: "gemini-2.5-flash",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  openrouter: {
-    id: "openrouter",
-    name: "OpenRouter",
-    type: "openai-compatible" as ProviderType,
-    baseUrl: "https://openrouter.ai/api/v1",
-    defaultModelId: "",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  lmstudio: {
-    id: "lmstudio",
-    name: "LM Studio (Local)",
-    type: "openai-compatible" as ProviderType,
-    baseUrl: "http://localhost:1234/v1",
-    defaultModelId: "", // dynamically discovered
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  deepseek: {
-    id: "deepseek",
-    name: "DeepSeek",
-    type: "openai-compatible" as ProviderType,
-    baseUrl: "https://api.deepseek.com/v1",
-    defaultModelId: "deepseek-chat",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  mistral: {
-    id: "mistral",
-    name: "Mistral",
-    type: "openai-compatible" as ProviderType,
-    baseUrl: "https://api.mistral.ai/v1",
-    defaultModelId: "mistral-large-latest",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  xai: {
-    id: "xai",
-    name: "xAI (Grok)",
-    type: "openai-compatible" as ProviderType,
-    baseUrl: "https://api.x.ai/v1",
-    defaultModelId: "grok-3",
-    timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
-    enabled: false,
-  },
-  bedrock: {
-    id: "bedrock",
-    name: "AWS Bedrock",
-    type: "bedrock" as ProviderType,
-    defaultModelId: "",
     timeoutMs: DEFAULT_PROVIDER_TIMEOUT_MS,
     enabled: false,
   },
@@ -359,7 +284,13 @@ export function validateProviderConfig(
 export function resolveProviderConfig(
   partial: Partial<ProviderConfig> & { id: string; type: ProviderType },
 ): ProviderConfig {
-  const builtinId = partial.id as BuiltinProviderId;
+  const normalizedId =
+    partial.id === "openai"
+      ? "openai-native"
+      : partial.id === "google"
+        ? "gemini"
+        : partial.id;
+  const builtinId = normalizedId as BuiltinProviderId;
   const defaults =
     BUILTIN_PROVIDER_DEFAULTS[builtinId] ??
     ({
@@ -397,7 +328,6 @@ export function apiKeyFromEnv(providerId: string): string | undefined {
       anthropic: "ANTHROPIC_API_KEY",
       google: "GEMINI_API_KEY",
       mistral: "MISTRAL_API_KEY",
-      openrouter: "OPENROUTER_API_KEY",
       deepseek: "DEEPSEEK_API_KEY",
       xai: "XAI_API_KEY",
     };

@@ -538,8 +538,12 @@ describe("ScheduleService M4 enforcement (no scheduled bypass)", () => {
       presentApproval: async () => ({ decision: "allow", scope: "once" }),
       policies: [
         {
-          id: "deny-reads",
-          actions: ["read_file"],
+          // MATCH-ALL deny: `sched_probe` is an unknown tool id and fails
+          // closed as write_file (P0-1). A deny scoped to read_file would
+          // depend on the old fail-open default and silently miss it —
+          // this test must verify denial for ANY classification.
+          id: "deny-all-actions",
+          actions: [],
           decision: "deny",
           scope: "single_execution",
           priority: 1000,
@@ -564,10 +568,19 @@ describe("ScheduleService M4 enforcement (no scheduled bypass)", () => {
 
   it("M4 allow executes through the full chain", async () => {
     const calls: string[] = [];
+    // P0-1 fail-closed contract: `sched_probe` is an unknown tool id
+    // (write_file), so the execution requires approval. The approval must
+    // resolve through the real ApprovalManager — the presentApproval return
+    // value alone does not authorize execution (mirrors the production host).
+    let manager: M4PermissionPipeline["approvalManager"] | null = null;
     const allow = new M4PermissionPipeline({
       workspaceRoot: dir,
-      presentApproval: async () => ({ decision: "allow", scope: "once" }),
+      presentApproval: async (request) => {
+        queueMicrotask(() => manager!.approve(request.approvalId));
+        return { decision: "allow", scope: "once" };
+      },
     });
+    manager = allow.approvalManager;
     const svc = new ScheduleService(m4Executor(allow, [], calls, dir), { maxConcurrent: 1 });
     try {
       const created = svc.create(intervalInput());

@@ -394,7 +394,6 @@ describe("streaming shell helpers", () => {
   });
 });
 
-
 // ---------------------------------------------- outputRef sidecar (Phase 7b)
 describe("streaming shell executor — outputRef sidecar", () => {
   const sidecarDirs: string[] = [];

@@ -31,7 +31,11 @@ import {
   persistToolOutput,
   readToolOutput,
 } from "@codepilot/tool-engine";
-import { fetchUrlContent, inspectCodeStructure } from "@codepilot/context-engine";
+import {
+  fetchUrlContent,
+  inspectCodeStructure,
+  webFetch,
+} from "@codepilot/context-engine";
 import {
   applyEditorOperation,
   parseApplyPatchInput,
@@ -98,7 +102,10 @@ function boundText(text: string, max = BUILTIN_RESULT_MAX_CHARS): string {
  * outputRef sidecar (secrets redacted) and the result quotes the ref, so
  * `read_tool_output` can retrieve the elided region (Phase 7b).
  */
-function boundTextWithRef(text: string, max = BUILTIN_RESULT_MAX_CHARS): string {
+function boundTextWithRef(
+  text: string,
+  max = BUILTIN_RESULT_MAX_CHARS,
+): string {
   if (text.length <= max) return text;
   const ref = persistToolOutput(text);
   const note = ref
@@ -179,6 +186,14 @@ function sliceLines(
 // ============================================================================
 
 export interface BuiltinToolOverrides {
+  /**
+   * Opt in to the un-staged direct-write fallback for `editor` /
+   * `apply_patch`. DEFAULT false: with no host executor the tools refuse to
+   * run, because an edit that never becomes a ChangeSet proposal can never be
+   * reviewed or applied through M5. Only set this in a deliberately untrusted
+   * harness (fixtures/sandboxes), never in a host that ships to users.
+   */
+  allowUnstagedWrites?: boolean;
   /** Host executor for `editor` (ChangeSet staging in VS Code). */
   editor?: (
     input: unknown,
@@ -317,8 +332,7 @@ function inspectSymbolsTool(cwd: string): AgentTool {
         },
         max_symbols: {
           type: "number",
-          description:
-            `Cap on returned symbols (default ${BUILTIN_SYMBOLS_DEFAULT_CAP}, max ${BUILTIN_SYMBOLS_MAX_CAP}).`,
+          description: `Cap on returned symbols (default ${BUILTIN_SYMBOLS_DEFAULT_CAP}, max ${BUILTIN_SYMBOLS_MAX_CAP}).`,
         },
       },
       required: ["path"],
@@ -465,7 +479,8 @@ function gitDiffTool(cwd: string): AgentTool {
       properties: {
         staged: {
           type: "boolean",
-          description: "Diff staged changes (--cached) instead of the working tree.",
+          description:
+            "Diff staged changes (--cached) instead of the working tree.",
         },
         path: {
           type: "string",
@@ -480,7 +495,9 @@ function gitDiffTool(cwd: string): AgentTool {
       const filePath = asString(rec.path);
       if (filePath !== undefined) {
         if (filePath.length === 0 || filePath.startsWith("-")) {
-          throw new Error("git_diff path must be a relative file path (no leading '-')");
+          throw new Error(
+            "git_diff path must be a relative file path (no leading '-')",
+          );
         }
         args.push("--", filePath);
       }
@@ -508,9 +525,10 @@ function gitLogTool(cwd: string): AgentTool {
     },
     execute: async (input: unknown) => {
       const rec = asRecord(input);
-      const raw = typeof rec.count === "number" && Number.isFinite(rec.count)
-        ? Math.floor(rec.count)
-        : 20;
+      const raw =
+        typeof rec.count === "number" && Number.isFinite(rec.count)
+          ? Math.floor(rec.count)
+          : 20;
       const count = Math.min(Math.max(raw, 1), 50);
       const result = runGit(cwd, [
         "log",
@@ -536,7 +554,8 @@ function gitShowTool(cwd: string): AgentTool {
       properties: {
         ref: {
           type: "string",
-          description: "Revision to show (e.g. HEAD, a commit sha, a branch name).",
+          description:
+            "Revision to show (e.g. HEAD, a commit sha, a branch name).",
         },
       },
       required: ["ref"],
@@ -544,7 +563,7 @@ function gitShowTool(cwd: string): AgentTool {
     execute: async (input: unknown) => {
       const rec = asRecord(input);
       const ref = asString(rec.ref)?.trim();
-      if (!ref) throw new Error('git_show requires { ref }');
+      if (!ref) throw new Error("git_show requires { ref }");
       if (ref.startsWith("-") || !GIT_REF_RE.test(ref)) {
         throw new Error(
           `git_show ref rejected: ${JSON.stringify(ref.slice(0, 80))} (expected a plain revision like HEAD or a commit sha)`,
@@ -667,6 +686,55 @@ function searchCodebaseTool(cwd: string): AgentTool {
         if (matches === 0) results.push({ query, matches: 0 });
       }
       return results;
+    },
+  };
+}
+
+/**
+ * Canonical `web_fetch` AgentTool.
+ *
+ * Thin adapter over the audited `webFetch` in @codepilot/context-engine — all
+ * SSRF, redirect, DNS and size enforcement stays in that one owner. This only
+ * maps the model-facing schema onto it and propagates cancellation.
+ */
+function webFetchTool(): AgentTool {
+  return {
+    name: "web_fetch",
+    description:
+      "Fetch a public HTTPS webpage or text API response when current external " +
+      "information or documentation is required. Prefer local project " +
+      "information when it already contains the answer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "Absolute http(s) URL to fetch (max 2048 chars).",
+        },
+        timeoutMs: {
+          type: "number",
+          description: "Timeout in ms (1000-30000, default 15000).",
+        },
+        maxBytes: {
+          type: "number",
+          description: "Max response bytes (1024-2097152, default 1048576).",
+        },
+      },
+      required: ["url"],
+    },
+    execute: async (input: unknown, context?: { signal?: AbortSignal }) => {
+      const record = asRecord(input);
+      const url = asString(record.url);
+      if (!url) throw new Error("web_fetch requires { url }");
+      const timeoutMs =
+        typeof record.timeoutMs === "number" ? record.timeoutMs : undefined;
+      const maxBytes =
+        typeof record.maxBytes === "number" ? record.maxBytes : undefined;
+      return await webFetch(url, {
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+        ...(context?.signal ? { signal: context.signal } : {}),
+      });
     },
   };
 }
@@ -970,7 +1038,9 @@ function planTool(bridge: TaskPlanBridge): AgentTool {
         const { plan, step } = updateTaskPlanStep(
           current,
           {
-            ...(asString(rec.step_id) ? { stepId: asString(rec.step_id)! } : {}),
+            ...(asString(rec.step_id)
+              ? { stepId: asString(rec.step_id)! }
+              : {}),
             ...(typeof rec.step_number === "number"
               ? { stepNumber: rec.step_number }
               : {}),
@@ -1042,7 +1112,16 @@ function editorTool(cwd: string, overrides: BuiltinToolOverrides): AgentTool {
           ),
         );
       }
-      // Legacy/headless default: apply directly (M4 still gates via beforeTool).
+      // SECURITY (M4/M5 audit): the un-staged fallback below is a direct
+      // filesystem write with NO ChangeSet proposal and NO review step. It is
+      // reachable only through a host that supplied no executor override, so
+      // missing staging infrastructure must fail CLOSED. A host that genuinely
+      // wants un-staged writes has to say so explicitly.
+      if (!overrides.allowUnstagedWrites) {
+        throw new Error(
+          "editor refused: no host write executor is configured. File edits must be staged as a ChangeSet proposal (see createStagedWriteTools) — set overrides.allowUnstagedWrites only in an explicitly untrusted harness.",
+        );
+      }
       const rec = asRecord(input);
       const filePath = asString(rec.file_path) ?? asString(rec.filePath) ?? "";
       const resolved = resolveWorkspacePath(filePath, cwd);
@@ -1098,6 +1177,13 @@ function applyPatchTool(
               : "apply_patch",
             typeof ctx?.sessionId === "string" ? ctx.sessionId : "",
           ),
+        );
+      }
+      // SECURITY (M4/M5 audit): same fail-closed rule as `editor` — without a
+      // host executor there is no ChangeSet proposal to review or apply.
+      if (!overrides.allowUnstagedWrites) {
+        throw new Error(
+          "apply_patch refused: no host write executor is configured. Patch application must be staged as a ChangeSet proposal (see createStagedWriteTools) — set overrides.allowUnstagedWrites only in an explicitly untrusted harness.",
         );
       }
       const parsed = await parseApplyPatchInput(asRecord(input), cwd);
@@ -1309,6 +1395,17 @@ export interface CodePilotBuiltinOptions {
   enableBash?: boolean;
   /** Offer web tools (disable for local-only privacy). */
   enableWebFetch?: boolean;
+  /**
+   * Effective privacy mode for this tool set. When "local", every builtin
+   * web/network tool is suppressed — even if `enableWebFetch` is true. The
+   * privacy decision is owned by privacyMode, not by enableWebFetch, so the
+   * factory can never accidentally bypass the canonical Local Only policy
+   * (isRemoteProvider in runtime.ts).
+   *
+   * Callers MUST forward their effective privacy mode here. Missing or
+   * unknown policy is deny-closed for web/network capability.
+   */
+  privacyMode?: "local" | "hybrid" | "cloud";
   /** Host executor overrides (VS Code staging/streaming). */
   overrides?: BuiltinToolOverrides;
   /** Shared command service (created when omitted). */
@@ -1370,8 +1467,14 @@ export function createCodePilotBuiltinTools(
   if (options.enableBash !== false) {
     tools.push(bashTool(options.cwd, overrides, service));
   }
-  if (options.enableWebFetch === true) {
-    tools.push(fetchWebContentTool(), webSearchTool());
+  // F-01 FAIL-CLOSED: Local Only must never expose remote web-fetch/network
+  // capability through this factory, even when enableWebFetch:true.
+  // privacyMode owns the decision; it can only remove web tools, never add.
+  if (
+    options.enableWebFetch === true &&
+    (options.privacyMode === "hybrid" || options.privacyMode === "cloud")
+  ) {
+    tools.push(webFetchTool(), fetchWebContentTool(), webSearchTool());
   }
   return tools;
 }
@@ -1384,11 +1487,21 @@ export function createBuiltinTools(options: {
   cwd: string;
   enableBash?: boolean;
   enableWebFetch?: boolean;
+  /** Forward the effective privacy policy through the legacy factory too. */
+  privacyMode?: "local" | "hybrid" | "cloud";
+  /** Opt in to un-staged direct writes (test harnesses only). */
+  allowUnstagedWrites?: boolean;
 }): AgentTool[] {
   return createCodePilotBuiltinTools({
     cwd: options.cwd,
     enableBash: options.enableBash,
     enableWebFetch: options.enableWebFetch,
+    ...(options.privacyMode !== undefined
+      ? { privacyMode: options.privacyMode }
+      : {}),
+    ...(options.allowUnstagedWrites !== undefined
+      ? { overrides: { allowUnstagedWrites: options.allowUnstagedWrites } }
+      : {}),
   });
 }
 
@@ -1415,6 +1528,7 @@ export const CODEPILOT_MODEL_TOOL_NAMES: readonly string[] = [
   "run_commands",
   "bash",
   "read_tool_output",
+  "web_fetch",
   "fetch_web_content",
   "web_search",
 ];

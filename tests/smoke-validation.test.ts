@@ -330,7 +330,7 @@ describe("ChangeSet Engine", () => {
 
   beforeAll(() => {
     fs.writeFileSync(changeSetFile, "original content", "utf-8");
-    csm = new ChangeSetManager({ workspaceRoot: WORKSPACE });
+    csm = new ChangeSetManager({ allowDirectWrite: true, workspaceRoot: WORKSPACE });
   });
 
   it("creates a ChangeSet", () => {

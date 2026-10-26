@@ -11,6 +11,7 @@ export interface Message {
   timestamp: number;
   toolName?: string;
   status?: "running" | "completed" | "error";
+  toolEvents?: ToolEvent[];
 }
 
 export interface ToolEvent {

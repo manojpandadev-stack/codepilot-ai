@@ -26,6 +26,7 @@ import {
 } from "./native/llm/ollama.js";
 import { createLlmProvider } from "./native/llm/registry.js";
 import { CodePilotRuntime } from "./runtime.js";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "./token-budget.js";
 import type { LlmRequest } from "./native/llm/types.js";
 
 afterEach(() => {
@@ -50,13 +51,15 @@ function captureFetch(): {
   let next = okChatResponse([
     { message: { role: "assistant", content: "ok" }, done: true },
   ]);
-  const fetchImpl = vi.fn(
-    async (_input: unknown, init?: { body?: string }) => {
-      bodies.push(JSON.parse(init?.body ?? "{}"));
-      return next;
-    },
-  ) as unknown as typeof fetch;
-  return { fetchImpl, bodies, respond: (lines) => (next = okChatResponse(lines)) };
+  const fetchImpl = vi.fn(async (_input: unknown, init?: { body?: string }) => {
+    bodies.push(JSON.parse(init?.body ?? "{}"));
+    return next;
+  }) as unknown as typeof fetch;
+  return {
+    fetchImpl,
+    bodies,
+    respond: (lines) => (next = okChatResponse(lines)),
+  };
 }
 
 const drain = async (
@@ -82,21 +85,31 @@ describe("OLLAMA — keepAliveMinutesToDuration (minutes → Go duration)", () =
     // Honest failures — never a malformed duration string:
     expect(keepAliveMinutesToDuration(-1)).toBeUndefined();
     expect(keepAliveMinutesToDuration(Number.NaN)).toBeUndefined();
-    expect(keepAliveMinutesToDuration(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(
+      keepAliveMinutesToDuration(Number.POSITIVE_INFINITY),
+    ).toBeUndefined();
   });
 });
 
 describe("OLLAMA — settings reach the actual /api/chat request body", () => {
   it("contextLength → options.num_ctx", async () => {
     const { fetchImpl, bodies } = captureFetch();
-    const provider = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl, numCtx: 8192 });
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      numCtx: 8192,
+    });
     await drain(provider);
     expect(bodies[0]?.options).toMatchObject({ num_ctx: 8192 });
   });
 
   it("numPredict → options.num_predict", async () => {
     const { fetchImpl, bodies } = captureFetch();
-    const provider = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl, numPredict: 1024 });
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      numPredict: 1024,
+    });
     await drain(provider);
     expect(bodies[0]?.options).toMatchObject({ num_predict: 1024 });
   });
@@ -110,26 +123,42 @@ describe("OLLAMA — settings reach the actual /api/chat request body", () => {
       numPredict: 512,
     });
     await drain(provider, { temperature: 0.3 });
-    expect(bodies[0]?.options).toEqual({ num_ctx: 4096, num_predict: 512, temperature: 0.3 });
+    expect(bodies[0]?.options).toEqual({
+      num_ctx: 4096,
+      num_predict: 512,
+      temperature: 0.3,
+    });
   });
 
   it("keepAlive reaches the wire as a duration string (default warm, 0 opt-out)", async () => {
     const { fetchImpl, bodies } = captureFetch();
-    const warm = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl });
+    const warm = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+    });
     await drain(warm);
     expect(bodies[0]?.keep_alive).toBe("10m");
 
-    const off = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl, keepAlive: "0" });
+    const off = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      keepAlive: "0",
+    });
     await drain(off);
     expect(bodies.at(-1)?.keep_alive).toBe("0");
   });
 
   it("unconfigured settings are omitted — no empty options object", async () => {
     const { fetchImpl, bodies } = captureFetch();
-    const provider = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl });
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+    });
     await drain(provider);
     expect(bodies[0]?.options).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(bodies[0] ?? {}, "num_ctx")).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(bodies[0] ?? {}, "num_ctx"),
+    ).toBe(false);
   });
 
   it("registry config carries the settings end-to-end", async () => {
@@ -161,15 +190,26 @@ describe("OLLAMA — settings reach the actual /api/chat request body", () => {
 
   it("explicit think control reaches the wire; default omits the key (no blind disable)", async () => {
     const { fetchImpl, bodies } = captureFetch();
-    const off = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl, think: false });
+    const off = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      think: false,
+    });
     await drain(off);
     expect(bodies[0]?.think).toBe(false);
 
-    const on = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl, think: true });
+    const on = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      think: true,
+    });
     await drain(on);
     expect(bodies.at(-1)?.think).toBe(true);
 
-    const defaultBehavior = new OllamaLlmProvider({ baseUrl: "http://localhost:11434", fetchImpl });
+    const defaultBehavior = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+    });
     await drain(defaultBehavior);
     expect(
       Object.prototype.hasOwnProperty.call(bodies.at(-1) ?? {}, "think"),
@@ -227,7 +267,10 @@ describe("OLLAMA — settings reach the actual /api/chat request body", () => {
 
     const chatBody = bodies.find((b) => Array.isArray(b.messages));
     expect(chatBody?.keep_alive).toBe("0");
-    expect(chatBody?.options).toMatchObject({ num_ctx: 2048, num_predict: 128 });
+    expect(chatBody?.options).toMatchObject({
+      num_ctx: 2048,
+      num_predict: 128,
+    });
   });
 });
 
@@ -435,5 +478,92 @@ describe("OLLAMA — provider failure recovery", () => {
     expect(events.some((e) => e.type === "agent.retry")).toBe(true);
     expect(events.some((e) => e.type === "completed")).toBe(true);
     expect(events.some((e) => e.type === "agent.failed")).toBe(false);
+  });
+});
+
+describe("OLLAMA — loop output budget bounds num_predict (Phase 7)", () => {
+  it("the request budget alone reaches the wire as num_predict", async () => {
+    const { fetchImpl, bodies } = captureFetch();
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+    });
+    await drain(provider, { maxTokens: 4096 });
+    expect(bodies[0]?.options).toEqual({ num_predict: 4096 });
+  });
+
+  it("an explicit numPredict BELOW the budget is preserved unchanged", async () => {
+    const { fetchImpl, bodies } = captureFetch();
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      numCtx: 4096,
+      numPredict: 512,
+    });
+    await drain(provider, { maxTokens: 8192, temperature: 0.3 });
+    expect(bodies[0]?.options).toEqual({
+      num_ctx: 4096,
+      num_predict: 512,
+      temperature: 0.3,
+    });
+  });
+
+  it("an explicit numPredict ABOVE the budget is clamped — never exceeds the budget", async () => {
+    const { fetchImpl, bodies } = captureFetch();
+    const provider = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl,
+      numPredict: 65_536,
+    });
+    await drain(provider, { maxTokens: 4096 });
+    expect(bodies[0]?.options).toEqual({ num_predict: 4096 });
+  });
+
+  it("missing or invalid limits fall back deterministically — never invented", async () => {
+    // Invalid budget (0) → the configured setting alone.
+    const invalidBudget = captureFetch();
+    const withSetting = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl: invalidBudget.fetchImpl,
+      numPredict: 256,
+    });
+    await drain(withSetting, { maxTokens: 0 });
+    expect(invalidBudget.bodies[0]?.options).toEqual({ num_predict: 256 });
+
+    // Neither budget nor setting → key omitted (server default, as before).
+    const noLimits = captureFetch();
+    const bare = new OllamaLlmProvider({
+      baseUrl: "http://localhost:11434",
+      fetchImpl: noLimits.fetchImpl,
+    });
+    await drain(bare, { maxTokens: Number.NaN });
+    expect(noLimits.bodies[0]?.options).toBeUndefined();
+  });
+
+  it("the production loop budget reaches Ollama through CodePilotRuntime", async () => {
+    const { fetchImpl, bodies } = captureFetch();
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const runtime = new CodePilotRuntime({
+      workspaceRoot: process.cwd(),
+      providerId: "ollama",
+      modelId: "qwen3:8b",
+      agentMode: "act",
+      requestApproval: async () => ({ approved: true }),
+    });
+    await runtime.initialize();
+    await runtime.startSession("Say ok.");
+    await runtime.dispose().catch(() => undefined);
+
+    const chatBody = bodies.find((b) => Array.isArray(b.messages));
+    expect(chatBody).toBeDefined();
+    // Loop default cap, bounded by the curated qwen3:8b window — the
+    // request must always carry an explicit, bounded num_predict now.
+    expect(chatBody?.options).toMatchObject({
+      num_predict: DEFAULT_MAX_OUTPUT_TOKENS,
+    });
+    expect(
+      (chatBody?.options as { num_predict?: number } | undefined)?.num_predict,
+    ).toBeLessThanOrEqual(DEFAULT_MAX_OUTPUT_TOKENS);
   });
 });

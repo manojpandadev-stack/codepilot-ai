@@ -16,12 +16,9 @@ import { createRequire } from "node:module";
 import { CodePilotMCPManager } from "./index.js";
 
 const require = createRequire(import.meta.url);
-const SDK_MCP_PATH = require.resolve(
-  "@modelcontextprotocol/sdk/server/mcp.js",
-);
-const SDK_STDIO_PATH = require.resolve(
-  "@modelcontextprotocol/sdk/server/stdio.js",
-);
+const SDK_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
+const SDK_STDIO_PATH =
+  require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
 const GOOD_SERVER_SCRIPT = path.join(
   os.tmpdir(),
   `codepilot-mcp-good-${process.pid}.js`,

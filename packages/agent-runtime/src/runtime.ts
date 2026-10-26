@@ -22,7 +22,6 @@
  *     options.onWriteProposal (no file writes from the agent).
  */
 
-import { existsSync, readFileSync } from "node:fs";
 import type {
   CodePilotAgentConfig,
   CodePilotRuntimeOptions,
@@ -61,9 +60,13 @@ function extractCommandText(argsText: unknown): string | null {
   // repair loop is defined for a single command text.
   return null;
 }
-import type { ToolPermissionPolicy } from "@codepilot/shared";
+import type { PrivacyMode, ToolPermissionPolicy } from "@codepilot/shared";
 import { OLLAMA_DEFAULT_BASE_URL, scrubSecretsText } from "@codepilot/shared";
-import { modelSupportsVision } from "@codepilot/llm";
+import {
+  modelSupportsVision,
+  isSupportedProviderId,
+  CODEPILOT_PROVIDER_CATALOG,
+} from "@codepilot/llm";
 import {
   OllamaProvider,
   ProviderRegistry,
@@ -82,15 +85,13 @@ import {
   isTransientError,
   CancellationError,
 } from "./cancellation.js";
-import { MAX_PROPOSED_FILE_BYTES } from "./write-tools.js";
 import { createCodePilotBuiltinTools } from "./builtin-tools.js";
 import { parseModelPlanText, type TaskPlan } from "./task-plan.js";
 import {
-  parseEditorInput,
-  parseDeleteFileInput,
-  parseApplyPatchInput,
-  formatStagedResult,
-} from "./write-tools.js";
+  MUTATING_TOOL_NAMES,
+  STAGED_WRITE_TOOL_NAMES,
+  createStagedWriteTools,
+} from "./staged-write-tools.js";
 // Native engine + LLM (CodePilot-owned replacements for the Cline runtime)
 import { NativeSessionManager } from "./native/engine/session.js";
 import type { LlmProviderConfig } from "./native/llm/registry.js";
@@ -164,16 +165,123 @@ export function toNativeProviderId(providerId: string): string {
 }
 
 /**
- * TRUE when the provider routes model requests to a remote (non-local)
- * endpoint. Local runtimes (Ollama, LM Studio) and providers whose requests
- * never leave the machine return false; everything else is treated as remote.
- * Used by the privacy guard — fail-closed: unknown providers count as remote.
+ * Host names that always mean "this machine" (RFC 6761 reserves `.localhost`).
+ * Compared case-insensitively after stripping a trailing dot.
  */
-export function isRemoteProvider(providerId: string): boolean {
-  if (providerId === "ollama" || providerId === "lmstudio") return false;
+const LOCAL_ONLY_HOSTNAMES: ReadonlySet<string> = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "ip6-localhost",
+  "ip6-loopback",
+]);
+
+/** IPv4 literals inside 127.0.0.0/8 (loopback). */
+function isLoopbackIPv4(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const octets = m.slice(1, 5).map((n) => Number(n));
+  if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return false;
+  return octets[0] === 127;
+}
+
+/**
+ * TRUE only when the URL provably points at THIS machine.
+ *
+ * Deliberately conservative and synchronous — it never performs DNS, so it
+ * cannot itself leak a hostname or be fooled by a rebinding answer:
+ *   - literal loopback IPv4 (127.0.0.0/8) and IPv6 (::1) → local
+ *   - reserved `localhost` names (RFC 6761, incl. `*.localhost`) → local
+ *   - anything else — public host, LAN/private IP, unparsable URL,
+ *     relative/odd scheme, or an unparseable host → REMOTE (fail-closed)
+ *
+ * Because DNS is never consulted, a public name that happens to resolve to
+ * 127.0.0.1 is still classified remote and therefore blocked in Local Only.
+ */
+export function isLoopbackEndpoint(
+  baseUrl: string | undefined | null,
+): boolean {
+  if (typeof baseUrl !== "string" || baseUrl.trim().length === 0) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false; // unparsable destination is ambiguous → fail-closed
+  }
+  // Only http/https carry model traffic; anything else (file:, ws:, …) is not
+  // a local model endpoint we can vouch for.
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  // Credentials in a Local Only URL are never legitimate; treat as ambiguous.
+  if (parsed.username.length > 0 || parsed.password.length > 0) return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (host.length === 0) return false;
+  if (host === "[::1]" || host === "::1") return true;
+  if (LOCAL_ONLY_HOSTNAMES.has(host)) return true;
+  if (host.endsWith(".localhost")) return true;
+  return isLoopbackIPv4(host);
+}
+
+/**
+ * TRUE when the provider routes model requests to a remote (non-local)
+ * endpoint.
+ *
+ * Locality is decided by the EFFECTIVE DESTINATION, not the provider ID: a
+ * local provider id pointed at a remote `baseUrl` (e.g. an Ollama-compatible
+ * host on the internet) still leaves the machine and is therefore remote.
+ * `baseUrl` is optional for call sites that genuinely have no override — in
+ * that case the provider id decides, as before.
+ *
+ * Used by the privacy guard — fail-closed: unknown providers and unknown
+ * endpoints count as remote.
+ */
+export function isRemoteProvider(
+  providerId: string,
+  baseUrl?: string | undefined | null,
+): boolean {
+  if (baseUrl !== undefined && baseUrl !== null && baseUrl !== "") {
+    return !isLoopbackEndpoint(baseUrl);
+  }
+  if (providerId === "ollama") return false;
   const cat = getCatalogProvider(providerId);
   if (!cat) return true; // unknown provider → assume remote (deny-closed)
   return cat.category !== "local";
+}
+
+/**
+ * Effective per-request output-budget limits for the selected model.
+ *
+ * Precedence: explicit host config (modelContextWindow / maxOutputTokens) →
+ * curated LLM catalogue entry → absent. Absent means UNKNOWN: the agent loop
+ * then falls back to its documented default output cap (never the context
+ * window), so missing or invalid metadata can never inflate a request beyond
+ * what the model actually supports. Values must be positive integers —
+ * anything else is treated as absent (limits are never invented).
+ */
+export function resolveModelLimits(
+  providerId: string,
+  modelId: string,
+  explicit?: { modelContextWindow?: number; maxOutputTokens?: number },
+): { contextWindow?: number; maxOutputTokens?: number } {
+  const positiveInt = (value: unknown): number | undefined =>
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+      ? value
+      : undefined;
+  const explicitWindow = positiveInt(explicit?.modelContextWindow);
+  const explicitMax = positiveInt(explicit?.maxOutputTokens);
+
+  const canonicalId = providerId === "google" ? "gemini" : providerId;
+  const provider = CODEPILOT_PROVIDER_CATALOG.find((p) => p.id === canonicalId);
+  const model = provider?.models?.[modelId];
+
+  const contextWindow = explicitWindow ?? positiveInt(model?.contextWindow);
+  const maxOutputTokens = explicitMax ?? positiveInt(model?.maxTokens);
+  return {
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+  };
 }
 
 /**
@@ -394,6 +502,15 @@ export class CodePilotRuntime {
       systemPrompt: options.systemPrompt,
       toolPolicies: options.toolPolicies,
       extraTools: options.extraTools,
+      ...(options.redactToolResults !== undefined
+        ? { redactToolResults: options.redactToolResults }
+        : {}),
+      ...(options.modelContextWindow !== undefined
+        ? { modelContextWindow: options.modelContextWindow }
+        : {}),
+      ...(options.maxOutputTokens !== undefined
+        ? { maxOutputTokens: options.maxOutputTokens }
+        : {}),
     };
 
     // Initialize policy engine with custom policies if provided
@@ -416,47 +533,8 @@ export class CodePilotRuntime {
   }
 
   // ============================================================================
-  // Tool executors + staging (preserved behavior, native dispatch)
+  // Tool executors + staging (shared ChangeSet boundary — staged-write-tools)
   // ============================================================================
-
-  private async stageInput(
-    toolName: "editor" | "apply_patch" | "delete_file",
-    input: Record<string, unknown>,
-    cwd: string,
-  ): Promise<string> {
-    if (!this.options.onWriteProposal) {
-      throw new Error("ChangeSet staging is not configured for this session");
-    }
-    const result =
-      toolName === "editor"
-        ? parseEditorInput(input, cwd, (abs) => this.readOriginalSafe(abs))
-        : toolName === "delete_file"
-          ? parseDeleteFileInput(input, cwd, (abs) => this.readOriginalSafe(abs))
-          : await parseApplyPatchInput(input, cwd);
-    if (!result.ok) {
-      throw new Error(`${toolName} staging failed: ${result.error}`);
-    }
-    const { changeSetId } = await this.options.onWriteProposal(
-      toolName,
-      result.proposals,
-    );
-    this.state.filesChanged.push(
-      ...result.proposals.map((p) => p.relativePath),
-    );
-    return formatStagedResult(toolName, changeSetId, result.proposals);
-  }
-
-  private readOriginalSafe(absolutePath: string): string | undefined {
-    try {
-      if (!existsSync(absolutePath)) return undefined;
-      const buffer = readFileSync(absolutePath);
-      if (buffer.length > MAX_PROPOSED_FILE_BYTES) return undefined;
-      if (buffer.includes(0)) return undefined;
-      return buffer.toString("utf8");
-    } catch {
-      return undefined;
-    }
-  }
 
   /**
    * Tools that can never execute in a given agent mode (Phase 1 — Act-mode
@@ -469,20 +547,8 @@ export class CodePilotRuntime {
    * gate still evaluates every call in every mode; nothing here bypasses or
    * weakens approval.
    */
-  private static readonly MODE_FILTERED_TOOLS: ReadonlySet<string> = new Set([
-    "bash",
-    "run_commands",
-    "write_file",
-    "editor",
-    "apply_patch",
-    "delete_file",
-    // SECURITY (live-verified escape): agent-initiated tracked terminal
-    // tools were injected as extra tools in EVERY mode, so a model in
-    // ask/plan could emit terminal_session_start/exec and run real commands.
-    // They are mutating execution tools exactly like bash/run_commands.
-    "terminal_session_start",
-    "terminal_session_exec",
-  ]);
+  private static readonly MODE_FILTERED_TOOLS: ReadonlySet<string> =
+    MUTATING_TOOL_NAMES;
 
   /** Build the native toolset for a merged config. */
   private buildNativeTools(config: CodePilotAgentConfig): AgentTool[] {
@@ -492,28 +558,44 @@ export class CodePilotRuntime {
     // process runs. M4 still gates every call BEFORE dispatch reaches this
     // tool — execution here implies approval.
     tools.push(this.buildTerminalStreamingTool());
-    // ChangeSet-staged write tools: no file write happens here — proposals
-    // go to the host's ChangeSetManager (pending until user approval).
-    if (this.options.onWriteProposal) {
-      tools.push(this.buildStagingTool("editor"));
-      tools.push(this.buildStagingTool("apply_patch"));
-      tools.push(this.buildStagingTool("delete_file"));
-    }
+    // ChangeSet-staged write tools (SAME shared boundary child agents use):
+    // no file write happens here — proposals go to the host's
+    // ChangeSetManager (pending until user approval). Without a host bridge
+    // the list is empty, so no write tool is advertised at all (fail closed).
+    tools.push(
+      ...createStagedWriteTools({
+        workspaceRoot: config.workspaceRoot,
+        ...(this.options.onWriteProposal
+          ? { onWriteProposal: this.options.onWriteProposal }
+          : {}),
+        onStaged: (paths) => this.state.filesChanged.push(...paths),
+      }),
+    );
     // CodePilot-owned model-facing builtins (read_files, search_codebase,
     // skills, ask_question, run_commands, plus fetch_web_content/web_search
     // outside local privacy mode). Tool lookup is first-wins, so the native
     // streaming `bash` executor and the staged editor/apply_patch above keep
     // precedence and these fill only names the native set does not already
-    // provide. The no-staging (headless/legacy) path gets the direct-write
-    // editor/apply_patch from the owned set, matching the legacy contract.
+    // provide. The owned set NEVER contributes a write tool here: the
+    // staging tools above are the only editor/apply_patch/delete_file.
     // Every call still passes the M4 gate BEFORE dispatch reaches execute.
     const registeredNames = new Set(tools.map((t) => t.name));
+    // Names owned exclusively by the staging boundary. Without a host bridge
+    // no staging tool was registered above, so the owned factory must NOT
+    // supply a direct-write editor/apply_patch/delete_file as a substitute —
+    // a missing ChangeSet bridge means no write tools at all (fail closed).
+    for (const reserved of STAGED_WRITE_TOOL_NAMES) {
+      registeredNames.add(reserved);
+    }
     const streamingRunner = this.terminalStreamingRunner();
     for (const owned of createCodePilotBuiltinTools({
       cwd: config.workspaceRoot,
       // The native streaming bash executor above IS the bash tool here.
       enableBash: false,
       enableWebFetch: config.privacyMode !== "local",
+      // F-01: forward the effective privacy mode so the factory — not just
+      // enableWebFetch — owns the Local Only web-tool decision.
+      privacyMode: config.privacyMode,
       commandService: this.terminalService ?? undefined,
       // run_commands shares the ONE streaming executor (same live events,
       // same engine) instead of falling back to completion-only collection.
@@ -567,76 +649,6 @@ export class CodePilotRuntime {
       return filtered;
     }
     return tools;
-  }
-
-  /** Native wrapper for the ChangeSet-staged write tools. */
-  private buildStagingTool(
-    toolName: "editor" | "apply_patch" | "delete_file",
-  ): AgentTool {
-    const description =
-      toolName === "editor"
-        ? "Edit file ranges in the workspace. The edit is staged as a pending ChangeSet for user approval — no file is modified until approved."
-        : toolName === "delete_file"
-          ? "Permanently delete a workspace file. The deletion is staged as a pending ChangeSet for user approval — no file is modified until approved."
-          : "Apply a Codex-style patch (*** Begin Patch format) to workspace files. Changes are staged as a pending ChangeSet for user approval — no file is modified until approved.";
-    const schema: Record<string, unknown> =
-      toolName === "editor"
-        ? {
-            type: "object",
-            properties: {
-              file_path: {
-                type: "string",
-                description: "Workspace-relative file path",
-              },
-              operation: {
-                type: "string",
-                enum: ["str_replace", "replace_all", "insert", "delete", "create"],
-                description:
-                  "str_replace (default): swap old_string→new_string (first occurrence); replace_all: every occurrence; insert: new_string immediately before old_string; delete: remove old_string; create: new file whose content is new_string",
-              },
-              old_string: {
-                type: "string",
-                description: "Text to replace (replace operation)",
-              },
-              new_string: { type: "string", description: "Replacement text" },
-            },
-            required: ["file_path", "operation"],
-          }
-        : toolName === "delete_file"
-          ? {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "Workspace-relative file path to delete",
-                },
-              },
-              required: ["path"],
-            }
-          : {
-              type: "object",
-              properties: {
-                patch: {
-                  type: "string",
-                  description: "Patch beginning with '*** Begin Patch'",
-                },
-              },
-              required: ["patch"],
-            };
-    return {
-      name: toolName,
-      description,
-      inputSchema: schema,
-      timeoutMs: 30_000,
-      execute: async (input) => {
-        const resultText = await this.stageInput(
-          toolName,
-          input as Record<string, unknown>,
-          this.defaultConfig.workspaceRoot,
-        );
-        return resultText;
-      },
-    };
   }
 
   private buildTerminalStreamingTool(): AgentTool {
@@ -803,6 +815,14 @@ export class CodePilotRuntime {
     },
   ): Promise<string> {
     const merged = { ...this.defaultConfig, ...config };
+    // Phase 7 (wiring): effective output-budget limits for the selected
+    // model — explicit host config wins, then the curated catalogue; absent
+    // metadata leaves the loop's documented default cap in place.
+    const modelLimits = resolveModelLimits(
+      merged.providerId || "ollama",
+      merged.modelId || "",
+      merged,
+    );
 
     // Phase 12 (row 14): bounded command-failure repair. Created once per
     // runtime from the effective config; history persists when configured.
@@ -814,6 +834,22 @@ export class CodePilotRuntime {
       });
     }
 
+    // ---- Provider support guard (fail-closed) ----
+    const requestedPid = merged.providerId || "ollama";
+    const normalizedPid = toNativeProviderId(requestedPid);
+    if (!isSupportedProviderId(normalizedPid)) {
+      const message = `Unsupported provider "${requestedPid}". CodePilot supports only OpenAI, Gemini, and Ollama.`;
+      this.emit({
+        type: "error",
+        error: message,
+        recoverable: false,
+        code: "provider-unsupported",
+        providerId: requestedPid,
+        ...this.buildCorrelation(),
+      });
+      throw new Error(message);
+    }
+
     // ---- Privacy guard (fail-closed) ----
     // A provider whose requests leave the machine must NEVER run while the
     // user selected "local" privacy mode: that mode promises "no data leaves
@@ -821,7 +857,7 @@ export class CodePilotRuntime {
     // host surfaces the error and the user makes an explicit choice.
     if (
       merged.privacyMode === "local" &&
-      isRemoteProvider(merged.providerId || "ollama")
+      isRemoteProvider(merged.providerId || "ollama", merged.baseUrl)
     ) {
       const pid = toNativeProviderId(merged.providerId || "ollama");
       this.emit({
@@ -830,6 +866,10 @@ export class CodePilotRuntime {
           `Privacy mode is "local" but provider "${pid}" sends requests to a remote endpoint. ` +
           `No request was made. Switch to a local provider (e.g. Ollama) or change privacy mode in Settings.`,
         recoverable: false,
+        // Structured cause: the host renders this as an actionable privacy card
+        // (and never as a generic provider failure, and never a duplicate).
+        code: "privacy-blocked",
+        providerId: merged.providerId || "ollama",
         ...this.buildCorrelation(),
       });
       throw new Error(
@@ -991,6 +1031,9 @@ export class CodePilotRuntime {
       providerId: merged.providerId || "ollama",
       ...(merged.apiKey ? { apiKey: merged.apiKey } : {}),
       ...(merged.baseUrl ? { baseUrl: merged.baseUrl } : {}),
+      // Local Only propagates into the LLM transport so it never follows an
+      // HTTP redirect off the machine (see LlmProviderConfig.privacyMode).
+      ...(merged.privacyMode ? { privacyMode: merged.privacyMode } : {}),
       ...(this.options.ollamaFirstTokenTimeoutMs !== undefined
         ? { ollamaFirstTokenTimeoutMs: this.options.ollamaFirstTokenTimeoutMs }
         : {}),
@@ -1075,6 +1118,18 @@ export class CodePilotRuntime {
               ...(merged.temperature !== undefined
                 ? { temperature: merged.temperature }
                 : {}),
+              // H2: remote providers never receive unredacted tool output —
+              // canonical classification; explicit host override wins.
+              redactToolResults:
+                merged.redactToolResults ??
+                isRemoteProvider(merged.providerId || "ollama", merged.baseUrl),
+              // Phase 7: model limits → output budget (absent = loop default).
+              ...(modelLimits.contextWindow !== undefined
+                ? { modelContextWindow: modelLimits.contextWindow }
+                : {}),
+              ...(modelLimits.maxOutputTokens !== undefined
+                ? { maxOutputTokens: modelLimits.maxOutputTokens }
+                : {}),
               ...(merged.initialMessages && merged.initialMessages.length > 0
                 ? { initialMessages: merged.initialMessages as AgentMessage[] }
                 : {}),
@@ -1087,8 +1142,23 @@ export class CodePilotRuntime {
           // here so withRetry can retry transient failures (timeouts,
           // connection resets) and genuine failures settle as FAILED via
           // the catch path below (never as a fake "completed").
+          // F-02/F-03: only "complete" may settle as COMPLETED. Cancellation
+          // is terminal (CancellationError → CANCELLED path, never retried);
+          // truncated turns and iteration exhaustion are failures, never
+          // silent completions.
+          if (result.reason === "aborted") {
+            throw new CancellationError("Agent run cancelled");
+          }
           if (result.reason === "error") {
             throw new Error(result.error ?? "provider stream failed");
+          }
+          if (
+            result.reason === "incomplete" ||
+            result.reason === "max_iterations"
+          ) {
+            throw new Error(
+              result.error ?? `Agent run ended: ${result.reason}`,
+            );
           }
           return result;
         },
@@ -1482,8 +1552,9 @@ export class CodePilotRuntime {
         if (loop.isError) {
           // Phase 12 (row 14): bounded command-failure repair for terminal
           // tools. Only recoverable failure classes enter the loop — the
-          // emission is deferred until the outcome is known (each rerun
-          // re-gates transformed commands through M4). Non-recoverable
+          // emission is deferred until the outcome is known (each transformed
+          // rerun re-gates through M4; ambiguous transient failures are never
+          // replayed and surface as outcome-unknown). Non-recoverable
           // failures emit tool_failed synchronously via the normal path.
           const failureText = String(loop.output ?? "tool failed").slice(
             0,
@@ -1494,10 +1565,7 @@ export class CodePilotRuntime {
             void this.tryRepairTerminalToolFailure(loop).then((repair) => {
               if (repair !== null && repair.status === "recovered") {
                 if (this.stateMachine.canTransitionTo("EXECUTING")) {
-                  this.doTransition(
-                    "EXECUTING",
-                    `Tool done: ${loop.toolName}`,
-                  );
+                  this.doTransition("EXECUTING", `Tool done: ${loop.toolName}`);
                 }
                 this.emit({
                   type: "tool_completed",
@@ -1516,7 +1584,19 @@ export class CodePilotRuntime {
                 });
                 return;
               }
-              this.emitToolFailure(loop);
+              if (repair?.status === "outcome_unknown") {
+                this.toolFailureCount += 1;
+                this.emit({
+                  type: "tool_failed",
+                  toolCallId: loop.call.toolCallId,
+                  toolName: loop.toolName,
+                  error:
+                    "Command outcome is unknown: it may have partially or fully executed before the timeout or network failure. Inspect the workspace before retrying.",
+                  ...this.buildCorrelation(),
+                });
+              } else {
+                this.emitToolFailure(loop);
+              }
             });
             break;
           }
@@ -1716,6 +1796,16 @@ export class CodePilotRuntime {
     }
     if (patch.systemPrompt !== undefined)
       this.defaultConfig.systemPrompt = patch.systemPrompt;
+    // H2 / Phase 7: honor these fields when set through updateConfig too —
+    // silently dropping a host's redaction/limit patch would be worse than
+    // rejecting it (a remote provider would fall back to classification and
+    // a limit override would appear to apply while never reaching the wire).
+    if (patch.redactToolResults !== undefined)
+      this.defaultConfig.redactToolResults = patch.redactToolResults;
+    if (patch.modelContextWindow !== undefined)
+      this.defaultConfig.modelContextWindow = patch.modelContextWindow;
+    if (patch.maxOutputTokens !== undefined)
+      this.defaultConfig.maxOutputTokens = patch.maxOutputTokens;
     this.emit({
       type: "status",
       message: "Configuration updated.",
@@ -1728,17 +1818,22 @@ export class CodePilotRuntime {
   }
 
   /**
-   * Read-only view of the provider-scoped runtime settings (providerId,
-   * modelId, baseUrl — never the apiKey). The host uses this to detect
-   * provider configuration changed OUTSIDE the runtime (e.g. ProviderService
-   * writes while the runtime was already live) and re-apply it via
-   * updateConfig before the next run. apiKey is deliberately omitted: the
-   * host re-resolves credentials from SecretStorage, never from the runtime.
+   * Read-only view of the runtime's authoritative routing/privacy settings
+   * (providerId, modelId, baseUrl, privacyMode — never the apiKey). The host
+   * uses this to detect configuration changed OUTSIDE the runtime (e.g.
+   * ProviderService writes, or the user flipping privacy mode via
+   * settings/set / privacy/confirm while the runtime was already live) and to
+   * re-apply it via updateConfig before the next run. apiKey is deliberately
+   * omitted: the host re-resolves credentials from SecretStorage, never from
+   * the runtime. privacyMode is included because the privacy gate reads the
+   * LIVE runtime value on every request — a host-only setting write would
+   * otherwise leave a stale mode in force until the next runtime creation.
    */
   getProviderSettings(): {
     providerId: string;
     modelId: string;
     baseUrl?: string;
+    privacyMode: PrivacyMode;
   } {
     return {
       providerId: this.defaultConfig.providerId,
@@ -1746,6 +1841,7 @@ export class CodePilotRuntime {
       ...(this.defaultConfig.baseUrl !== undefined
         ? { baseUrl: this.defaultConfig.baseUrl }
         : {}),
+      privacyMode: this.defaultConfig.privacyMode ?? "local",
     };
   }
 
@@ -1754,9 +1850,12 @@ export class CodePilotRuntime {
    * the most recent (or current) run — the post-filter authoritative list
    * the request contract (LlmRequest.tools) is built from. Never contains
    * schemas or inputs; safe for logs and diagnostics.
-  */
+   */
   getLastRunToolSummary(): { count: number; names: string[] } {
-    return { count: this.lastRunToolNames.length, names: [...this.lastRunToolNames] };
+    return {
+      count: this.lastRunToolNames.length,
+      names: [...this.lastRunToolNames],
+    };
   }
 
   /**

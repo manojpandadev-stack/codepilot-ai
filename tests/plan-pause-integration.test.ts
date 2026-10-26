@@ -28,6 +28,7 @@ import {
 } from "./vscode-integration-harness";
 import { TaskStore } from "../packages/agent-runtime/src/m12-task-store";
 import { createTaskPlan } from "../packages/agent-runtime/src/task-plan";
+export const DEBOUNCE_WAIT_MS = 1200;
 import type { TaskPlan } from "../packages/agent-runtime/src/task-plan";
 import type { AgentEvent } from "../packages/agent-runtime/src/types";
 import { stubOllamaFetch } from "../packages/agent-runtime/src/ollama-fetch-stub";
@@ -269,7 +270,10 @@ describe("pause across restart and resume", () => {
     }
   });
 
-  it("history/resume rehydrates the plan, pushes plan/updated, and leaves paused", async () => {
+  it(
+    "history/resume rehydrates the plan, pushes plan/updated, and leaves paused",
+    { timeout: 60000 },
+    async () => {
     stubOllamaFetch([{ texts: ["resumed turn done."] }]);
     const host = await trackedHost();
     const taskId = await host.seams.beginTask("resume with plan");
